@@ -193,4 +193,15 @@ export const api = {
       error: 'Web mode fallback not implemented',
     };
   },
+
+  async getDatabasePathInfo(): Promise<string> {
+    if (isTauri()) {
+      try {
+        return await invoke<string>('get_database_path_info');
+      } catch {
+        return '~/.agentdeck/agentdeck.db';
+      }
+    }
+    return '~/.agentdeck/agentdeck.db';
+  },
 };

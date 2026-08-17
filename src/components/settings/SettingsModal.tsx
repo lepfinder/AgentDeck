@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { api } from '../../api/tauriBridge';
 import {
   X,
@@ -135,10 +135,19 @@ export const SettingsModal: React.FC<Props> = ({
     return localStorage.getItem('agentdeck_auto_fallback') !== 'false';
   });
 
-  // 当前正在编辑查看的 Provider 卡片
   const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
     return localStorage.getItem('agentdeck_primary_ai_provider') || 'bailian';
   });
+
+  const [dbPath, setDbPath] = useState<string>('~/.agentdeck/agentdeck.db');
+
+  useEffect(() => {
+    if (isOpen) {
+      api.getDatabasePathInfo().then((p) => {
+        if (p) setDbPath(p);
+      });
+    }
+  }, [isOpen]);
 
   // 每个供应商的配置状态
   const [apiKeys, setApiKeys] = useState<Record<string, string>>(() => {
@@ -678,8 +687,8 @@ export const SettingsModal: React.FC<Props> = ({
                     </span>
                   </div>
 
-                  <div className="text-xs font-mono theme-text-muted bg-black/10 dark:bg-black/40 p-2.5 rounded-lg border theme-border break-all">
-                    /Users/xiyangxie/workspace/personal/aicoding-chat-viewer/data/antigravity_chats.db
+                  <div className="text-xs font-mono theme-text-muted bg-black/10 dark:bg-black/40 p-2.5 rounded-lg border theme-border break-all select-all">
+                    {dbPath}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 pt-2">

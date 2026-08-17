@@ -228,36 +228,56 @@ impl DbState {
 }
 
 pub fn get_database_path() -> PathBuf {
-    // 优先复用已有 aicoding-chat-viewer 的本地 SQLite 数据库（保证 700+ 会话和 11万+ 消息瞬间可用）
+    // 1. 若设置了环境变量 AGENTDECK_DB_PATH，直接遵循外部指定
+    if let Ok(env_path) = std::env::var("AGENTDECK_DB_PATH") {
+        if !env_path.trim().is_empty() {
+            let p = PathBuf::from(env_path.trim());
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            return p;
+        }
+    }
+
+    // 2. 独立规范主库路径：~/.agentdeck/agentdeck.db
     if let Some(home) = dirs::home_dir() {
-        let candidates = [
+        let app_dir = home.join(".agentdeck");
+        let target_db = app_dir.join("agentdeck.db");
+
+        // 确保 ~/.agentdeck 目录存在
+        let _ = std::fs::create_dir_all(&app_dir);
+
+        // 若标准主库已存在，直接以此为主库
+        if target_db.exists() {
+            return target_db;
+        }
+
+        // 3. 首次启动无感平滑迁移：寻找旧候选库并自动复制到 ~/.agentdeck/agentdeck.db
+        let legacy_candidates = [
+            home.join(".agentdeck/conversations.db"),
             home.join("workspace/personal/aicoding-chat-viewer/data/antigravity_chats.db"),
             home.join(".aicoding-chat-viewer/data/antigravity_chats.db"),
             home.join(".aicoding-chat-viewer/conversations.db"),
-            home.join(".agentdeck/conversations.db"),
         ];
 
-        for path in &candidates {
-            if path.exists() {
-                if let Ok(metadata) = std::fs::metadata(path) {
-                    if metadata.len() > 1024 * 50 { // 大于 50KB 则认为是有实际数据的数据库
-                        return path.clone();
+        for src in &legacy_candidates {
+            if src.exists() {
+                if let Ok(meta) = std::fs::metadata(src) {
+                    if meta.len() > 1024 * 50 {
+                        eprintln!("[AgentDeck] 发现旧版会话库 {:?} ({} 字节)，正在自动迁移至新主库 {:?}", src, meta.len(), target_db);
+                        if let Ok(_) = std::fs::copy(src, &target_db) {
+                            eprintln!("[AgentDeck] 历史会话数据迁移成功 -> {:?}", target_db);
+                            return target_db;
+                        }
                     }
                 }
             }
         }
 
-        // 如果上述大库不存在但有已存在路径
-        for path in &candidates {
-            if path.exists() {
-                return path.clone();
-            }
-        }
-
-        let default_app_db = home.join(".agentdeck").join("conversations.db");
-        return default_app_db;
+        return target_db;
     }
-    PathBuf::from("conversations.db")
+
+    PathBuf::from("agentdeck.db")
 }
 
 pub fn init_schema(conn: &Connection) -> Result<()> {

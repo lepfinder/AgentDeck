@@ -85,6 +85,8 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
 
     let mut cmd = Command::new("python3");
     cmd.arg(&script_path);
+    let db_path = crate::db::get_database_path();
+    cmd.env("CHAT_VIEWER_DB_PATH", &db_path);
     if full {
         cmd.arg("--full");
     } else {

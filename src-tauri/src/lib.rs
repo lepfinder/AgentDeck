@@ -358,6 +358,11 @@ fn trigger_sync(full: Option<bool>) -> Result<SyncResultInfo, String> {
     Ok(execute_sync(full.unwrap_or(false)))
 }
 
+#[tauri::command]
+fn get_database_path_info() -> Result<String, String> {
+    Ok(db::get_database_path().to_string_lossy().to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_state = DbState::new().expect("Failed to initialize SQLite database");
@@ -376,7 +381,8 @@ pub fn run() {
             trigger_sync,
             test_llm_connection,
             test_llm_pipeline,
-            call_llm_with_fallback
+            call_llm_with_fallback,
+            get_database_path_info
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
