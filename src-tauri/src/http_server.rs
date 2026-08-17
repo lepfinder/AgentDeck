@@ -76,7 +76,10 @@ fn handle_connection(mut stream: TcpStream) {
         &db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     ) {
-        Ok(c) => c,
+        Ok(c) => {
+            crate::db::apply_read_pragmas(&c);
+            c
+        }
         Err(e) => {
             send_response(
                 &mut stream,

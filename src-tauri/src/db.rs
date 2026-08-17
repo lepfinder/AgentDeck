@@ -235,11 +235,29 @@ impl DbState {
             let _ = std::fs::create_dir_all(parent);
         }
         let conn = Connection::open(&db_path)?;
+        apply_write_pragmas(&conn);
         init_schema(&conn)?;
         Ok(Self {
             conn_mutex: Mutex::new(conn),
         })
     }
+}
+
+/// 写连接调优：WAL + synchronous=NORMAL，避免每条语句 full fsync
+pub fn apply_write_pragmas(conn: &Connection) {
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    let _ = conn.pragma_update(None, "temp_store", "MEMORY");
+    let _ = conn.pragma_update(None, "cache_size", -65536i64);
+    let _ = conn.pragma_update(None, "wal_autocheckpoint", 4000i64);
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(30));
+}
+
+/// 只读连接调优：避免与同步任务争锁时立即失败
+pub fn apply_read_pragmas(conn: &Connection) {
+    let _ = conn.pragma_update(None, "temp_store", "MEMORY");
+    let _ = conn.pragma_update(None, "cache_size", -32768i64);
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(15));
 }
 
 pub fn get_database_path() -> PathBuf {
@@ -275,27 +293,33 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
         CREATE TABLE IF NOT EXISTS conversations (
             id TEXT PRIMARY KEY,
-            workspace_path TEXT,
+            workspace_path TEXT NOT NULL DEFAULT '',
             source_app TEXT,
-            source_types TEXT DEFAULT '[]',
-            title TEXT,
+            source_types TEXT NOT NULL DEFAULT '[]',
+            title TEXT NOT NULL DEFAULT '',
             created_at TEXT,
             updated_at TEXT,
-            message_count INTEGER DEFAULT 0,
-            user_message_count INTEGER DEFAULT 0,
-            parse_status TEXT DEFAULT 'ok'
+            message_count INTEGER NOT NULL DEFAULT 0,
+            user_message_count INTEGER NOT NULL DEFAULT 0,
+            parse_status TEXT NOT NULL DEFAULT 'ok',
+            content_hash TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS messages (
-            id TEXT PRIMARY KEY,
-            conversation_id TEXT,
-            sender TEXT,
-            text TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL DEFAULT 0,
+            role TEXT NOT NULL,
+            message_type TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            thinking TEXT,
+            tool_name TEXT,
+            tool_args TEXT,
             created_at TEXT,
-            model_name TEXT,
-            token_count INTEGER,
-            duration_ms INTEGER,
-            tool_calls_json TEXT
+            source TEXT NOT NULL DEFAULT '',
+            is_truncated INTEGER NOT NULL DEFAULT 0,
+            images TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS starred_sessions (
@@ -346,7 +370,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         );
 
         CREATE TABLE IF NOT EXISTS sync_state (
-            file_path TEXT PRIMARY KEY,
+            source_path TEXT PRIMARY KEY,
             conversation_id TEXT,
             source_type TEXT,
             file_mtime REAL,
@@ -354,15 +378,31 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             synced_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS sync_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            mode TEXT NOT NULL,
+            new_count INTEGER DEFAULT 0,
+            updated_count INTEGER DEFAULT 0,
+            skipped_count INTEGER DEFAULT 0,
+            error_count INTEGER DEFAULT 0,
+            message TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, step_index);
         CREATE INDEX IF NOT EXISTS idx_blocks_fine_ws ON workspace_blocks_fine(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_blocks_modules_ws ON workspace_blocks_modules(workspace_path);
         "#
     )?;
 
+    ensure_messages_schema(conn)?;
+
     // 自动兼容性迁移（防止旧表缺少新增字段）
     let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
+    let _ = conn.execute("ALTER TABLE conversations ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''", []);
 
     let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
     let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
@@ -378,6 +418,101 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
 
+    // 兼容短暂出现过的 file_path 列名（正式库为 source_path）
+    let _ = conn.execute("ALTER TABLE sync_state RENAME COLUMN file_path TO source_path", []);
+
+    migrate_workspace_aliases(conn);
+
+    Ok(())
+}
+
+/// 将历史 `//workspace/...` / `/workspace/...` 合并到本机 `~/workspace/...`
+fn migrate_workspace_aliases(conn: &Connection) {
+    use crate::importers::canonicalize_workspace_path;
+
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT workspace_path FROM conversations \
+         WHERE workspace_path LIKE '/workspace/%' OR workspace_path LIKE '//workspace/%'",
+    ) else {
+        return;
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+        return;
+    };
+    let paths: Vec<String> = rows.flatten().collect();
+    drop(stmt);
+
+    for old in paths {
+        let new_path = canonicalize_workspace_path(&old);
+        if new_path.is_empty() || new_path == old {
+            continue;
+        }
+        let _ = conn.execute(
+            "UPDATE conversations SET workspace_path = ?1 WHERE workspace_path = ?2",
+            rusqlite::params![&new_path, &old],
+        );
+        // 旧 workspace 行直接删除，避免主键冲突；展示名会在后续 sync 时重建
+        let _ = conn.execute(
+            "DELETE FROM workspaces WHERE workspace_path = ?1",
+            rusqlite::params![&old],
+        );
+    }
+}
+
+/// 纠正历史错误的 messages 骨架（id TEXT / sender / text），迁移到真实列结构
+fn ensure_messages_schema(conn: &Connection) -> Result<()> {
+    let has_step_index = conn
+        .prepare("SELECT step_index FROM messages LIMIT 0")
+        .is_ok();
+    if has_step_index {
+        return Ok(());
+    }
+
+    let row_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+        .unwrap_or(0);
+
+    conn.execute_batch(
+        r#"
+        ALTER TABLE messages RENAME TO messages_legacy_bad;
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            step_index INTEGER NOT NULL DEFAULT 0,
+            role TEXT NOT NULL,
+            message_type TEXT NOT NULL DEFAULT '',
+            content TEXT NOT NULL DEFAULT '',
+            thinking TEXT,
+            tool_name TEXT,
+            tool_args TEXT,
+            created_at TEXT,
+            source TEXT NOT NULL DEFAULT '',
+            is_truncated INTEGER NOT NULL DEFAULT 0,
+            images TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, step_index);
+        "#,
+    )?;
+
+    if row_count > 0 {
+        // 尽力从旧骨架迁移可读字段
+        let _ = conn.execute_batch(
+            r#"
+            INSERT INTO messages (conversation_id, step_index, role, message_type, content, created_at)
+            SELECT
+                COALESCE(conversation_id, ''),
+                0,
+                COALESCE(sender, 'assistant'),
+                'text',
+                COALESCE(text, ''),
+                created_at
+            FROM messages_legacy_bad;
+            "#,
+        );
+    }
+
+    let _ = conn.execute("DROP TABLE IF EXISTS messages_legacy_bad", []);
     Ok(())
 }
 

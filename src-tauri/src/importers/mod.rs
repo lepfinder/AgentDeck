@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection, Result};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::Instant;
 
@@ -49,7 +51,14 @@ pub struct ImporterStats {
 
 /// 将文件/目录路径归一到项目根：在 workspace 下保留 bucket/project 两级 (对齐 parser.py project_root_from_path)
 pub fn project_root_from_path(path_str: &str) -> String {
-    let clean = path_str.trim_start_matches("file://").trim().trim_matches('"').trim_matches('\'');
+    let clean = path_str
+        .trim_start_matches("file://")
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'');
+    if clean.is_empty() {
+        return String::new();
+    }
     if !clean.starts_with('/') {
         return clean.to_string();
     }
@@ -57,6 +66,16 @@ pub fn project_root_from_path(path_str: &str) -> String {
     let parts: Vec<&str> = clean.split('/').filter(|p| !p.is_empty()).collect();
     for (i, &part) in parts.iter().enumerate() {
         if part == "workspace" {
+            // 空前缀会产生 "//workspace/..."，统一成 "/workspace/..."
+            if i == 0 {
+                if parts.len() >= 3 {
+                    return format!("/{}", parts[..3].join("/"));
+                }
+                if parts.len() >= 2 {
+                    return format!("/{}", parts[..2].join("/"));
+                }
+                return "/workspace".to_string();
+            }
             let prefix = format!("/{}", parts[..i].join("/"));
             if i + 2 < parts.len() {
                 return format!("{}/{}", prefix, parts[i..i + 3].join("/"));
@@ -81,6 +100,41 @@ pub fn project_root_from_path(path_str: &str) -> String {
     clean.to_string()
 }
 
+/// 将远端 `/workspace/...` 与本机 `~/workspace/...` 合并为同一身份
+pub fn canonicalize_workspace_path(path_str: &str) -> String {
+    let root = project_root_from_path(path_str);
+    if root.is_empty() {
+        return root;
+    }
+
+    let parts: Vec<&str> = root.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.first() == Some(&"workspace") {
+        if let Some(home) = dirs::home_dir() {
+            return format!("{}/{}", home.to_string_lossy().trim_end_matches('/'), parts.join("/"));
+        }
+        return format!("/{}", parts.join("/"));
+    }
+
+    root
+}
+
+/// 基于消息内容生成稳定指纹，避免仅靠时间戳/条数漏更新
+pub fn conversation_content_hash(conv: &RawConversation) -> String {
+    let mut hasher = DefaultHasher::new();
+    conv.id.hash(&mut hasher);
+    conv.title.hash(&mut hasher);
+    for msg in &conv.messages {
+        msg.step_index.hash(&mut hasher);
+        msg.role.hash(&mut hasher);
+        msg.message_type.hash(&mut hasher);
+        msg.content.hash(&mut hasher);
+        msg.thinking.hash(&mut hasher);
+        msg.tool_name.hash(&mut hasher);
+        msg.tool_args.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
 /// 检查文件是否需要增量同步
 pub fn needs_sync(conn: &Connection, file_path: &Path, incremental: bool) -> bool {
     if !incremental {
@@ -98,7 +152,7 @@ pub fn needs_sync(conn: &Connection, file_path: &Path, incremental: bool) -> boo
     };
     let file_size = metadata.len() as i64;
 
-    let mut stmt = match conn.prepare_cached("SELECT file_mtime, file_size FROM sync_state WHERE file_path = ?") {
+    let mut stmt = match conn.prepare_cached("SELECT file_mtime, file_size FROM sync_state WHERE source_path = ?") {
         Ok(s) => s,
         Err(_) => return true,
     };
@@ -132,9 +186,9 @@ pub fn record_sync_state(conn: &Connection, file_path: &Path, cid: &str, source_
 
     let _ = conn.execute(
         r#"
-        INSERT INTO sync_state (file_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-        ON CONFLICT(file_path) DO UPDATE SET
+        ON CONFLICT(source_path) DO UPDATE SET
             conversation_id = excluded.conversation_id,
             source_type = excluded.source_type,
             file_mtime = excluded.file_mtime,
@@ -166,30 +220,50 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
     let source_types_json = serde_json::to_string(&conv.source_types).unwrap_or_else(|_| "[]".to_string());
     let user_msg_count = conv.messages.iter().filter(|m| m.role == "user").count() as i64;
     let total_msg_count = conv.messages.len() as i64;
+    let content_hash = conversation_content_hash(conv);
+    let workspace_path = canonicalize_workspace_path(&conv.workspace_path);
 
     let norm_created = normalize_to_iso(conv.created_at.clone());
     let norm_updated = normalize_to_iso(conv.updated_at.clone()).or_else(|| norm_created.clone());
 
-    // 检查是否存在
+    // 检查是否存在，并判断内容指纹是否有变化
     let mut exists = false;
-    if let Ok(mut stmt) = conn.prepare_cached("SELECT 1 FROM conversations WHERE id = ?") {
+    let mut unchanged = false;
+    if let Ok(mut stmt) = conn.prepare_cached(
+        "SELECT updated_at, message_count, user_message_count, COALESCE(content_hash, '') FROM conversations WHERE id = ?",
+    ) {
         if let Ok(mut rows) = stmt.query(params![&conv.id]) {
-            if let Ok(Some(_)) = rows.next() {
+            if let Ok(Some(row)) = rows.next() {
                 exists = true;
+                let old_updated: Option<String> = row.get(0).ok();
+                let old_total: i64 = row.get(1).unwrap_or(-1);
+                let old_user: i64 = row.get(2).unwrap_or(-1);
+                let old_hash: String = row.get(3).unwrap_or_default();
+                unchanged = if !old_hash.is_empty() {
+                    old_hash == content_hash
+                } else {
+                    old_updated == norm_updated
+                        && old_total == total_msg_count
+                        && old_user == user_msg_count
+                };
             }
         }
     }
 
-    // 确保 conversations 的 source_app 列存在
-    let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
+    // 时间戳、条数与内容哈希均未变化时无需重写消息
+    if unchanged {
+        return Ok(false);
+    }
 
-    conn.execute(
+    let tx = conn.unchecked_transaction()?;
+
+    tx.execute(
         r#"
         INSERT INTO conversations (
             id, workspace_path, source_app, source_types, title, created_at, updated_at,
-            message_count, user_message_count, parse_status
+            message_count, user_message_count, parse_status, content_hash
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
         ON CONFLICT(id) DO UPDATE SET
             workspace_path = excluded.workspace_path,
             source_app = excluded.source_app,
@@ -199,11 +273,12 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             updated_at = excluded.updated_at,
             message_count = excluded.message_count,
             user_message_count = excluded.user_message_count,
-            parse_status = excluded.parse_status
+            parse_status = excluded.parse_status,
+            content_hash = excluded.content_hash
         "#,
         params![
             &conv.id,
-            &conv.workspace_path,
+            &workspace_path,
             &conv.source_app,
             &source_types_json,
             &conv.title,
@@ -212,14 +287,15 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             total_msg_count,
             user_msg_count,
             &conv.parse_status,
+            &content_hash,
         ],
     )?;
 
     // 删除并重建消息
-    conn.execute("DELETE FROM messages WHERE conversation_id = ?", params![&conv.id])?;
+    tx.execute("DELETE FROM messages WHERE conversation_id = ?", params![&conv.id])?;
 
-    for (idx, msg) in conv.messages.iter().enumerate() {
-        conn.execute(
+    {
+        let mut msg_stmt = tx.prepare_cached(
             r#"
             INSERT INTO messages (
                 conversation_id, step_index, role, message_type, content, thinking,
@@ -227,7 +303,10 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             )
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL)
             "#,
-            params![
+        )?;
+
+        for (idx, msg) in conv.messages.iter().enumerate() {
+            msg_stmt.execute(params![
                 &conv.id,
                 msg.step_index.max(idx as i64),
                 &msg.role,
@@ -238,17 +317,17 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                 &msg.tool_args,
                 &msg.created_at,
                 &conv.source_app,
-            ],
-        )?;
+            ])?;
+        }
     }
 
     // 维护 workspaces 记录
-    if !conv.workspace_path.is_empty() {
-        let display_name = Path::new(&conv.workspace_path)
+    if !workspace_path.is_empty() {
+        let display_name = Path::new(&workspace_path)
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| conv.workspace_path.clone());
-        let _ = conn.execute(
+            .unwrap_or_else(|| workspace_path.clone());
+        let _ = tx.execute(
             r#"
             INSERT INTO workspaces (workspace_path, display_name, last_updated)
             VALUES (?1, ?2, ?3)
@@ -256,9 +335,11 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                 last_updated = CASE WHEN excluded.last_updated > workspaces.last_updated OR workspaces.last_updated IS NULL
                                THEN excluded.last_updated ELSE workspaces.last_updated END
             "#,
-            params![&conv.workspace_path, display_name, &conv.updated_at],
+            params![&workspace_path, display_name, &norm_updated],
         );
     }
+
+    tx.commit()?;
 
     Ok(!exists)
 }
@@ -277,53 +358,35 @@ impl SyncEngine {
 
         println!("[AgentDeck SyncEngine] 🚀 开始纯 Rust 原生全源扫描同步 (incremental: {})...", incremental);
 
-        // 1. Antigravity
-        let ag_stat = antigravity::sync(conn, incremental);
-        total_new += ag_stat.new_count;
-        total_updated += ag_stat.updated_count;
-        total_skipped += ag_stat.skipped_count;
-        total_errors += ag_stat.error_count;
-        all_stats.push(ag_stat);
+        type ImporterFn = fn(&Connection, bool) -> ImporterStats;
+        let importers: [(&str, ImporterFn); 6] = [
+            ("Antigravity", antigravity::sync),
+            ("Cursor", cursor::sync),
+            ("Claude", claude::sync),
+            ("Codex", codex::sync),
+            ("Hermes", hermes::sync),
+            ("WorkBuddy", workbuddy::sync),
+        ];
 
-        // 2. Cursor
-        let cursor_stat = cursor::sync(conn, incremental);
-        total_new += cursor_stat.new_count;
-        total_updated += cursor_stat.updated_count;
-        total_skipped += cursor_stat.skipped_count;
-        total_errors += cursor_stat.error_count;
-        all_stats.push(cursor_stat);
+        for (name, importer) in importers {
+            let src_start = Instant::now();
+            let stat = importer(conn, incremental);
+            println!(
+                "[AgentDeck SyncEngine] └─ {} 完成 ({}ms) => 新增 {}, 更新 {}, 跳过 {}, 错误 {}",
+                name,
+                src_start.elapsed().as_millis(),
+                stat.new_count,
+                stat.updated_count,
+                stat.skipped_count,
+                stat.error_count
+            );
 
-        // 3. Claude Code
-        let claude_stat = claude::sync(conn, incremental);
-        total_new += claude_stat.new_count;
-        total_updated += claude_stat.updated_count;
-        total_skipped += claude_stat.skipped_count;
-        total_errors += claude_stat.error_count;
-        all_stats.push(claude_stat);
-
-        // 4. Codex
-        let codex_stat = codex::sync(conn, incremental);
-        total_new += codex_stat.new_count;
-        total_updated += codex_stat.updated_count;
-        total_skipped += codex_stat.skipped_count;
-        total_errors += codex_stat.error_count;
-        all_stats.push(codex_stat);
-
-        // 5. Hermes
-        let hermes_stat = hermes::sync(conn, incremental);
-        total_new += hermes_stat.new_count;
-        total_updated += hermes_stat.updated_count;
-        total_skipped += hermes_stat.skipped_count;
-        total_errors += hermes_stat.error_count;
-        all_stats.push(hermes_stat);
-
-        // 6. WorkBuddy
-        let wb_stat = workbuddy::sync(conn, incremental);
-        total_new += wb_stat.new_count;
-        total_updated += wb_stat.updated_count;
-        total_skipped += wb_stat.skipped_count;
-        total_errors += wb_stat.error_count;
-        all_stats.push(wb_stat);
+            total_new += stat.new_count;
+            total_updated += stat.updated_count;
+            total_skipped += stat.skipped_count;
+            total_errors += stat.error_count;
+            all_stats.push(stat);
+        }
 
         println!(
             "[AgentDeck SyncEngine] ✅ 同步完成 (耗时: {}ms) => 新增: {}, 更新: {}, 跳过: {}, 错误: {}",

@@ -1,6 +1,6 @@
 use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -132,22 +132,46 @@ fn sync_hermes_state_db(
         Ok((id, title, created_at, updated_at, cwd))
     })?;
 
+    let sessions: Vec<_> = session_rows.flatten().collect();
+    drop(stmt);
+
     let mut new_cnt = 0;
     let mut updated_cnt = 0;
 
-    for s_row in session_rows.flatten() {
+    let mut existing_map: HashMap<String, (Option<String>, i64)> = HashMap::new();
+    if let Ok(mut exist_stmt) = conn.prepare(
+        "SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'hermes:%'",
+    ) {
+        if let Ok(rows) = exist_stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, i64>(2).unwrap_or(0),
+            ))
+        }) {
+            for row in rows.flatten() {
+                existing_map.insert(row.0, (row.1, row.2));
+            }
+        }
+    }
+
+    let mut msg_stmt = hermes_conn.prepare(
+        "SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC, id ASC",
+    )?;
+
+    for s_row in sessions {
         let (raw_id, raw_title, created_at, updated_at, raw_cwd) = s_row;
         let cid = format!("hermes:{}", raw_id);
         synced_cids.insert(cid.clone());
-        let workspace_path = raw_cwd.map(|p| super::project_root_from_path(&p)).unwrap_or_default();
+        let workspace_path = raw_cwd
+            .map(|p| super::canonicalize_workspace_path(&p))
+            .unwrap_or_default();
 
-        // 读取消息
-        let mut msg_stmt = match hermes_conn.prepare(
-            "SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC, id ASC"
-        ) {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+        if let Some((prev_up, _)) = existing_map.get(&cid) {
+            if prev_up == &updated_at {
+                continue;
+            }
+        }
 
         let mut messages = Vec::new();
         let mut step_idx = 0i64;
@@ -251,7 +275,7 @@ fn parse_hermes_jsonl(cid: &str, path: &Path) -> Result<Option<RawConversation>,
 
         if workspace_path.is_empty() {
             if let Some(ws) = val.get("cwd").or_else(|| val.get("workspace")).and_then(|v| v.as_str()) {
-                workspace_path = ws.to_string();
+                workspace_path = super::canonicalize_workspace_path(ws);
             }
         }
 

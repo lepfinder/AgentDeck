@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { SearchResultItem } from '../../types';
+import type { ConversationItem, SearchResultItem } from '../../types';
 import { api } from '../../api/tauriBridge';
-import { Search, X } from 'lucide-react';
+import { Clock3, Search, X } from 'lucide-react';
+import { formatRelativeTime } from '../../utils/date';
 
 interface Props {
   isOpen: boolean;
@@ -13,6 +14,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
   const [query, setQuery] = useState('');
   const [role, setRole] = useState<'user' | 'all'>('user');
   const [results, setResults] = useState<SearchResultItem[]>([]);
+  const [recentConversations, setRecentConversations] = useState<ConversationItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -24,19 +26,25 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
     } else {
       setQuery('');
       setResults([]);
+      setRecentConversations([]);
     }
   }, [isOpen]);
 
   useEffect(() => {
-    if (!query.trim()) {
-      setResults([]);
-      return;
-    }
+    if (!isOpen) return;
+
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const items = await api.searchMessages(query, role === 'user' ? 'user' : undefined, 30);
-        setResults(items);
+        if (query.trim()) {
+          const items = await api.searchMessages(query, role === 'user' ? 'user' : undefined, 30);
+          setResults(items);
+          setRecentConversations([]);
+        } else {
+          const items = await api.listConversations(undefined, undefined, false);
+          setRecentConversations(items.slice(0, 12));
+          setResults([]);
+        }
         setSelectedIndex(0);
       } catch (e) {
         console.error(e);
@@ -46,19 +54,24 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [query, role]);
+  }, [isOpen, query, role]);
 
   // 键盘导航
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const itemCount = query.trim() ? results.length : recentConversations.length;
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (results.length > 0 ? (prev + 1) % results.length : 0));
+      setSelectedIndex((prev) => (itemCount > 0 ? (prev + 1) % itemCount : 0));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex((prev) => (results.length > 0 ? (prev - 1 + results.length) % results.length : 0));
+      setSelectedIndex((prev) => (itemCount > 0 ? (prev - 1 + itemCount) % itemCount : 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (results[selectedIndex]) {
+      if (!query.trim() && recentConversations[selectedIndex]) {
+        const item = recentConversations[selectedIndex];
+        onSelectResult(item.id, item.workspace_path);
+        onClose();
+      } else if (results[selectedIndex]) {
         const item = results[selectedIndex];
         onSelectResult(item.conversation_id, item.workspace_path);
         onClose();
@@ -125,7 +138,46 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
         {/* 结果列表 */}
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {loading ? (
-            <div className="py-12 text-center text-xs theme-text-muted">正在搜索全库会话记录…</div>
+            <div className="py-12 text-center text-xs theme-text-muted">
+              {query.trim() ? '正在搜索全库会话记录…' : '正在加载最近活跃会话…'}
+            </div>
+          ) : !query.trim() && recentConversations.length > 0 ? (
+            <>
+              <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] font-medium theme-text-sub">
+                <Clock3 className="h-3.5 w-3.5" />
+                最近活跃会话
+              </div>
+              {recentConversations.map((item, idx) => {
+                const isSelected = idx === selectedIndex;
+                const workspaceName = item.workspace_path.split('/').filter(Boolean).pop() || '未分类';
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => {
+                      onSelectResult(item.id, item.workspace_path);
+                      onClose();
+                    }}
+                    className={`flex items-center justify-between gap-4 px-3 py-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                      isSelected
+                        ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
+                        : 'theme-bg-sub border-transparent hover:theme-border theme-text-muted hover:theme-text-main'
+                    }`}
+                  >
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className="h-1.5 w-1.5 rounded-full bg-blue-500 flex-shrink-0" />
+                      <span className="font-medium theme-text-main truncate">{item.title || '未命名会话'}</span>
+                    </div>
+                    <div className="flex-shrink-0 flex items-center gap-2 text-[10px] theme-text-sub">
+                      <span className="px-1.5 py-0.5 bg-blue-500/15 text-blue-500 rounded font-medium">
+                        {item.source_app}
+                      </span>
+                      <span className="max-w-28 truncate">{workspaceName}</span>
+                      <span>{formatRelativeTime(item.updated_at || item.created_at)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </>
           ) : results.length > 0 ? (
             results.map((item, idx) => {
               const isSelected = idx === selectedIndex;
@@ -163,7 +215,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
             <div className="py-12 text-center text-xs theme-text-sub">未找到匹配的消息记录</div>
           ) : (
             <div className="py-12 text-center text-xs theme-text-sub">
-              输入关键词，快速检索 700+ 会话与代码
+              暂无最近活跃会话
             </div>
           )}
         </div>

@@ -13,7 +13,7 @@ use db::{
 };
 use serde::{Deserialize, Serialize};
 use sync::{SyncResultInfo, execute_sync, get_agent_source_paths};
-use tauri::{State, Manager, Emitter};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use std::collections::HashMap;
 
 #[tauri::command]
@@ -529,10 +529,13 @@ pub fn run() {
             // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给外部服务无缝调用）
             http_server::start_http_server(8788);
 
-            // 启动后台多源智能监听线程（每 10 秒探测数据源 mtime 变动，实现无感实时同步）
+            // 启动后台多源智能监听线程（每 30 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> = HashMap::new();
+                let mut last_sync_at = std::time::Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(60))
+                    .unwrap_or_else(std::time::Instant::now);
                 // 首次填充初始时间戳
                 for src in get_agent_source_paths() {
                     if let Ok(meta) = src.metadata() {
@@ -543,7 +546,7 @@ pub fn run() {
                 }
 
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    std::thread::sleep(std::time::Duration::from_secs(30));
                     let sources = get_agent_source_paths();
                     let mut changed = false;
 
@@ -563,7 +566,8 @@ pub fn run() {
                         }
                     }
 
-                    if changed {
+                    if changed && last_sync_at.elapsed() >= std::time::Duration::from_secs(20) {
+                        last_sync_at = std::time::Instant::now();
                         let _ = app_handle.emit("sync-started", ());
                         let _res = execute_sync(false);
                         let _ = app_handle.emit("sync-completed", ());
@@ -573,6 +577,39 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| match event {
+            // 点击关闭按钮：隐藏到 Dock，不退出
+            RunEvent::WindowEvent {
+                label,
+                event: WindowEvent::CloseRequested { api, .. },
+                ..
+            } => {
+                api.prevent_close();
+                if let Some(win) = app_handle.get_webview_window(&label) {
+                    let _ = win.hide();
+                }
+            }
+            // 所有窗口关闭时的自动退出请求：拦截，保持进程；⌘Q 带 exit code，放行
+            RunEvent::ExitRequested { api, code, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+            // macOS：从 Dock 图标点击恢复窗口
+            #[cfg(target_os = "macos")]
+            RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows {
+                    if let Some(win) = app_handle.get_webview_window("main") {
+                        let _ = win.show();
+                        let _ = win.set_focus();
+                    }
+                }
+            }
+            _ => {}
+        });
 }

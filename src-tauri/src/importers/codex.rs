@@ -26,11 +26,6 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         return stats;
     }
 
-    if incremental && !needs_sync(conn, &codex_dir, true) {
-        stats.skipped_count += 1;
-        return stats;
-    }
-
     let files: Vec<_> = WalkDir::new(&codex_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -39,8 +34,13 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
 
     for entry in files {
         let p = entry.path();
+
+        if incremental && !needs_sync(conn, p, true) {
+            stats.skipped_count += 1;
+            continue;
+        }
+
         let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
-        
         let session_id = if stem.starts_with("rollout-") {
             let parts: Vec<&str> = stem.split('-').collect();
             if parts.len() >= 5 {
@@ -55,22 +55,22 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         let cid = format!("codex:{}", session_id);
 
         match parse_codex_file(&cid, p) {
-            Ok(Some(conv)) => {
-                match save_conversation_tx(conn, &conv) {
-                    Ok(is_new) => {
-                        if is_new {
-                            stats.new_count += 1;
-                        } else {
-                            stats.updated_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[Codex Importer] 保存失败 {}: {}", cid, e);
-                        stats.error_count += 1;
+            Ok(Some(conv)) => match save_conversation_tx(conn, &conv) {
+                Ok(is_new) => {
+                    record_sync_state(conn, p, &cid, "codex_jsonl");
+                    if is_new {
+                        stats.new_count += 1;
+                    } else {
+                        stats.updated_count += 1;
                     }
                 }
-            }
+                Err(e) => {
+                    eprintln!("[Codex Importer] 保存失败 {}: {}", cid, e);
+                    stats.error_count += 1;
+                }
+            },
             Ok(None) => {
+                record_sync_state(conn, p, &cid, "codex_jsonl");
                 stats.skipped_count += 1;
             }
             Err(e) => {
@@ -80,7 +80,6 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
-    record_sync_state(conn, &codex_dir, "codex:sessions", "codex_sessions");
     stats
 }
 
@@ -110,7 +109,11 @@ fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, B
             Err(_) => continue,
         };
 
-        let ts = val.get("timestamp").or_else(|| val.get("created_at")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let ts = val
+            .get("timestamp")
+            .or_else(|| val.get("created_at"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         if created_at.is_none() && ts.is_some() {
             created_at = ts.clone();
         }
@@ -123,7 +126,7 @@ fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, B
         if obj_type == "session_meta" {
             if let Some(payload) = val.get("payload") {
                 if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
-                    workspace_path = super::project_root_from_path(cwd);
+                    workspace_path = super::canonicalize_workspace_path(cwd);
                 }
             }
             continue;
@@ -191,14 +194,26 @@ fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, B
             continue;
         }
 
-        // 兼容通用行格式
-        let role = val.get("role").or_else(|| val.get("type")).and_then(|v| v.as_str()).unwrap_or("user");
-        let content = val.get("content").or_else(|| val.get("text")).and_then(|v| v.as_str()).unwrap_or("").trim();
+        let role = val
+            .get("role")
+            .or_else(|| val.get("type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("user");
+        let content = val
+            .get("content")
+            .or_else(|| val.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if !content.is_empty() {
             if role == "user" && title.is_empty() {
                 title = content.chars().take(60).collect();
             }
-            let norm_role = if role == "assistant" || role == "bot" { "assistant" } else { "user" };
+            let norm_role = if role == "assistant" || role == "bot" {
+                "assistant"
+            } else {
+                "user"
+            };
             messages.push(RawMessage {
                 step_index: step_idx,
                 role: norm_role.to_string(),

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use crate::importers::{ImporterStats, SyncEngine};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,9 +73,9 @@ pub fn get_agent_source_paths() -> Vec<PathBuf> {
     paths
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 static IS_SYNCING: AtomicBool = AtomicBool::new(false);
+static PENDING_SYNC: AtomicBool = AtomicBool::new(false);
+static PENDING_FULL: AtomicBool = AtomicBool::new(false);
 
 struct SyncGuard;
 
@@ -84,22 +85,56 @@ impl Drop for SyncGuard {
     }
 }
 
-/// 纯 Rust 原生执行多源同步 (含全局防重入互斥锁)
-pub fn execute_sync(full: bool) -> SyncResultInfo {
-    // 防重入互斥：如果已有任务在运行，立即快速返回，避免 SQLite 事务争抢死锁
-    if IS_SYNCING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
-        return SyncResultInfo {
-            success: true,
-            new_count: 0,
-            updated_count: 0,
-            skipped_count: 0,
-            error_count: 0,
-            message: "同步任务正在执行中，已自动合并".to_string(),
-            details: vec![],
-        };
+fn queued_result() -> SyncResultInfo {
+    SyncResultInfo {
+        success: true,
+        new_count: 0,
+        updated_count: 0,
+        skipped_count: 0,
+        error_count: 0,
+        message: "同步任务已排队，将在当前任务结束后自动执行".to_string(),
+        details: vec![],
     }
-    let _guard = SyncGuard;
+}
 
+fn merge_results(into: &mut SyncResultInfo, from: SyncResultInfo) {
+    into.success = into.success && from.success;
+    into.new_count += from.new_count;
+    into.updated_count += from.updated_count;
+    into.skipped_count += from.skipped_count;
+    into.error_count += from.error_count;
+    into.details.extend(from.details);
+    into.message = from.message;
+}
+
+fn record_sync_run(
+    conn: &rusqlite::Connection,
+    mode: &str,
+    result: &SyncResultInfo,
+    started_at: &str,
+) {
+    let finished_at = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_runs (
+            started_at, finished_at, mode, new_count, updated_count, skipped_count, error_count, message
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "#,
+        rusqlite::params![
+            started_at,
+            finished_at,
+            mode,
+            result.new_count as i64,
+            result.updated_count as i64,
+            result.skipped_count as i64,
+            result.error_count as i64,
+            &result.message,
+        ],
+    );
+}
+
+fn run_once(full: bool) -> SyncResultInfo {
+    let started_at = chrono::Utc::now().to_rfc3339();
     let db_path = crate::db::get_database_path();
     let conn = match rusqlite::Connection::open(&db_path) {
         Ok(c) => c,
@@ -116,18 +151,19 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
         }
     };
 
-    // 确保 schema 已初始化
+    crate::db::apply_write_pragmas(&conn);
     let _ = crate::db::init_schema(&conn);
 
     let incremental = !full;
-    let (new_cnt, updated_cnt, skipped_cnt, error_cnt, details) = SyncEngine::run_all(&conn, incremental);
+    let (new_cnt, updated_cnt, skipped_cnt, error_cnt, details) =
+        SyncEngine::run_all(&conn, incremental);
 
     let msg = format!(
         "原生同步完成: 新增 {} 条会话, 更新 {} 条, 跳过 {} 条, 错误 {} 条",
         new_cnt, updated_cnt, skipped_cnt, error_cnt
     );
 
-    SyncResultInfo {
+    let result = SyncResultInfo {
         success: error_cnt == 0 || (new_cnt + updated_cnt > 0),
         new_count: new_cnt,
         updated_count: updated_cnt,
@@ -135,5 +171,43 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
         error_count: error_cnt,
         message: msg,
         details,
+    };
+
+    record_sync_run(&conn, if full { "full" } else { "incremental" }, &result, &started_at);
+    result
+}
+
+/// 纯 Rust 原生执行多源同步（冲突请求会排队，不静默丢弃）
+pub fn execute_sync(full: bool) -> SyncResultInfo {
+    if IS_SYNCING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        PENDING_SYNC.store(true, Ordering::SeqCst);
+        if full {
+            PENDING_FULL.store(true, Ordering::SeqCst);
+        }
+        return queued_result();
     }
+    let _guard = SyncGuard;
+
+    let mut want_full = full;
+    let mut aggregate: Option<SyncResultInfo> = None;
+
+    loop {
+        let result = run_once(want_full);
+        match aggregate.as_mut() {
+            Some(acc) => merge_results(acc, result),
+            None => aggregate = Some(result),
+        }
+
+        let has_pending = PENDING_SYNC.swap(false, Ordering::SeqCst);
+        if !has_pending {
+            break;
+        }
+        want_full = PENDING_FULL.swap(false, Ordering::SeqCst);
+        println!("[AgentDeck SyncEngine] 检测到排队请求，继续执行 (full: {})...", want_full);
+    }
+
+    aggregate.unwrap_or_else(queued_result)
 }
