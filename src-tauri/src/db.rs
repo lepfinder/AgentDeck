@@ -242,39 +242,8 @@ pub fn get_database_path() -> PathBuf {
     // 2. 独立规范主库路径：~/.agentdeck/agentdeck.db
     if let Some(home) = dirs::home_dir() {
         let app_dir = home.join(".agentdeck");
-        let target_db = app_dir.join("agentdeck.db");
-
-        // 确保 ~/.agentdeck 目录存在
         let _ = std::fs::create_dir_all(&app_dir);
-
-        // 若标准主库已存在，直接以此为主库
-        if target_db.exists() {
-            return target_db;
-        }
-
-        // 3. 首次启动无感平滑迁移：寻找旧候选库并自动复制到 ~/.agentdeck/agentdeck.db
-        let legacy_candidates = [
-            home.join(".agentdeck/conversations.db"),
-            home.join("workspace/personal/aicoding-chat-viewer/data/antigravity_chats.db"),
-            home.join(".aicoding-chat-viewer/data/antigravity_chats.db"),
-            home.join(".aicoding-chat-viewer/conversations.db"),
-        ];
-
-        for src in &legacy_candidates {
-            if src.exists() {
-                if let Ok(meta) = std::fs::metadata(src) {
-                    if meta.len() > 1024 * 50 {
-                        eprintln!("[AgentDeck] 发现旧版会话库 {:?} ({} 字节)，正在自动迁移至新主库 {:?}", src, meta.len(), target_db);
-                        if let Ok(_) = std::fs::copy(src, &target_db) {
-                            eprintln!("[AgentDeck] 历史会话数据迁移成功 -> {:?}", target_db);
-                            return target_db;
-                        }
-                    }
-                }
-            }
-        }
-
-        return target_db;
+        return app_dir.join("agentdeck.db");
     }
 
     PathBuf::from("agentdeck.db")
