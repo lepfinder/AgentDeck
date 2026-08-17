@@ -4,13 +4,68 @@ pub mod http_server;
 
 use db::{
     DbState, DashboardStats, WorkspaceStat, ConversationItem, MessageItem, SearchResultItem,
-    WorkspaceDetailStats, fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
-    toggle_star_session, search_global_messages, fetch_workspace_detail_stats
+    WorkspaceDetailStats, WorkspaceFineBlock, WorkspaceModuleBlock, AnalysisUserMessage,
+    fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
+    toggle_star_session, search_global_messages, fetch_workspace_detail_stats,
+    fetch_workspace_analysis_messages, save_workspace_fine_blocks, save_workspace_module_blocks,
+    save_workspace_report, clear_workspace_analysis,
 };
 use serde::{Deserialize, Serialize};
 use sync::{SyncResultInfo, execute_sync, get_agent_source_paths};
 use tauri::{State, Manager, Emitter};
 use std::collections::HashMap;
+
+#[tauri::command]
+fn get_workspace_analysis_messages(
+    workspace_path: String,
+    state: State<'_, DbState>,
+) -> Result<Vec<AnalysisUserMessage>, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    fetch_workspace_analysis_messages(&conn, &workspace_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_workspace_fine_blocks_cmd(
+    workspace_path: String,
+    blocks: Vec<WorkspaceFineBlock>,
+    clear_existing: Option<bool>,
+    state: State<'_, DbState>,
+) -> Result<usize, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    save_workspace_fine_blocks(&conn, &workspace_path, &blocks, clear_existing.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_workspace_module_blocks_cmd(
+    workspace_path: String,
+    modules: Vec<WorkspaceModuleBlock>,
+    clear_existing: Option<bool>,
+    state: State<'_, DbState>,
+) -> Result<usize, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    save_workspace_module_blocks(&conn, &workspace_path, &modules, clear_existing.unwrap_or(false))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_workspace_report_cmd(
+    workspace_path: String,
+    report_md: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    save_workspace_report(&conn, &workspace_path, &report_md).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_workspace_analysis_cmd(
+    workspace_path: String,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    clear_workspace_analysis(&conn, &workspace_path).map_err(|e| e.to_string())
+}
 
 #[tauri::command]
 fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, String> {
@@ -382,7 +437,12 @@ pub fn run() {
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
-            get_database_path_info
+            get_database_path_info,
+            get_workspace_analysis_messages,
+            save_workspace_fine_blocks_cmd,
+            save_workspace_module_blocks_cmd,
+            save_workspace_report_cmd,
+            clear_workspace_analysis_cmd
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

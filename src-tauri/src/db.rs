@@ -178,6 +178,15 @@ pub struct WorkspaceModuleBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisUserMessage {
+    pub id: Option<String>,
+    pub conversation_id: String,
+    pub conversation_title: String,
+    pub created_at: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeatmapCell {
     pub date: String,
     pub count: i64,
@@ -288,8 +297,48 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             starred_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS workspace_blocks_fine (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_path TEXT NOT NULL,
+            block_id TEXT NOT NULL,
+            batch_index INTEGER,
+            type TEXT NOT NULL DEFAULT 'feature',
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            start_date TEXT,
+            end_date TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            keywords_json TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS workspace_blocks_modules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_path TEXT NOT NULL,
+            module_id TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'module',
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            start_date TEXT,
+            end_date TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            keywords_json TEXT NOT NULL DEFAULT '[]',
+            child_fine_ids_json TEXT NOT NULL DEFAULT '[]',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS workspace_reports (
+            workspace_path TEXT PRIMARY KEY,
+            report_md TEXT NOT NULL DEFAULT '',
+            updated_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_blocks_fine_ws ON workspace_blocks_fine(workspace_path);
+        CREATE INDEX IF NOT EXISTS idx_blocks_modules_ws ON workspace_blocks_modules(workspace_path);
         "#
     )?;
     Ok(())
@@ -1153,3 +1202,166 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         report_md,
     })
 }
+
+pub fn fetch_workspace_analysis_messages(
+    conn: &Connection,
+    workspace_path: &str,
+) -> Result<Vec<AnalysisUserMessage>> {
+    let mut list = Vec::new();
+    let sql = r#"
+        SELECT m.id, m.conversation_id, COALESCE(c.title, ''), m.created_at, m.content
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE c.workspace_path = ?1
+          AND (m.role LIKE '%user%' OR m.role = 'user')
+          AND m.content IS NOT NULL AND TRIM(m.content) != ''
+        ORDER BY m.created_at ASC, m.id ASC
+    "#;
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![workspace_path], |row| {
+        let id_val: i64 = row.get(0)?;
+        let raw_created: Option<String> = row.get(3)?;
+        Ok(AnalysisUserMessage {
+            id: Some(id_val.to_string()),
+            conversation_id: row.get(1)?,
+            conversation_title: row.get(2)?,
+            created_at: to_beijing_iso(raw_created),
+            content: row.get(4)?,
+        })
+    })?;
+
+    for r in rows.flatten() {
+        list.push(r);
+    }
+    Ok(list)
+}
+
+pub fn save_workspace_fine_blocks(
+    conn: &Connection,
+    workspace_path: &str,
+    blocks: &[WorkspaceFineBlock],
+    clear_existing: bool,
+) -> Result<usize> {
+    if clear_existing {
+        conn.execute(
+            "DELETE FROM workspace_blocks_fine WHERE workspace_path = ?1",
+            params![workspace_path],
+        )?;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut count = 0;
+    let mut stmt = conn.prepare(
+        r#"
+        INSERT INTO workspace_blocks_fine (
+            workspace_path, block_id, batch_index, type, title, summary,
+            start_date, end_date, status, keywords_json, sort_order, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "#,
+    )?;
+
+    for (idx, block) in blocks.iter().enumerate() {
+        let kw_json = serde_json::to_string(&block.keywords).unwrap_or_else(|_| "[]".to_string());
+        stmt.execute(params![
+            workspace_path,
+            block.block_id,
+            block.batch_index,
+            block.r#type,
+            block.title,
+            block.summary,
+            block.start_date,
+            block.end_date,
+            block.status,
+            kw_json,
+            idx as i64,
+            now,
+        ])?;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+pub fn save_workspace_module_blocks(
+    conn: &Connection,
+    workspace_path: &str,
+    modules: &[WorkspaceModuleBlock],
+    clear_existing: bool,
+) -> Result<usize> {
+    if clear_existing {
+        conn.execute(
+            "DELETE FROM workspace_blocks_modules WHERE workspace_path = ?1",
+            params![workspace_path],
+        )?;
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut count = 0;
+    let mut stmt = conn.prepare(
+        r#"
+        INSERT INTO workspace_blocks_modules (
+            workspace_path, module_id, type, title, summary,
+            start_date, end_date, status, keywords_json, child_fine_ids_json, sort_order, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "#,
+    )?;
+
+    for (idx, m) in modules.iter().enumerate() {
+        let kw_json = serde_json::to_string(&m.keywords).unwrap_or_else(|_| "[]".to_string());
+        let child_json = serde_json::to_string(&m.child_fine_ids).unwrap_or_else(|_| "[]".to_string());
+        stmt.execute(params![
+            workspace_path,
+            m.module_id,
+            m.r#type,
+            m.title,
+            m.summary,
+            m.start_date,
+            m.end_date,
+            m.status,
+            kw_json,
+            child_json,
+            idx as i64,
+            now,
+        ])?;
+        count += 1;
+    }
+
+    Ok(count)
+}
+
+pub fn save_workspace_report(
+    conn: &Connection,
+    workspace_path: &str,
+    report_md: &str,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO workspace_reports (workspace_path, report_md, updated_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(workspace_path) DO UPDATE SET
+            report_md = excluded.report_md,
+            updated_at = excluded.updated_at
+        "#,
+        params![workspace_path, report_md, now],
+    )?;
+    Ok(())
+}
+
+pub fn clear_workspace_analysis(conn: &Connection, workspace_path: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM workspace_blocks_fine WHERE workspace_path = ?1",
+        params![workspace_path],
+    )?;
+    conn.execute(
+        "DELETE FROM workspace_blocks_modules WHERE workspace_path = ?1",
+        params![workspace_path],
+    )?;
+    conn.execute(
+        "DELETE FROM workspace_reports WHERE workspace_path = ?1",
+        params![workspace_path],
+    )?;
+    Ok(())
+}
+

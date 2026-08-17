@@ -121,6 +121,12 @@ export interface SearchResultItem {
   created_at?: string;
 }
 
+export interface BlockEvidence {
+  date?: string;
+  conversation_title?: string;
+  snippet?: string;
+}
+
 export interface WorkspaceFineBlock {
   id: number;
   block_id: string;
@@ -132,6 +138,7 @@ export interface WorkspaceFineBlock {
   end_date?: string;
   status: string;
   keywords: string[];
+  evidence?: BlockEvidence[];
 }
 
 export interface WorkspaceModuleBlock {
@@ -144,7 +151,16 @@ export interface WorkspaceModuleBlock {
   end_date?: string;
   status: string;
   keywords: string[];
+  evidence?: BlockEvidence[];
   child_fine_ids: string[];
+}
+
+export interface AnalysisUserMessage {
+  id?: string;
+  conversation_id: string;
+  conversation_title?: string;
+  created_at?: string;
+  content: string;
 }
 
 export interface HeatmapCell {

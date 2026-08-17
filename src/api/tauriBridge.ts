@@ -6,6 +6,9 @@ import type {
   MessageItem,
   SearchResultItem,
   WorkspaceDetailStats,
+  WorkspaceFineBlock,
+  WorkspaceModuleBlock,
+  AnalysisUserMessage,
 } from '../types';
 
 export const isTauri = () => {
@@ -203,5 +206,67 @@ export const api = {
       }
     }
     return '~/.agentdeck/agentdeck.db';
+  },
+
+  // 研发分析相关 API
+  async getWorkspaceAnalysisMessages(workspacePath: string): Promise<AnalysisUserMessage[]> {
+    if (isTauri()) {
+      return await invoke<AnalysisUserMessage[]>('get_workspace_analysis_messages', { workspacePath });
+    }
+    const res = await fetch(`/api/user-messages?workspace=${encodeURIComponent(workspacePath)}&format=flat`);
+    const data = await res.json();
+    return (data.messages || []).map((m: any) => ({
+      conversation_id: m.conversation_id,
+      conversation_title: m.conversation_title || '',
+      created_at: m.created_at,
+      content: m.content || '',
+    }));
+  },
+
+  async saveWorkspaceFineBlocks(
+    workspacePath: string,
+    blocks: WorkspaceFineBlock[],
+    clearExisting = false
+  ): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('save_workspace_fine_blocks_cmd', {
+        workspacePath,
+        blocks,
+        clearExisting,
+      });
+    }
+    return blocks.length;
+  },
+
+  async saveWorkspaceModuleBlocks(
+    workspacePath: string,
+    modules: WorkspaceModuleBlock[],
+    clearExisting = false
+  ): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('save_workspace_module_blocks_cmd', {
+        workspacePath,
+        modules,
+        clearExisting,
+      });
+    }
+    return modules.length;
+  },
+
+  async saveWorkspaceReport(workspacePath: string, reportMd: string): Promise<void> {
+    if (isTauri()) {
+      await invoke('save_workspace_report_cmd', {
+        workspacePath,
+        reportMd,
+      });
+    }
+  },
+
+  async clearWorkspaceAnalysis(workspacePath: string): Promise<void> {
+    if (isTauri()) {
+      await invoke('clear_workspace_analysis_cmd', {
+        workspacePath,
+      });
+    }
   },
 };

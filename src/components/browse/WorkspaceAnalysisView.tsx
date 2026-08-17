@@ -4,6 +4,13 @@ import { api } from '../../api/tauriBridge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
+  runExtractFineBlocksPipeline,
+  runMergeModulesPipeline,
+  runGenerateReportPipeline,
+  getAiEndpoints,
+  type PipelineProgress,
+} from '../../services/analysisPipeline';
+import {
   Layers,
   MessageSquare,
   Calendar,
@@ -16,6 +23,8 @@ import {
   RefreshCw,
   X,
   Info,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface Props {
@@ -29,6 +38,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [selectedBlock, setSelectedBlock] = useState<WorkspaceFineBlock | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractMessage, setExtractMessage] = useState<string | null>(null);
+  const [progressInfo, setProgressInfo] = useState<PipelineProgress | null>(null);
 
   const fetchDetail = async () => {
     if (!workspacePath) return;
@@ -47,70 +57,133 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
     fetchDetail();
   }, [workspacePath]);
 
-  // 提取 Blocks 操作
-  const handleExtractBlocks = (force: boolean) => {
-    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
-    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
-    const hasKey = Boolean(apiKeys[activeProvider]);
-
-    if (!hasKey) {
+  // 1. 细粒度 Blocks 智能提取
+  const handleExtractBlocks = async (force: boolean) => {
+    const endpoints = getAiEndpoints();
+    if (!endpoints.hasKey) {
       setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行智能提取。');
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
     setExtracting(true);
-    setExtractMessage(force ? '正在重新提取项目细粒度 Blocks…' : '正在增量提取 Blocks…');
-    setTimeout(() => {
+    setProgressInfo(null);
+    setExtractMessage(force ? '正在重新提取项目全部细粒度 Blocks…' : '正在增量提取 Blocks…');
+
+    try {
+      const res = await runExtractFineBlocksPipeline(workspacePath, force, (p) => {
+        setProgressInfo(p);
+        setExtractMessage(p.detail);
+      });
+
+      if (res.success) {
+        setExtractMessage(`🎉 ${res.message}`);
+        await fetchDetail();
+        setActiveTab('fine');
+      } else {
+        setExtractMessage(`⚠️ 提取未完成: ${res.message}`);
+      }
+    } catch (err: any) {
+      console.error('Extract blocks error:', err);
+      setExtractMessage(`❌ 提取发生错误: ${err?.message || err}`);
+    } finally {
       setExtracting(false);
-      setExtractMessage('已提取最新 Blocks 数据！');
-      fetchDetail();
-      setTimeout(() => setExtractMessage(null), 3000);
-    }, 2000);
+      setTimeout(() => {
+        setProgressInfo(null);
+      }, 3000);
+    }
   };
 
-  // 合并模块操作
-  const handleMergeModules = (force: boolean) => {
-    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
-    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
-    const hasKey = Boolean(apiKeys[activeProvider]);
-
-    if (!hasKey) {
+  // 2. 合并为模块总览
+  const handleMergeModules = async (force: boolean) => {
+    const endpoints = getAiEndpoints();
+    if (!endpoints.hasKey) {
       setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行模块合并。');
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
+    if (!detail || detail.fine_blocks.length === 0) {
+      setExtractMessage('提示：当前暂无细粒度 Blocks 数据，请先点击「提取 Blocks」。');
+      setTimeout(() => setExtractMessage(null), 4000);
+      return;
+    }
+
     setExtracting(true);
-    setExtractMessage(force ? '正在重新合并模块总览…' : '正在合并细粒度 Blocks 为模块总览…');
-    setTimeout(() => {
+    setProgressInfo(null);
+    setExtractMessage('正在将细粒度 Blocks 聚合为核心功能模块总览…');
+
+    try {
+      const res = await runMergeModulesPipeline(workspacePath, detail.fine_blocks, detail, force, (p) => {
+        setProgressInfo(p);
+        setExtractMessage(p.detail);
+      });
+
+      if (res.success) {
+        setExtractMessage(`🎉 ${res.message}`);
+        await fetchDetail();
+        setActiveTab('modules');
+      } else {
+        setExtractMessage(`⚠️ 模块合并未完成: ${res.message}`);
+      }
+    } catch (err: any) {
+      console.error('Merge modules error:', err);
+      setExtractMessage(`❌ 合并发生错误: ${err?.message || err}`);
+    } finally {
       setExtracting(false);
-      setExtractMessage('模块总览合并完成！');
-      fetchDetail();
-      setTimeout(() => setExtractMessage(null), 3000);
-    }, 2000);
+      setTimeout(() => {
+        setProgressInfo(null);
+      }, 3000);
+    }
   };
 
-  // 生成 / 刷新报告操作
-  const handleGenerateReport = (force: boolean) => {
-    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
-    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
-    const hasKey = Boolean(apiKeys[activeProvider]);
-
-    if (!hasKey) {
+  // 3. 生成 Markdown 架构演进报告
+  const handleGenerateReport = async (_force: boolean) => {
+    const endpoints = getAiEndpoints();
+    if (!endpoints.hasKey) {
       setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可生成架构报告。');
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
+    if (!detail || (detail.module_blocks.length === 0 && detail.fine_blocks.length === 0)) {
+      setExtractMessage('提示：当前缺少模块与 Blocks 数据，请先完成「提取 Blocks」与「合并模块」。');
+      setTimeout(() => setExtractMessage(null), 4000);
+      return;
+    }
+
     setExtracting(true);
-    setExtractMessage(force ? '正在刷新并重新撰写 Markdown 架构报告…' : '正在基于模块总览生成 Markdown 架构报告…');
-    setTimeout(() => {
+    setProgressInfo(null);
+    setExtractMessage('正在基于模块总览撰写完整的 Markdown 架构报告…');
+
+    try {
+      const res = await runGenerateReportPipeline(
+        workspacePath,
+        detail,
+        detail.module_blocks,
+        detail.fine_blocks,
+        (p) => {
+          setProgressInfo(p);
+          setExtractMessage(p.detail);
+        }
+      );
+
+      if (res.success) {
+        setExtractMessage(`🎉 ${res.message}`);
+        await fetchDetail();
+        setActiveTab('report');
+      } else {
+        setExtractMessage(`⚠️ 报告生成未完成: ${res.message}`);
+      }
+    } catch (err: any) {
+      console.error('Generate report error:', err);
+      setExtractMessage(`❌ 报告生成错误: ${err?.message || err}`);
+    } finally {
       setExtracting(false);
-      setExtractMessage('架构报告生成完成！');
-      fetchDetail();
-      setTimeout(() => setExtractMessage(null), 3000);
-    }, 2500);
+      setTimeout(() => {
+        setProgressInfo(null);
+      }, 3000);
+    }
   };
 
   if (loading) {
@@ -424,11 +497,38 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
           </div>
         </div>
 
-        {/* 提取状态提示 */}
+        {/* 提取状态提示 & 进度条 */}
         {extractMessage && (
-          <div className="p-3 text-xs bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400 flex items-center gap-2">
-            <Info className="h-4 w-4 flex-shrink-0" />
-            <span>{extractMessage}</span>
+          <div className="p-3.5 text-xs bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {extracting ? (
+                  <Clock className="h-4 w-4 animate-spin text-blue-500 flex-shrink-0" />
+                ) : extractMessage.startsWith('❌') ? (
+                  <AlertTriangle className="h-4 w-4 text-rose-500 flex-shrink-0" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500 flex-shrink-0" />
+                )}
+                <span className="font-medium">{extractMessage}</span>
+              </div>
+              {progressInfo?.total && progressInfo.total > 0 && progressInfo.current !== undefined && (
+                <span className="text-[11px] font-mono text-blue-400">
+                  {progressInfo.current} / {progressInfo.total} ({Math.round((progressInfo.current / progressInfo.total) * 100)}%)
+                </span>
+              )}
+            </div>
+
+            {/* 进度条动画 */}
+            {extracting && progressInfo?.total && progressInfo.total > 0 && (
+              <div className="w-full bg-blue-950/40 rounded-full h-1.5 overflow-hidden">
+                <div
+                  className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.max(5, ((progressInfo.current || 0) / progressInfo.total) * 100))}%`,
+                  }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -674,6 +774,27 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                       >
                         {kw}
                       </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedBlock.evidence && selectedBlock.evidence.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-xs font-semibold theme-text-muted">对话证据与原话摘录</div>
+                  <div className="space-y-2">
+                    {selectedBlock.evidence.map((ev, i) => (
+                      <div key={i} className="p-2.5 rounded-lg theme-bg-sub border theme-border text-[11px] space-y-1">
+                        {ev.conversation_title && (
+                          <div className="font-medium text-blue-500 line-clamp-1">{ev.conversation_title}</div>
+                        )}
+                        {ev.snippet && (
+                          <div className="theme-text-muted italic line-clamp-2">“{ev.snippet}”</div>
+                        )}
+                        {ev.date && (
+                          <div className="text-[10px] theme-text-sub font-mono">{ev.date}</div>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
