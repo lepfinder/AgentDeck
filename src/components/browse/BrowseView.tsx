@@ -53,7 +53,7 @@ export const BrowseView: React.FC<Props> = ({
   const [loadingConv, setLoadingConv] = useState(false);
   const [starredCount, setStarredCount] = useState(0);
   const [expandedTurns, setExpandedTurns] = useState<Record<number, boolean>>({});
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
   // 切换会话时重置折叠状态
   useEffect(() => {
