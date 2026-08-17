@@ -14,10 +14,18 @@ pub struct SyncResultInfo {
 pub fn get_agent_source_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        // 1. Cursor
+        // 1. Cursor (globalStorage, workspaceStorage, .cursor/projects)
         let cursor_db = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
         if cursor_db.exists() {
             paths.push(cursor_db);
+        }
+        let cursor_ws = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+        if cursor_ws.exists() {
+            paths.push(cursor_ws);
+        }
+        let cursor_proj = home.join(".cursor/projects");
+        if cursor_proj.exists() {
+            paths.push(cursor_proj);
         }
 
         // 2. Antigravity
