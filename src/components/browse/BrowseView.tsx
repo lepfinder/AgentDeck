@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { WorkspaceStat, ConversationItem, MessageItem } from '../../types';
 import { api } from '../../api/tauriBridge';
+import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -13,6 +14,8 @@ import {
   Wrench,
   Clock,
   Sparkles,
+  BarChart3,
+  ArrowLeft,
 } from 'lucide-react';
 
 interface Props {
@@ -49,6 +52,10 @@ export const BrowseView: React.FC<Props> = ({
     try {
       const list = await api.listWorkspaces(wsSearch);
       setWorkspaces(list);
+      // 默认选中第一个工作区
+      if (list.length > 0 && !selectedWorkspace && !isStarredView) {
+        onSelectWorkspace(list[0].workspace_path);
+      }
     } catch (e) {
       console.error(e);
     }
@@ -69,10 +76,6 @@ export const BrowseView: React.FC<Props> = ({
       setConversations(list);
       if (isStarredView) {
         setStarredCount(list.length);
-      }
-      // 默认选中第一个
-      if (list.length > 0 && !selectedConversationId) {
-        onSelectConversation(list[0].id);
       }
     } catch (e) {
       console.error(e);
@@ -125,20 +128,28 @@ export const BrowseView: React.FC<Props> = ({
   const getSourceBadge = (source: string) => {
     switch (source) {
       case 'cursor':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-blue-500/15 text-blue-500 border border-blue-500/30 rounded">Cursor</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/15 text-blue-500 border border-blue-500/30 rounded">Cursor</span>;
       case 'antigravity':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 rounded">AG</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 rounded">AG</span>;
       case 'claude':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-orange-500/15 text-orange-500 border border-orange-500/30 rounded">Claude</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-orange-500/15 text-orange-500 border border-orange-500/30 rounded">Claude</span>;
       case 'hermes':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-purple-500/15 text-purple-500 border border-purple-500/30 rounded">Hermes</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-500 border border-purple-500/30 rounded">Hermes</span>;
       case 'codex':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-pink-500/15 text-pink-500 border border-pink-500/30 rounded">Codex</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-pink-500/15 text-pink-500 border border-pink-500/30 rounded">Codex</span>;
       case 'workbuddy':
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium bg-cyan-500/15 text-cyan-500 border border-cyan-500/30 rounded">WorkBuddy</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-cyan-500/15 text-cyan-500 border border-cyan-500/30 rounded">WorkBuddy</span>;
       default:
-        return <span className="px-1.5 py-0.5 text-[10px] font-medium theme-bg-sub theme-text-muted rounded">{source}</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted rounded">{source}</span>;
     }
+  };
+
+  const formatTime = (timeStr?: string) => {
+    if (!timeStr) return '';
+    if (timeStr.length >= 16) {
+      return timeStr.substring(0, 16).replace('T', ' ');
+    }
+    return timeStr;
   };
 
   return (
@@ -151,7 +162,7 @@ export const BrowseView: React.FC<Props> = ({
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
             <input
               type="text"
-              placeholder="搜索项目工作区…"
+              placeholder="搜索目录…"
               value={wsSearch}
               onChange={(e) => setWsSearch(e.target.value)}
               className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
@@ -167,7 +178,7 @@ export const BrowseView: React.FC<Props> = ({
           >
             <div className="flex items-center gap-2">
               <LayoutDashboard className="h-4 w-4" />
-              <span>全景数据看板</span>
+              <span>全景数据大盘</span>
             </div>
             <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">大盘</span>
           </button>
@@ -193,30 +204,61 @@ export const BrowseView: React.FC<Props> = ({
         </div>
 
         {/* 工作区列表 */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {workspaces.map((ws) => {
             const shortName = ws.workspace_path
-              ? ws.workspace_path.split('/').slice(-2).join('/')
-              : '默认工作区';
+              ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
+              : '未分类';
             const isActive = !isStarredView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
-                onClick={() => onSelectWorkspace(ws.workspace_path)}
-                className={`p-2.5 rounded-lg border text-xs cursor-pointer transition-all ${
+                onClick={() => {
+                  onSelectWorkspace(ws.workspace_path);
+                  onSelectConversation(''); // 点击工作区切换到该工作区的全景分析
+                }}
+                className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
                   isActive
-                    ? 'bg-blue-600/15 border-blue-500/50 theme-text-main font-semibold shadow-2xs'
+                    ? 'bg-blue-600/15 border-blue-500/50 theme-text-main font-semibold shadow-xs'
                     : 'bg-transparent border-transparent hover:theme-bg-card theme-text-muted hover:theme-text-main'
                 }`}
               >
-                <div className="truncate">{shortName}</div>
-                <div className="text-[10px] theme-text-sub truncate mt-0.5">
-                  {ws.workspace_path || 'Global Workspace'}
+                <div className="flex items-center justify-between">
+                  <span className="font-bold theme-text-main text-xs truncate">{shortName}</span>
                 </div>
-                <div className="flex items-center gap-1.5 mt-2 text-[10px] theme-text-sub">
-                  <span className="font-mono">{ws.cnt} 会话</span>
-                  <span>·</span>
+                <div className="text-[10px] theme-text-sub truncate mt-0.5 font-mono">
+                  {ws.workspace_path || '未分类目录'}
+                </div>
+
+                {/* Agent 来源标签 */}
+                <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                  <span className="text-[10px] font-mono theme-text-muted">{ws.cnt} 会话</span>
+                  {ws.ag_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-purple-500/15 text-purple-500 rounded font-mono">
+                      AG {ws.ag_cnt}
+                    </span>
+                  )}
+                  {ws.cursor_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-blue-500/15 text-blue-500 rounded font-mono">
+                      Cursor {ws.cursor_cnt}
+                    </span>
+                  )}
+                  {ws.claude_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-orange-500/15 text-orange-500 rounded font-mono">
+                      Claude {ws.claude_cnt}
+                    </span>
+                  )}
+                  {ws.hermes_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-purple-500/15 text-purple-400 rounded font-mono">
+                      Hermes {ws.hermes_cnt}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
                   <span>用户 {ws.user_message_count}</span>
+                  <span>·</span>
+                  <span>全部 {ws.message_count}</span>
                 </div>
               </div>
             );
@@ -227,19 +269,32 @@ export const BrowseView: React.FC<Props> = ({
       {/* 第二栏：会话列表 */}
       <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
         <div className="p-3 border-b theme-border space-y-2">
-          <div className="text-xs font-bold theme-text-main flex items-center gap-1.5">
-            {isStarredView ? (
-              <>
-                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                <span>我的收藏</span>
-              </>
-            ) : (
-              <>
-                <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
-                <span>会话列表 ({conversations.length})</span>
-              </>
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-bold theme-text-main flex items-center gap-1.5">
+              {isStarredView ? (
+                <>
+                  <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                  <span>我的收藏</span>
+                </>
+              ) : (
+                <>
+                  <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
+                  <span>会话列表 ({conversations.length})</span>
+                </>
+              )}
+            </div>
+
+            {selectedWorkspace && !isStarredView && (
+              <button
+                onClick={() => onSelectConversation('')}
+                className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <BarChart3 className="h-3 w-3" />
+                <span>查看项目分析</span>
+              </button>
             )}
           </div>
+
           <div className="relative">
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
             <input
@@ -252,14 +307,14 @@ export const BrowseView: React.FC<Props> = ({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {conversations.map((conv) => {
             const isSelected = conv.id === selectedConversationId;
             return (
               <div
                 key={conv.id}
                 onClick={() => onSelectConversation(conv.id)}
-                className={`p-3 rounded-lg border text-xs cursor-pointer transition-all ${
+                className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
                   isSelected
                     ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
                     : 'theme-bg-card border-transparent hover:theme-border theme-text-muted hover:theme-text-main shadow-2xs'
@@ -273,12 +328,17 @@ export const BrowseView: React.FC<Props> = ({
                     <span>{conv.title || '未命名会话'}</span>
                   </div>
                 </div>
-                <div className="flex items-center justify-between mt-2.5 pt-2 border-t theme-border-sub text-[10px] theme-text-sub">
+
+                <div className="flex items-center justify-between mt-2 pt-2 border-t theme-border-sub text-[10px] theme-text-sub">
                   <div className="flex items-center gap-1.5">
                     {getSourceBadge(conv.source_app)}
-                    <span>{conv.message_count} 消息</span>
+                    <span>{formatTime(conv.updated_at || conv.created_at)}</span>
                   </div>
-                  <span>用户 {conv.user_message_count}</span>
+                  <div className="flex items-center gap-1">
+                    <span>用户 {conv.user_message_count}</span>
+                    <span>·</span>
+                    <span>全部 {conv.message_count}</span>
+                  </div>
                 </div>
               </div>
             );
@@ -286,13 +346,22 @@ export const BrowseView: React.FC<Props> = ({
         </div>
       </section>
 
-      {/* 第三栏：会话流详情 */}
+      {/* 第三栏：主内容区域（会话流详情 OR 项目全景研发分析） */}
       <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
-        {currentConv ? (
+        {selectedConversationId && currentConv ? (
           <>
-            {/* 顶部 Header */}
+            {/* 会话顶部 Header */}
             <div className="p-4 border-b theme-border flex items-center justify-between theme-bg-header backdrop-blur-sm">
               <div className="min-w-0 pr-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <button
+                    onClick={() => onSelectConversation('')}
+                    className="text-xs text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <span>返回项目分析</span>
+                  </button>
+                </div>
                 <h2 className="text-base font-bold theme-text-main truncate flex items-center gap-2">
                   <span>{currentConv.title || '未命名会话'}</span>
                 </h2>
@@ -406,10 +475,13 @@ export const BrowseView: React.FC<Props> = ({
               )}
             </div>
           </>
+        ) : selectedWorkspace ? (
+          /* 工作区全景研发分析 */
+          <WorkspaceAnalysisView workspacePath={selectedWorkspace} />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
             <Sparkles className="h-10 w-10 mb-2 opacity-50" />
-            <p className="text-sm">从左侧选择一个会话开始复盘</p>
+            <p className="text-sm">从左侧选择一个项目工作区查看全景分析</p>
           </div>
         )}
       </main>

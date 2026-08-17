@@ -126,6 +126,65 @@ pub struct SearchResultItem {
     pub created_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceFineBlock {
+    pub id: i64,
+    pub block_id: String,
+    pub r#type: String,
+    pub title: String,
+    pub summary: String,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub status: String,
+    pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceModuleBlock {
+    pub id: i64,
+    pub module_id: String,
+    pub r#type: String,
+    pub title: String,
+    pub summary: String,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub status: String,
+    pub keywords: Vec<String>,
+    pub child_fine_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapCell {
+    pub date: String,
+    pub count: i64,
+    pub level: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceDetailStats {
+    pub workspace_path: String,
+    pub workspace_short: String,
+    pub conversation_count: i64,
+    pub ag_conversation_count: i64,
+    pub cursor_conversation_count: i64,
+    pub claude_conversation_count: i64,
+    pub codex_conversation_count: i64,
+    pub wb_conversation_count: i64,
+    pub hermes_conversation_count: i64,
+    pub user_message_count: i64,
+    pub message_count: i64,
+    pub agent_breakdown: String,
+    pub first_active: Option<String>,
+    pub last_active: Option<String>,
+    pub active_days: i64,
+    pub peak_day: Option<String>,
+    pub peak_count: i64,
+    pub heatmap_cells: Vec<HeatmapCell>,
+    pub fine_blocks: Vec<WorkspaceFineBlock>,
+    pub module_blocks: Vec<WorkspaceModuleBlock>,
+    pub report_md: Option<String>,
+}
+
 pub struct DbState {
     pub conn_mutex: Mutex<Connection>,
 }
@@ -811,4 +870,249 @@ pub fn search_global_messages(
         list.push(r);
     }
     Ok(list)
+}
+
+pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> Result<WorkspaceDetailStats> {
+    let ws_short = get_short_workspace(workspace_path);
+
+    let (
+        conversation_count,
+        ag_cnt,
+        cursor_cnt,
+        claude_cnt,
+        codex_cnt,
+        wb_cnt,
+        hermes_cnt,
+        user_message_count,
+        message_count,
+        first_active,
+        last_active
+    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
+        r#"
+        SELECT
+            COUNT(*),
+            SUM(CASE WHEN source_types LIKE '%transcript%' OR source_types LIKE '%sqlite_db%' OR source_types LIKE '%overview%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source_types LIKE '%cursor%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source_types LIKE '%claude%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source_types LIKE '%codex%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN source_types LIKE '%hermes%' THEN 1 ELSE 0 END),
+            COALESCE(SUM(user_message_count), 0),
+            COALESCE(SUM(message_count), 0),
+            MIN(created_at),
+            MAX(updated_at)
+        FROM conversations
+        WHERE workspace_path = ?1
+        "#,
+        params![workspace_path],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1).unwrap_or(0),
+                r.get(2).unwrap_or(0),
+                r.get(3).unwrap_or(0),
+                r.get(4).unwrap_or(0),
+                r.get(5).unwrap_or(0),
+                r.get(6).unwrap_or(0),
+                r.get(7)?,
+                r.get(8)?,
+                r.get(9)?,
+                r.get(10)?,
+            ))
+        }
+    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
+
+    let mut breakdown_parts = Vec::new();
+    if ag_cnt > 0 { breakdown_parts.push(format!("AG {}", ag_cnt)); }
+    if cursor_cnt > 0 { breakdown_parts.push(format!("Cursor {}", cursor_cnt)); }
+    if claude_cnt > 0 { breakdown_parts.push(format!("Claude {}", claude_cnt)); }
+    if hermes_cnt > 0 { breakdown_parts.push(format!("Hermes {}", hermes_cnt)); }
+    if wb_cnt > 0 { breakdown_parts.push(format!("WorkBuddy {}", wb_cnt)); }
+    if codex_cnt > 0 { breakdown_parts.push(format!("Codex {}", codex_cnt)); }
+    let agent_breakdown = if breakdown_parts.is_empty() {
+        format!("共 {} 会话", conversation_count)
+    } else {
+        breakdown_parts.join(" · ")
+    };
+
+    // 每日活跃消息统计
+    let mut daily_counts: HashMap<String, i64> = HashMap::new();
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT substr(m.created_at, 1, 10) as day, COUNT(*)
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        WHERE c.workspace_path = ?1 AND m.created_at IS NOT NULL AND length(m.created_at) >= 10
+        GROUP BY day
+        "#
+    )?;
+    let rows = stmt.query_map(params![workspace_path], |r| {
+        let day: String = r.get(0)?;
+        let count: i64 = r.get(1)?;
+        Ok((day, count))
+    })?;
+    for item in rows.flatten() {
+        daily_counts.insert(item.0, item.1);
+    }
+
+    let active_days = daily_counts.len() as i64;
+    let peak_item = daily_counts.iter().max_by_key(|(_, &cnt)| cnt);
+    let (peak_day, peak_count) = match peak_item {
+        Some((d, &cnt)) => (Some(d.clone()), cnt),
+        None => (None, 0),
+    };
+
+    // 生成 52 周 (364天) 热力图格子
+    let mut heatmap_cells = Vec::new();
+    let today = Local::now().date_naive();
+    let max_count = *daily_counts.values().max().unwrap_or(&1).max(&1) as f64;
+    for i in (0..364).rev() {
+        let d = today - chrono::Duration::days(i);
+        let date_str = d.format("%Y-%m-%d").to_string();
+        let cnt = *daily_counts.get(&date_str).unwrap_or(&0);
+        let ratio = cnt as f64 / max_count;
+        let level = if cnt == 0 { 0 } else if ratio <= 0.25 { 1 } else if ratio <= 0.5 { 2 } else if ratio <= 0.75 { 3 } else { 4 };
+        heatmap_cells.push(HeatmapCell {
+            date: date_str,
+            count: cnt,
+            level,
+        });
+    }
+
+    // 粗粒度 Blocks 查询
+    let mut fine_blocks = Vec::new();
+    let has_fine_table: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_blocks_fine'",
+        [],
+        |r| r.get(0)
+    ).unwrap_or(0);
+
+    if has_fine_table > 0 {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, block_id, type, title, summary, start_date, end_date, status, keywords_json
+            FROM workspace_blocks_fine
+            WHERE workspace_path = ?1
+            ORDER BY start_date ASC, sort_order ASC, id ASC
+            "#
+        )?;
+        let f_rows = stmt.query_map(params![workspace_path], |r| {
+            let id: i64 = r.get(0)?;
+            let block_id: String = r.get(1)?;
+            let b_type: String = r.get(2)?;
+            let title: String = r.get(3)?;
+            let summary: String = r.get(4)?;
+            let start_date: Option<String> = r.get(5)?;
+            let end_date: Option<String> = r.get(6)?;
+            let status: String = r.get(7)?;
+            let kw_json: String = r.get(8).unwrap_or_else(|_| "[]".to_string());
+            let keywords: Vec<String> = serde_json::from_str(&kw_json).unwrap_or_default();
+            Ok(WorkspaceFineBlock {
+                id,
+                block_id,
+                r#type: b_type,
+                title,
+                summary,
+                start_date,
+                end_date,
+                status,
+                keywords,
+            })
+        })?;
+        for b in f_rows.flatten() {
+            fine_blocks.push(b);
+        }
+    }
+
+    // 模块总览 Blocks 查询
+    let mut module_blocks = Vec::new();
+    let has_mod_table: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_blocks_modules'",
+        [],
+        |r| r.get(0)
+    ).unwrap_or(0);
+
+    if has_mod_table > 0 {
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT id, module_id, type, title, summary, start_date, end_date, status, keywords_json, child_fine_ids_json
+            FROM workspace_blocks_modules
+            WHERE workspace_path = ?1
+            ORDER BY sort_order ASC, id ASC
+            "#
+        )?;
+        let m_rows = stmt.query_map(params![workspace_path], |r| {
+            let id: i64 = r.get(0)?;
+            let module_id: String = r.get(1)?;
+            let b_type: String = r.get(2)?;
+            let title: String = r.get(3)?;
+            let summary: String = r.get(4)?;
+            let start_date: Option<String> = r.get(5)?;
+            let end_date: Option<String> = r.get(6)?;
+            let status: String = r.get(7)?;
+            let kw_json: String = r.get(8).unwrap_or_else(|_| "[]".to_string());
+            let child_json: String = r.get(9).unwrap_or_else(|_| "[]".to_string());
+            let keywords: Vec<String> = serde_json::from_str(&kw_json).unwrap_or_default();
+            let child_fine_ids: Vec<String> = serde_json::from_str(&child_json).unwrap_or_default();
+            Ok(WorkspaceModuleBlock {
+                id,
+                module_id,
+                r#type: b_type,
+                title,
+                summary,
+                start_date,
+                end_date,
+                status,
+                keywords,
+                child_fine_ids,
+            })
+        })?;
+        for m in m_rows.flatten() {
+            module_blocks.push(m);
+        }
+    }
+
+    // Markdown 架构报告
+    let mut report_md = None;
+    let has_rep_table: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_reports'",
+        [],
+        |r| r.get(0)
+    ).unwrap_or(0);
+    if has_rep_table > 0 {
+        let res: rusqlite::Result<String> = conn.query_row(
+            "SELECT report_md FROM workspace_reports WHERE workspace_path = ?1 LIMIT 1",
+            params![workspace_path],
+            |r| r.get(0),
+        );
+        if let Ok(md) = res {
+            if !md.is_empty() {
+                report_md = Some(md);
+            }
+        }
+    }
+
+    Ok(WorkspaceDetailStats {
+        workspace_path: workspace_path.to_string(),
+        workspace_short: ws_short,
+        conversation_count,
+        ag_conversation_count: ag_cnt,
+        cursor_conversation_count: cursor_cnt,
+        claude_conversation_count: claude_cnt,
+        codex_conversation_count: codex_cnt,
+        wb_conversation_count: wb_cnt,
+        hermes_conversation_count: hermes_cnt,
+        user_message_count,
+        message_count,
+        agent_breakdown,
+        first_active,
+        last_active,
+        active_days,
+        peak_day,
+        peak_count,
+        heatmap_cells,
+        fine_blocks,
+        module_blocks,
+        report_md,
+    })
 }

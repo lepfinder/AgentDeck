@@ -5,6 +5,7 @@ import type {
   ConversationItem,
   MessageItem,
   SearchResultItem,
+  WorkspaceDetailStats,
 } from '../types';
 
 export const isTauri = () => {
@@ -16,8 +17,15 @@ export const api = {
     if (isTauri()) {
       return await invoke<DashboardStats>('get_dashboard_stats');
     }
-    // 浏览器开发模式 fallback
     const res = await fetch('/api/dashboard');
+    return await res.json();
+  },
+
+  async getWorkspaceDetail(workspacePath: string): Promise<WorkspaceDetailStats> {
+    if (isTauri()) {
+      return await invoke<WorkspaceDetailStats>('get_workspace_detail', { workspacePath });
+    }
+    const res = await fetch(`/api/workspace?path=${encodeURIComponent(workspacePath)}`);
     return await res.json();
   },
 

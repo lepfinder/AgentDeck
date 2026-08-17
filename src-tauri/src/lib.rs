@@ -2,8 +2,8 @@ pub mod db;
 
 use db::{
     DbState, DashboardStats, WorkspaceStat, ConversationItem, MessageItem, SearchResultItem,
-    fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
-    toggle_star_session, search_global_messages
+    WorkspaceDetailStats, fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
+    toggle_star_session, search_global_messages, fetch_workspace_detail_stats
 };
 use tauri::{State, Manager};
 
@@ -11,6 +11,12 @@ use tauri::{State, Manager};
 fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     fetch_dashboard_stats(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_workspace_detail(workspace_path: String, state: State<'_, DbState>) -> Result<WorkspaceDetailStats, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    fetch_workspace_detail_stats(&conn, &workspace_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -70,6 +76,7 @@ pub fn run() {
         .manage(db_state)
         .invoke_handler(tauri::generate_handler![
             get_dashboard_stats,
+            get_workspace_detail,
             list_workspaces,
             list_conversations,
             get_conversation_messages,

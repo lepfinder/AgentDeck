@@ -116,3 +116,58 @@ export interface SearchResultItem {
   snippet: string;
   created_at?: string;
 }
+
+export interface WorkspaceFineBlock {
+  id: number;
+  block_id: string;
+  type: string;
+  title: string;
+  summary: string;
+  start_date?: string;
+  end_date?: string;
+  status: string;
+  keywords: string[];
+}
+
+export interface WorkspaceModuleBlock {
+  id: number;
+  module_id: string;
+  type: string;
+  title: string;
+  summary: string;
+  start_date?: string;
+  end_date?: string;
+  status: string;
+  keywords: string[];
+  child_fine_ids: string[];
+}
+
+export interface HeatmapCell {
+  date: string;
+  count: number;
+  level: number;
+}
+
+export interface WorkspaceDetailStats {
+  workspace_path: string;
+  workspace_short: string;
+  conversation_count: number;
+  ag_conversation_count: number;
+  cursor_conversation_count: number;
+  claude_conversation_count: number;
+  codex_conversation_count: number;
+  wb_conversation_count: number;
+  hermes_conversation_count: number;
+  user_message_count: number;
+  message_count: number;
+  agent_breakdown: string;
+  first_active?: string;
+  last_active?: string;
+  active_days: number;
+  peak_day?: string;
+  peak_count: number;
+  heatmap_cells: HeatmapCell[];
+  fine_blocks: WorkspaceFineBlock[];
+  module_blocks: WorkspaceModuleBlock[];
+  report_md?: string;
+}
