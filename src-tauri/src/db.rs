@@ -3,7 +3,26 @@ use rusqlite::{params, Connection, Result};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use chrono::{DateTime, Utc, Local, Timelike};
+use chrono::{DateTime, Utc, Timelike};
+
+pub fn to_beijing_iso(raw: Option<String>) -> Option<String> {
+    let s = raw?.trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
+        if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+            return Some(dt.with_timezone(&beijing_tz).to_rfc3339());
+        }
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+        let dt_utc = chrono::DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc);
+        if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+            return Some(dt_utc.with_timezone(&beijing_tz).to_rfc3339());
+        }
+    }
+    Some(s)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceStat {
@@ -421,7 +440,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         });
     }
 
-    // 4. 24 小时活跃时段（按消息数 & 按会话数）
+    // 4. 24 小时活跃时段（按消息数 & 按会话数，统一以北京时间 UTC+8 统计）
     let mut hourly_msgs = vec![0i64; 24];
     let mut stmt = conn.prepare(
         "SELECT created_at FROM messages WHERE created_at IS NOT NULL AND created_at != '' LIMIT 50000"
@@ -429,9 +448,11 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     let time_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for t in time_rows.flatten() {
         if let Ok(dt) = DateTime::parse_from_rfc3339(&t) {
-            let hour = dt.with_timezone(&Local).hour() as usize;
-            if hour < 24 {
-                hourly_msgs[hour] += 1;
+            if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+                let hour = dt.with_timezone(&beijing_tz).hour() as usize;
+                if hour < 24 {
+                    hourly_msgs[hour] += 1;
+                }
             }
         } else if t.len() >= 13 && t.contains(' ') {
             if let Some(h_str) = t.split(' ').nth(1).and_then(|s| s.split(':').next()) {
@@ -451,9 +472,11 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     let conv_time_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for t in conv_time_rows.flatten() {
         if let Ok(dt) = DateTime::parse_from_rfc3339(&t) {
-            let hour = dt.with_timezone(&Local).hour() as usize;
-            if hour < 24 {
-                hourly_convs[hour] += 1;
+            if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+                let hour = dt.with_timezone(&beijing_tz).hour() as usize;
+                if hour < 24 {
+                    hourly_convs[hour] += 1;
+                }
             }
         } else if t.len() >= 13 && t.contains(' ') {
             if let Some(h_str) = t.split(' ').nth(1).and_then(|s| s.split(':').next()) {
@@ -573,7 +596,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             let workspace_path: String = row.get(3)?;
             let message_count: i64 = row.get(4)?;
             let user_message_count: i64 = row.get(5)?;
-            let updated_at: Option<String> = row.get(6)?;
+            let raw_updated: Option<String> = row.get(6)?;
             let is_starred_cnt: i64 = row.get(7)?;
             let (label, _) = source_to_label_and_color(&source_app);
             let ws_short = get_short_workspace(&workspace_path);
@@ -586,7 +609,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 workspace_short: ws_short,
                 message_count,
                 user_message_count,
-                updated_at,
+                updated_at: to_beijing_iso(raw_updated),
                 is_starred: is_starred_cnt > 0,
             })
         })?;
@@ -633,11 +656,12 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_workspaces.push(r);
     }
 
-    let last_sync_time: Option<String> = conn.query_row(
+    let raw_sync: Option<String> = conn.query_row(
         "SELECT COALESCE(finished_at, created_at) FROM sync_runs ORDER BY id DESC LIMIT 1",
         [],
         |r| r.get(0),
     ).ok();
+    let last_sync_time = to_beijing_iso(raw_sync);
 
     Ok(DashboardStats {
         total_conversations,
@@ -692,7 +716,7 @@ pub fn fetch_workspaces(conn: &Connection, search: Option<&str>) -> Result<Vec<W
             hermes_cnt: row.get(7).unwrap_or(0),
             message_count: row.get(8).unwrap_or(0),
             user_message_count: row.get(9).unwrap_or(0),
-            last_updated: row.get(10)?,
+            last_updated: to_beijing_iso(row.get(10)?),
         })
     })?;
 
@@ -745,13 +769,15 @@ pub fn fetch_conversations(
         ],
         |row| {
             let is_starred_cnt: i64 = row.get(9)?;
+            let raw_created: Option<String> = row.get(4)?;
+            let raw_updated: Option<String> = row.get(5)?;
             Ok(ConversationItem {
                 id: row.get(0)?,
                 workspace_path: row.get(1)?,
                 source_app: row.get(2)?,
                 title: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                created_at: to_beijing_iso(raw_created),
+                updated_at: to_beijing_iso(raw_updated),
                 message_count: row.get(6)?,
                 user_message_count: row.get(7)?,
                 parse_status: row.get(8)?,
@@ -786,6 +812,7 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
 
     let rows = stmt.query_map(params![conversation_id], |row| {
         let id_val: i64 = row.get(0)?;
+        let raw_created: Option<String> = row.get(6)?;
         Ok(MessageItem {
             id: id_val.to_string(),
             conversation_id: row.get(1)?,
@@ -793,7 +820,7 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
             sender: row.get(3)?,
             text: row.get(4)?,
             thinking: row.get(5)?,
-            created_at: row.get(6)?,
+            created_at: to_beijing_iso(raw_created),
             model_name: row.get(7)?,
             token_count: row.get(8)?,
             duration_ms: row.get(9)?,
@@ -864,6 +891,7 @@ pub fn search_global_messages(
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params![if is_user { 1 } else { 0 }, query, limit as i64], |row| {
         let id_val: i64 = row.get(0)?;
+        let raw_created: Option<String> = row.get(7)?;
         let text: String = row.get(6)?;
         let snippet = if text.chars().count() > 180 {
             let s: String = text.chars().take(180).collect();
@@ -874,12 +902,12 @@ pub fn search_global_messages(
         Ok(SearchResultItem {
             message_id: id_val.to_string(),
             conversation_id: row.get(1)?,
-            conversation_title: row.get(2)?,
+            conversation_title: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "未命名会话".to_string()),
             source_app: row.get(3)?,
-            workspace_path: row.get(4)?,
+            workspace_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
             sender: row.get(5)?,
             snippet,
-            created_at: row.get(7)?,
+            created_at: to_beijing_iso(raw_created),
         })
     })?;
 
@@ -952,11 +980,11 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         breakdown_parts.join(" · ")
     };
 
-    // 每日活跃消息统计
+    // 每日活跃消息统计（按北京时间自然日切分）
     let mut daily_counts: HashMap<String, i64> = HashMap::new();
     let mut stmt = conn.prepare(
         r#"
-        SELECT substr(m.created_at, 1, 10) as day, COUNT(*)
+        SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as day, COUNT(*)
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.workspace_path = ?1 AND m.created_at IS NOT NULL AND length(m.created_at) >= 10
@@ -979,9 +1007,10 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         None => (None, 0),
     };
 
-    // 生成 52 周 (364天) 热力图格子
+    // 生成 52 周 (364天) 热力图格子（基于北京时间自然日）
     let mut heatmap_cells = Vec::new();
-    let today = Local::now().date_naive();
+    let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    let today = Utc::now().with_timezone(&beijing_tz).date_naive();
     let max_count = *daily_counts.values().max().unwrap_or(&1).max(&1) as f64;
     for i in (0..364).rev() {
         let d = today - chrono::Duration::days(i);
@@ -1124,8 +1153,8 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         user_message_count,
         message_count,
         agent_breakdown,
-        first_active,
-        last_active,
+        first_active: to_beijing_iso(first_active),
+        last_active: to_beijing_iso(last_active),
         active_days,
         peak_day,
         peak_count,
