@@ -144,6 +144,28 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
+  const formatRelativeTime = (timeStr?: string) => {
+    if (!timeStr) return '';
+    try {
+      const d = new Date(timeStr.replace('Z', '+00:00'));
+      if (isNaN(d.getTime())) return timeStr;
+      const now = new Date();
+      const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
+      if (diffSec < 0 || diffSec < 60) return '刚刚';
+      const diffMin = Math.floor(diffSec / 60);
+      if (diffMin < 60) return `${diffMin} 分钟前`;
+      const diffHour = Math.floor(diffMin / 60);
+      if (diffHour < 24) return `${diffHour} 小时前`;
+      const diffDay = Math.floor(diffHour / 24);
+      if (diffDay < 30) return `${diffDay} 天前`;
+      const diffMonth = Math.floor(diffDay / 30);
+      if (diffMonth < 12) return `${diffMonth} 个月前`;
+      return `${Math.floor(diffDay / 365)} 年前`;
+    } catch {
+      return timeStr;
+    }
+  };
+
   const formatTime = (timeStr?: string) => {
     if (!timeStr) return '';
     if (timeStr.length >= 16) {
@@ -224,7 +246,12 @@ export const BrowseView: React.FC<Props> = ({
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-bold theme-text-main text-xs truncate">{shortName}</span>
+                  <span className="font-bold theme-text-main text-xs truncate pr-1">{shortName}</span>
+                  {ws.last_updated && (
+                    <span className="text-[10px] theme-text-sub flex-shrink-0">
+                      {formatRelativeTime(ws.last_updated)}
+                    </span>
+                  )}
                 </div>
                 <div className="text-[10px] theme-text-sub truncate mt-0.5 font-mono">
                   {ws.workspace_path || '未分类目录'}
@@ -248,6 +275,16 @@ export const BrowseView: React.FC<Props> = ({
                       Claude {ws.claude_cnt}
                     </span>
                   )}
+                  {ws.codex_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-pink-500/15 text-pink-500 rounded font-mono">
+                      Codex {ws.codex_cnt}
+                    </span>
+                  )}
+                  {ws.wb_cnt > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-cyan-500/15 text-cyan-500 rounded font-mono">
+                      WorkBuddy {ws.wb_cnt}
+                    </span>
+                  )}
                   {ws.hermes_cnt > 0 && (
                     <span className="px-1 py-0.2 text-[9px] bg-purple-500/15 text-purple-400 rounded font-mono">
                       Hermes {ws.hermes_cnt}
@@ -256,7 +293,7 @@ export const BrowseView: React.FC<Props> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
-                  <span>用户 {ws.user_message_count}</span>
+                  <span>· 用户 {ws.user_message_count}</span>
                   <span>·</span>
                   <span>全部 {ws.message_count}</span>
                 </div>
