@@ -133,12 +133,15 @@ export function App() {
     }
   };
 
-  // 监听全局 Cmd+K / Ctrl+K 快捷键 及 Cmd+, 设置快捷键
+  // 监听全局 Cmd+K (搜索)、Cmd+R (刷新)、Cmd+, (设置)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSpotlightOpen((prev) => !prev);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        handleTriggerSync(false);
       } else if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         setIsSettingsOpen((prev) => !prev);
@@ -146,7 +149,7 @@ export function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isSyncing]);
 
   // 从大盘或全局搜索直达会话
   const handleSelectConversation = (convId: string, wsPath: string) => {
@@ -182,17 +185,27 @@ export function App() {
           </span>
         </div>
 
-        {/* 右侧：Spotlight 搜索唤起入口 + 实时同步 + 亮暗色切换 + 设置入口 */}
+        {/* 右侧：刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
         <div className="flex items-center gap-2">
-          {/* 实时多源同步按钮 */}
+          {/* 刷新与实时增量同步按钮 */}
           <button
             onClick={() => handleTriggerSync(false)}
             disabled={isSyncing}
-            title="实时增量同步所有 Agent 会话 (Cursor, Antigravity, Claude, Codex, Hermes, WorkBuddy)"
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm"
+            title="刷新并增量同步所有 Agent 会话 (快捷键 ⌘R / Ctrl+R)"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm group"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin text-blue-500' : 'text-blue-400'}`} />
-            <span>{isSyncing ? '同步中…' : '同步'}</span>
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${
+                isSyncing
+                  ? 'animate-spin text-blue-500'
+                  : 'text-blue-400 group-hover:rotate-180 transition-transform duration-500'
+              }`}
+            />
+            <span>{isSyncing ? '刷新中…' : '刷新'}</span>
+            <div className="flex items-center gap-0.5 text-[10px] theme-text-sub theme-bg-input px-1.5 py-0.5 rounded border theme-border">
+              <Command className="h-2.5 w-2.5" />
+              <span>R</span>
+            </div>
           </button>
 
           <button
