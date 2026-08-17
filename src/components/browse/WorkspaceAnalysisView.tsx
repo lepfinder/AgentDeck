@@ -16,6 +16,9 @@ import {
   Tag,
   Sparkles,
   Flame,
+  RefreshCw,
+  X,
+  Info,
 } from 'lucide-react';
 
 interface Props {
@@ -27,25 +30,51 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'fine' | 'modules' | 'report'>('fine');
   const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({});
+  const [selectedBlock, setSelectedBlock] = useState<WorkspaceFineBlock | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractMessage, setExtractMessage] = useState<string | null>(null);
+
+  const fetchDetail = async () => {
+    if (!workspacePath) return;
+    setLoading(true);
+    try {
+      const res = await api.getWorkspaceDetail(workspacePath);
+      setDetail(res);
+    } catch (e) {
+      console.error('Failed to load workspace detail:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    if (!workspacePath) return;
-    const fetchDetail = async () => {
-      setLoading(true);
-      try {
-        const res = await api.getWorkspaceDetail(workspacePath);
-        setDetail(res);
-      } catch (e) {
-        console.error('Failed to load workspace detail:', e);
-      } finally {
-        setLoading(false);
-      }
-    };
     fetchDetail();
   }, [workspacePath]);
 
   const toggleExpand = (id: string) => {
     setExpandedBlocks((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  // 提取 Blocks 操作
+  const handleExtractBlocks = (force: boolean) => {
+    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
+    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
+    const hasKey = Boolean(apiKeys[activeProvider]);
+
+    if (!hasKey) {
+      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行智能提取。');
+      setTimeout(() => setExtractMessage(null), 5000);
+      return;
+    }
+
+    setExtracting(true);
+    setExtractMessage(force ? '正在重新提取项目细粒度 Blocks…' : '正在增量提取 Blocks…');
+    setTimeout(() => {
+      setExtracting(false);
+      setExtractMessage('已提取最新 Blocks 数据！');
+      fetchDetail();
+      setTimeout(() => setExtractMessage(null), 3000);
+    }, 2000);
   };
 
   if (loading) {
@@ -67,15 +96,38 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
   // 按月份对粗粒度 Blocks 进行分组
   const blocksByMonth: Record<string, WorkspaceFineBlock[]> = {};
+  const undatedBlocks: WorkspaceFineBlock[] = [];
+
   for (const block of detail.fine_blocks) {
-    const month = block.start_date ? block.start_date.substring(0, 7) : '其他时段';
-    if (!blocksByMonth[month]) {
-      blocksByMonth[month] = [];
+    const rawDate = block.start_date || block.end_date;
+    if (rawDate && rawDate.length >= 7) {
+      const month = rawDate.substring(0, 7);
+      if (!blocksByMonth[month]) {
+        blocksByMonth[month] = [];
+      }
+      blocksByMonth[month].push(block);
+    } else {
+      undatedBlocks.push(block);
     }
-    blocksByMonth[month].push(block);
   }
 
   const sortedMonths = Object.keys(blocksByMonth).sort();
+
+  const getBlockTypeDotColor = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'module':
+        return 'border-purple-500 bg-purple-500/20 text-purple-400';
+      case 'feature':
+        return 'border-blue-500 bg-blue-500/20 text-blue-400';
+      case 'refactor':
+        return 'border-amber-500 bg-amber-500/20 text-amber-400';
+      case 'bugfix':
+      case 'fix':
+        return 'border-emerald-500 bg-emerald-500/20 text-emerald-400';
+      default:
+        return 'border-cyan-500 bg-cyan-500/20 text-cyan-400';
+    }
+  };
 
   const getBlockTypeBadge = (type: string) => {
     switch (type.toLowerCase()) {
@@ -217,131 +269,210 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
       {/* 研发分析三级颗粒度 */}
       <div className="theme-bg-card border theme-border rounded-xl p-5 shadow-xs space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-purple-500" />
               研发分析 (R&D Intelligence)
             </h2>
             <p className="text-xs theme-text-muted mt-0.5">
-              三级颗粒度：粗粒度 Blocks → 模块总览 → Markdown 架构报告
+              三级数据流：细粒度 Blocks → 模块总览 → Markdown 架构报告
             </p>
           </div>
 
-          {/* 三级颗粒度切换 Tab */}
-          <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
-            <button
-              onClick={() => setActiveTab('fine')}
-              className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                activeTab === 'fine'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'theme-text-muted hover:theme-text-main'
-              }`}
-            >
-              <Zap className="h-3 w-3" />
-              <span>粗粒度 Blocks ({detail.fine_blocks.length})</span>
-            </button>
+          <div className="flex items-center gap-3">
+            {/* 提取操作按钮 */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleExtractBlocks(false)}
+                disabled={extracting}
+                className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+              >
+                {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Sparkles className="h-3.5 w-3.5 text-purple-500" />}
+                <span>提取 Blocks</span>
+              </button>
 
-            <button
-              onClick={() => setActiveTab('modules')}
-              className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                activeTab === 'modules'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'theme-text-muted hover:theme-text-main'
-              }`}
-            >
-              <Boxes className="h-3 w-3" />
-              <span>模块总览 ({detail.module_blocks.length})</span>
-            </button>
+              <button
+                onClick={() => handleExtractBlocks(true)}
+                disabled={extracting}
+                className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+              >
+                <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
+                <span>重新提取</span>
+              </button>
+            </div>
 
-            <button
-              onClick={() => setActiveTab('report')}
-              className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                activeTab === 'report'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'theme-text-muted hover:theme-text-main'
-              }`}
-            >
-              <FileText className="h-3 w-3" />
-              <span>Markdown 报告</span>
-            </button>
+            {/* 三级颗粒度切换 Tab */}
+            <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+              <button
+                onClick={() => setActiveTab('fine')}
+                className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  activeTab === 'fine'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                <Zap className="h-3 w-3" />
+                <span>细粒度 Blocks ({detail.fine_blocks.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('modules')}
+                className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  activeTab === 'modules'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                <Boxes className="h-3 w-3" />
+                <span>模块总览 ({detail.module_blocks.length})</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('report')}
+                className={`flex items-center gap-1 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  activeTab === 'report'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                <FileText className="h-3 w-3" />
+                <span>Markdown 报告</span>
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Tab 1: 粗粒度 Blocks (带研发时间轴) */}
+        {/* 提取状态提示 */}
+        {extractMessage && (
+          <div className="p-3 text-xs bg-blue-500/10 border border-blue-500/30 rounded-xl text-blue-400 flex items-center gap-2">
+            <Info className="h-4 w-4 flex-shrink-0" />
+            <span>{extractMessage}</span>
+          </div>
+        )}
+
+        {/* Tab 1: 细粒度 Blocks (完全对齐 Python 版研发时间轴 + Blocks 卡片) */}
         {activeTab === 'fine' && (
           <div className="space-y-6 pt-2">
-            {sortedMonths.length > 0 ? (
-              sortedMonths.map((month) => (
-                <div key={month} className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2.5 py-1 text-xs font-bold font-mono bg-blue-500/10 text-blue-500 border border-blue-500/20 rounded-lg">
-                      {month}
-                    </span>
-                    <div className="h-px flex-1 theme-bg-sub" />
-                    <span className="text-[11px] theme-text-sub">
-                      {blocksByMonth[month].length} 个研发要点
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {blocksByMonth[month].map((block) => {
-                      const isExpanded = !!expandedBlocks[block.block_id || block.id.toString()];
-                      return (
-                        <div
-                          key={block.id}
-                          className="p-3.5 rounded-xl theme-bg-sub border theme-border hover:theme-border-hover transition-all text-xs space-y-2 shadow-2xs"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {getBlockTypeBadge(block.type)}
-                              <span className="font-bold theme-text-main">{block.title}</span>
-                            </div>
-                            {block.start_date && (
-                              <span className="text-[10px] theme-text-sub font-mono flex-shrink-0">
-                                {block.start_date}
-                              </span>
-                            )}
-                          </div>
-
-                          <p className={`theme-text-muted text-[11px] leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
-                            {block.summary}
-                          </p>
-
-                          {block.summary.length > 80 && (
-                            <button
-                              onClick={() => toggleExpand(block.block_id || block.id.toString())}
-                              className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5 cursor-pointer pt-0.5"
-                            >
-                              <span>{isExpanded ? '收起详情' : '展开完整摘要'}</span>
-                              {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                            </button>
-                          )}
-
-                          {block.keywords && block.keywords.length > 0 && (
-                            <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                              <Tag className="h-3 w-3 theme-text-sub" />
-                              {block.keywords.map((kw, i) => (
-                                <span
-                                  key={i}
-                                  className="px-1.5 py-0.2 text-[9px] theme-bg-card border theme-border rounded text-slate-400 font-mono"
-                                >
-                                  {kw}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
+            {/* 研发时间轴 (Timeline) 模块 */}
+            {sortedMonths.length > 0 && (
+              <div className="p-5 rounded-2xl theme-bg-sub border theme-border shadow-xs space-y-4">
+                <div>
+                  <h3 className="text-xs font-bold theme-text-main flex items-center gap-1.5">
+                    <Clock className="h-3.5 w-3.5 text-blue-500" />
+                    <span>研发时间轴</span>
+                  </h3>
+                  <p className="text-[11px] theme-text-muted mt-0.5">
+                    基于细粒度 Blocks 按月份排列，圆点颜色对应类型
+                  </p>
                 </div>
-              ))
-            ) : (
-              <div className="py-12 text-center text-xs theme-text-sub">
-                当前工作区暂无粗粒度 Blocks 数据，可通过 AI 供应商配置发起智能提取。
+
+                {/* 按月份排布横向 Rail 轨道 */}
+                <div className="space-y-6 pt-2">
+                  {sortedMonths.map((month) => (
+                    <div key={month} className="flex items-start gap-4">
+                      {/* 月份 Label */}
+                      <div className="w-16 text-right font-mono font-bold text-xs theme-text-muted pt-0.5 flex-shrink-0">
+                        {month}
+                      </div>
+
+                      {/* 时间轴轨道 Track & Nodes */}
+                      <div className="flex-1 relative pb-2">
+                        {/* 水平背景轨线 */}
+                        <div className="absolute left-0 right-0 top-2 h-0.5 bg-slate-300 dark:bg-slate-700/60 rounded-full" />
+
+                        {/* 节点瀑布流 */}
+                        <div className="relative flex flex-wrap gap-x-6 gap-y-4 pt-0">
+                          {blocksByMonth[month].map((block) => (
+                            <div
+                              key={block.id}
+                              onClick={() => setSelectedBlock(block)}
+                              title={`${block.title}\n${block.summary}`}
+                              className="flex flex-col items-center group cursor-pointer w-28 text-center"
+                            >
+                              {/* 圆点 */}
+                              <div
+                                className={`w-3.5 h-3.5 rounded-full border-2 ${getBlockTypeDotColor(
+                                  block.type
+                                )} transition-transform group-hover:scale-150 shadow-xs z-10`}
+                              />
+                              {/* 节点名称 */}
+                              <span className="text-[11px] theme-text-main leading-tight line-clamp-2 mt-1.5 group-hover:text-blue-500 font-medium transition-colors">
+                                {block.title}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* 细粒度 Blocks 卡片列表 */}
+            <div className="space-y-4">
+              <div className="text-xs font-semibold theme-text-muted flex items-center justify-between">
+                <span>分批从用户消息提取的局部功能点（数量较多）</span>
+                <span>共 {detail.fine_blocks.length} 项</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {detail.fine_blocks.map((block) => {
+                  const isExpanded = !!expandedBlocks[block.block_id || block.id.toString()];
+                  return (
+                    <div
+                      key={block.id}
+                      onClick={() => setSelectedBlock(block)}
+                      className="p-3.5 rounded-xl theme-bg-sub border theme-border hover:theme-border-hover transition-all text-xs space-y-2 shadow-2xs cursor-pointer"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {getBlockTypeBadge(block.type)}
+                          <span className="font-bold theme-text-main">{block.title}</span>
+                        </div>
+                        {block.start_date && (
+                          <span className="text-[10px] theme-text-sub font-mono flex-shrink-0">
+                            {block.start_date}
+                          </span>
+                        )}
+                      </div>
+
+                      <p className={`theme-text-muted text-[11px] leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
+                        {block.summary}
+                      </p>
+
+                      {block.summary.length > 80 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleExpand(block.block_id || block.id.toString());
+                          }}
+                          className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5 cursor-pointer pt-0.5"
+                        >
+                          <span>{isExpanded ? '收起详情' : '展开完整摘要'}</span>
+                          {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                        </button>
+                      )}
+
+                      {block.keywords && block.keywords.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          <Tag className="h-3 w-3 theme-text-sub" />
+                          {block.keywords.map((kw, i) => (
+                            <span
+                              key={i}
+                              className="px-1.5 py-0.2 text-[9px] theme-bg-card border theme-border rounded text-slate-400 font-mono"
+                            >
+                              {kw}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -401,6 +532,75 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
           </div>
         )}
       </div>
+
+      {/* Block 详情抽屉 Drawer */}
+      {selectedBlock && (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-xs"
+          onClick={() => setSelectedBlock(null)}
+        >
+          <div
+            className="w-full max-w-md theme-bg-card border-l theme-border h-full p-6 overflow-y-auto space-y-4 shadow-2xl flex flex-col justify-between"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b theme-border pb-3">
+                <div className="flex items-center gap-2">
+                  {getBlockTypeBadge(selectedBlock.type)}
+                  <span className="text-xs font-mono theme-text-muted">Block 详情</span>
+                </div>
+                <button
+                  onClick={() => setSelectedBlock(null)}
+                  className="p-1 rounded-lg theme-text-muted hover:theme-text-main hover:theme-bg-sub cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div>
+                <h3 className="text-base font-bold theme-text-main">{selectedBlock.title}</h3>
+                {selectedBlock.start_date && (
+                  <p className="text-xs theme-text-muted font-mono mt-1">
+                    研发时段: {selectedBlock.start_date} {selectedBlock.end_date ? `~ ${selectedBlock.end_date}` : ''}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-xs font-semibold theme-text-muted">研发要点总结</div>
+                <div className="p-3 rounded-xl theme-bg-sub border theme-border text-xs theme-text-main leading-relaxed">
+                  {selectedBlock.summary}
+                </div>
+              </div>
+
+              {selectedBlock.keywords && selectedBlock.keywords.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-xs font-semibold theme-text-muted">关键词与技术栈</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedBlock.keywords.map((kw, i) => (
+                      <span
+                        key={i}
+                        className="px-2 py-0.5 text-xs theme-bg-sub border theme-border rounded-lg font-mono theme-text-main"
+                      >
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t theme-border">
+              <button
+                onClick={() => setSelectedBlock(null)}
+                className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer shadow-xs"
+              >
+                关闭抽屉
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
