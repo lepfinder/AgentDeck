@@ -239,20 +239,33 @@ fn handle_connection(mut stream: TcpStream) {
         ("GET", "/api/user-messages") => {
             let q = query_params.get("q").cloned().unwrap_or_default();
             let workspace = query_params.get("workspace").map(|s| s.as_str());
+            let date = query_params.get("date").map(|s| s.trim()).filter(|s| !s.is_empty());
+            let source = query_params.get("source").map(|s| s.trim()).filter(|s| !s.is_empty());
+            let order = query_params.get("order").map(|s| s.as_str()).unwrap_or("desc");
+            let fmt = query_params.get("format").map(|s| s.as_str()).unwrap_or("compact");
             let limit = query_params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
+            let offset = query_params.get("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let is_single_date = date.map(|d| d.len() == 10).unwrap_or(false);
 
-            let sql = r#"
+            let order_clause = if order == "asc" { "ASC" } else { "DESC" };
+
+            let sql = format!(
+                r#"
                 SELECT m.conversation_id, c.title, c.workspace_path, m.role, m.content, m.created_at, m.source
                 FROM messages m
                 LEFT JOIN conversations c ON m.conversation_id = c.id
                 WHERE m.role = 'user'
                   AND (?1 IS NULL OR ?1 = '' OR c.workspace_path = ?1)
                   AND (?2 IS NULL OR ?2 = '' OR m.content LIKE '%' || ?2 || '%')
-                ORDER BY m.created_at DESC
-                LIMIT ?3
-            "#;
+                  AND (?3 IS NULL OR ?3 = '' OR strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) = ?3)
+                  AND (?4 IS NULL OR ?4 = '' OR m.source LIKE '%' || ?4 || '%')
+                ORDER BY m.created_at {}
+                LIMIT ?5 OFFSET ?6
+                "#,
+                order_clause
+            );
 
-            let mut stmt = match conn.prepare(sql) {
+            let mut stmt = match conn.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
                     send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
@@ -261,15 +274,24 @@ fn handle_connection(mut stream: TcpStream) {
             };
 
             let rows = stmt.query_map(
-                rusqlite::params![workspace.unwrap_or(""), q, limit as i64],
+                rusqlite::params![
+                    workspace.unwrap_or(""),
+                    q,
+                    date.unwrap_or(""),
+                    source.unwrap_or(""),
+                    limit as i64,
+                    offset as i64
+                ],
                 |row| {
+                    let raw_created: Option<String> = row.get(5)?;
+                    let beijing_created = convert_to_beijing_iso(raw_created);
                     Ok(json!({
                         "conversation_id": row.get::<_, String>(0)?,
                         "conversation_title": row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                         "workspace_path": row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                         "role": row.get::<_, String>(3)?,
                         "content": row.get::<_, String>(4)?,
-                        "created_at": row.get::<_, Option<String>>(5)?,
+                        "created_at": beijing_created,
                         "source": row.get::<_, Option<String>>(6)?.unwrap_or_else(|| "unknown".to_string())
                     }))
                 },
@@ -277,13 +299,73 @@ fn handle_connection(mut stream: TcpStream) {
 
             match rows {
                 Ok(mapped) => {
-                    let msgs: Vec<serde_json::Value> = mapped.filter_map(Result::ok).collect();
-                    let body = json!({
-                        "ok": true,
-                        "total": msgs.len(),
-                        "messages": msgs
-                    });
-                    send_response(&mut stream, 200, "application/json", &body.to_string());
+                    let flat_msgs: Vec<serde_json::Value> = mapped.filter_map(Result::ok).collect();
+                    let total = flat_msgs.len();
+
+                    // 按会话构建 compact 聚合结构
+                    let mut conv_map: HashMap<String, serde_json::Value> = HashMap::new();
+                    let mut conv_order: Vec<String> = Vec::new();
+
+                    for msg in &flat_msgs {
+                        let cid = msg.get("conversation_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+                        let title = msg.get("conversation_title").and_then(|v| v.as_str()).unwrap_or(&cid);
+                        let src = msg.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
+                        let ws = msg.get("workspace_path").and_then(|v| v.as_str()).unwrap_or("");
+                        let created = msg.get("created_at").and_then(|v| v.as_str());
+                        let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+
+                        let time_tag = format_beijing_tag(created, is_single_date);
+                        let line = format!("{}{}", time_tag, content);
+
+                        if !conv_map.contains_key(&cid) {
+                            conv_order.push(cid.clone());
+                            conv_map.insert(
+                                cid.clone(),
+                                json!({
+                                    "id": cid,
+                                    "title": title,
+                                    "source": src,
+                                    "workspace_path": ws,
+                                    "messages": [line]
+                                }),
+                            );
+                        } else if let Some(item) = conv_map.get_mut(&cid) {
+                            if let Some(arr) = item.get_mut("messages").and_then(|v| v.as_array_mut()) {
+                                arr.push(json!(line));
+                            }
+                        }
+                    }
+
+                    let compact_convs: Vec<serde_json::Value> = conv_order
+                        .into_iter()
+                        .filter_map(|cid| conv_map.remove(&cid))
+                        .collect();
+
+                    if fmt == "flat" || fmt == "raw" {
+                        let body = json!({
+                            "ok": true,
+                            "total": total,
+                            "limit": limit,
+                            "offset": offset,
+                            "date": date,
+                            "workspace": workspace,
+                            "messages": flat_msgs
+                        });
+                        send_response(&mut stream, 200, "application/json", &body.to_string());
+                    } else {
+                        let body = json!({
+                            "ok": true,
+                            "total_messages": total,
+                            "total_conversations": compact_convs.len(),
+                            "limit": limit,
+                            "offset": offset,
+                            "date": date,
+                            "workspace": workspace,
+                            "conversations": compact_convs,
+                            "messages": flat_msgs
+                        });
+                        send_response(&mut stream, 200, "application/json", &body.to_string());
+                    }
                 }
                 Err(e) => {
                     send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
@@ -456,4 +538,60 @@ fn send_response(stream: &mut TcpStream, status_code: u16, content_type: &str, b
 
     let _ = stream.write_all(response.as_bytes());
     let _ = stream.flush();
+}
+
+fn convert_to_beijing_iso(raw: Option<String>) -> Option<String> {
+    let s = raw?.trim().to_string();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+        let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600)?;
+        return Some(dt.with_timezone(&beijing_tz).to_rfc3339());
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+        let dt_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+        let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600)?;
+        return Some(dt_utc.with_timezone(&beijing_tz).to_rfc3339());
+    }
+    Some(s)
+}
+
+fn format_beijing_tag(raw: Option<&str>, is_single_date: bool) -> String {
+    let s = match raw {
+        Some(v) if !v.trim().is_empty() => v.trim(),
+        _ => return String::new(),
+    };
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+            let b = dt.with_timezone(&beijing_tz);
+            if is_single_date {
+                return format!("[{}] ", b.format("%H:%M:%S"));
+            } else {
+                return format!("[{}] ", b.format("%Y-%m-%d %H:%M:%S"));
+            }
+        }
+    }
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        let dt_utc = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc);
+        if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
+            let b = dt_utc.with_timezone(&beijing_tz);
+            if is_single_date {
+                return format!("[{}] ", b.format("%H:%M:%S"));
+            } else {
+                return format!("[{}] ", b.format("%Y-%m-%d %H:%M:%S"));
+            }
+        }
+    }
+    if s.contains('T') {
+        let parts: Vec<&str> = s.split('T').collect();
+        let time_clean = parts[1].split('.').next().unwrap_or(parts[1]).trim_end_matches('Z');
+        if is_single_date {
+            format!("[{}] ", time_clean)
+        } else {
+            format!("[{} {}] ", parts[0], time_clean)
+        }
+    } else {
+        format!("[{}] ", s)
+    }
 }
