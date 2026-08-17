@@ -15,8 +15,19 @@ export interface PipelineProgress {
   fineBlocksCount?: number;
 }
 
-const BATCH_SIZE = 60;
-const MSG_MAX_CHARS = 300;
+const BATCH_SIZE = 40;
+
+/** 智能截断超长消息：保留前 300 字符 + 后 200 字符（上限 500 字符） */
+function truncateUserMessage(rawContent: string, headLen = 300, tailLen = 200): string {
+  const text = (rawContent || '').replace(/\s+/g, ' ').trim();
+  const maxLimit = headLen + tailLen;
+  if (text.length <= maxLimit) {
+    return text;
+  }
+  const head = text.substring(0, headLen).trim();
+  const tail = text.substring(text.length - tailLen).trim();
+  return `${head} …[省略超长中间内容]… ${tail}`;
+}
 
 /** 获取当前配置的主力与备用 AI 节点 */
 export function getAiEndpoints() {
@@ -47,38 +58,47 @@ export function getAiEndpoints() {
   };
 }
 
-/** 智能从 LLM 回复中提取并解析 JSON */
+/** 智能从 LLM 回复中提取并解析 JSON（支持去除 think 标签、处理 markdown 代码块、直接数组等） */
 function safeExtractJson<T>(content: string): T | null {
   if (!content) return null;
   let text = content.trim();
 
-  // 去除 markdown ```json ``` 包裹
-  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-  if (jsonMatch && jsonMatch[1]) {
-    text = jsonMatch[1].trim();
+  // 1. 去除 <think>...</think> 思考链
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
+  // 2. 去除 markdown ```json ... ``` 包裹
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (codeBlockMatch && codeBlockMatch[1]) {
+    text = codeBlockMatch[1].trim();
   }
 
+  // 3. 直接尝试 JSON.parse
   try {
     return JSON.parse(text) as T;
-  } catch {
-    // 尝试寻找最外层的 [ ... ] 或 { ... }
-    const firstBrace = text.indexOf('{');
-    const lastBrace = text.lastIndexOf('}');
-    const firstBracket = text.indexOf('[');
-    const lastBracket = text.lastIndexOf(']');
+  } catch {}
 
-    if (firstBrace !== -1 && lastBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
-      try {
-        return JSON.parse(text.substring(firstBrace, lastBrace + 1)) as T;
-      } catch {}
-    }
+  // 4. 尝试寻找最外层的 { ... } 或 [ ... ]
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
 
-    if (firstBracket !== -1 && lastBracket !== -1) {
-      try {
-        return JSON.parse(text.substring(firstBracket, lastBracket + 1)) as T;
-      } catch {}
-    }
+  // 如果包含数组且在中括号范围内
+  if (firstBracket !== -1 && lastBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+    try {
+      const slice = text.substring(firstBracket, lastBracket + 1);
+      return JSON.parse(slice) as T;
+    } catch {}
   }
+
+  // 如果包含对象
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    try {
+      const slice = text.substring(firstBrace, lastBrace + 1);
+      return JSON.parse(slice) as T;
+    } catch {}
+  }
+
   return null;
 }
 
@@ -188,23 +208,18 @@ export async function runExtractFineBlocksPipeline(
   });
 
   const extractedBlocks: WorkspaceFineBlock[] = [];
+  let lastError = '';
 
   for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
     const currentBatch = batches[batchIdx];
     const batchNo = batchIdx + 1;
 
-    // 格式化当前批次用户消息
-    const formattedMsgs = currentBatch.map((m) => {
-      let text = (m.content || '').replace(/\n+/g, ' ').trim();
-      if (text.length > MSG_MAX_CHARS) {
-        text = text.substring(0, MSG_MAX_CHARS - 1) + '…';
-      }
-      return {
-        date: m.created_at ? m.created_at.substring(0, 10) : '',
-        conversation_title: (m.conversation_title || '').substring(0, 80),
-        text,
-      };
-    });
+    // 格式化当前批次用户消息（超长智能截断：前300 + 后200，总上限500）
+    const formattedMsgs = currentBatch.map((m) => ({
+      date: m.created_at ? m.created_at.substring(0, 10) : '',
+      conversation_title: (m.conversation_title || '').substring(0, 80),
+      text: truncateUserMessage(m.content || ''),
+    }));
 
     const prompt = `你是资深研发过程分析助手。请从以下「第 ${batchNo}/${totalBatches} 批」用户历史提问消息中，提炼出局部的研发功能点与需求 Blocks（仅覆盖本批消息，不要臆测全项目）。
 
@@ -234,13 +249,18 @@ export async function runExtractFineBlocksPipeline(
 【当前批次用户消息数据】：
 ${JSON.stringify(formattedMsgs, null, 2)}`;
 
+    const days = currentBatch.map(m => m.created_at?.substring(0, 10)).filter(Boolean) as string[];
+    const dateRange = days.length > 0 ? [days[0], days[days.length - 1]] : ['—', '—'];
+
     onProgress?.({
       stage: 'batch',
-      detail: `正在处理第 ${batchNo}/${totalBatches} 批消息 (${currentBatch.length} 条)…`,
+      detail: `正在处理第 ${batchNo}/${totalBatches} 批 (${dateRange[0]} ~ ${dateRange[1]}, ${currentBatch.length} 条用户提问)…`,
       current: batchNo,
       total: totalBatches,
       fineBlocksCount: extractedBlocks.length,
     });
+
+    console.log(`[R&D Analysis] 🚀 批次 ${batchNo}/${totalBatches} (${dateRange[0]} ~ ${dateRange[1]}, ${currentBatch.length} 条用户提问) -> 模型: ${endpoints.primary.provider_name} (${endpoints.primary.model})`);
 
     const llmRes = await api.callLlmWithFallback(
       endpoints.primary,
@@ -248,18 +268,33 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
       [
         { role: 'system', content: '你只输出合法的 JSON 对象，包含 blocks 数组。禁止输出任何其他分析文字。' },
         { role: 'user', content: prompt },
-      ],
-      2048
+      ]
     );
 
     if (llmRes.success && llmRes.content) {
-      const parsed = safeExtractJson<{ blocks: any[] }>(llmRes.content);
-      const rawBlocks = Array.isArray(parsed?.blocks) ? parsed!.blocks : Array.isArray(parsed) ? parsed : [];
-      rawBlocks.forEach((rb, seq) => {
-        extractedBlocks.push(normalizeFineBlock(rb, batchIdx, seq));
-      });
+      console.log(`[R&D Analysis] Batch ${batchNo} LLM response length: ${llmRes.content.length} chars`);
+      const parsed = safeExtractJson<any>(llmRes.content);
+      const rawBlocks = Array.isArray(parsed?.blocks)
+        ? parsed.blocks
+        : Array.isArray(parsed?.data)
+        ? parsed.data
+        : Array.isArray(parsed?.items)
+        ? parsed.items
+        : Array.isArray(parsed)
+        ? parsed
+        : [];
+
+      if (rawBlocks.length > 0) {
+        rawBlocks.forEach((rb: any, seq: number) => {
+          extractedBlocks.push(normalizeFineBlock(rb, batchIdx, seq));
+        });
+        console.log(`[R&D Analysis] Batch ${batchNo} parsed ${rawBlocks.length} blocks`);
+      } else {
+        console.warn(`[R&D Analysis] Batch ${batchNo} JSON parsed but no blocks found. Raw content:`, llmRes.content.slice(0, 300));
+      }
     } else {
-      console.warn(`Batch ${batchNo} LLM extract failed:`, llmRes.error);
+      console.error(`[R&D Analysis] Batch ${batchNo} LLM call failed:`, llmRes.error);
+      lastError = `[${llmRes.provider_used}] ${llmRes.error || '请求失败'}`;
     }
   }
 
@@ -267,7 +302,9 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
     return {
       success: false,
       fineBlocks: [],
-      message: 'LLM 提取完成，但未识别出有效的功能点 Blocks',
+      message: lastError
+        ? `大模型调用失败: ${lastError}`
+        : '大模型返回格式未能解析出有效的功能点 Blocks，请检查模型响应或更换模型重试',
     };
   }
 
@@ -366,8 +403,7 @@ ${JSON.stringify(slimFineBlocks, null, 2)}`;
     [
       { role: 'system', content: '你只输出合法的 JSON 对象，包含 modules 数组。禁止输出多余解释文字。' },
       { role: 'user', content: prompt },
-    ],
-    3072
+    ]
   );
 
   if (!llmRes.success || !llmRes.content) {
@@ -378,14 +414,23 @@ ${JSON.stringify(slimFineBlocks, null, 2)}`;
     };
   }
 
-  const parsed = safeExtractJson<{ modules: any[] }>(llmRes.content);
-  const rawModules = Array.isArray(parsed?.modules) ? parsed!.modules : Array.isArray(parsed) ? parsed : [];
+  const parsed = safeExtractJson<any>(llmRes.content);
+  const rawModules = Array.isArray(parsed?.modules)
+    ? parsed.modules
+    : Array.isArray(parsed?.data)
+    ? parsed.data
+    : Array.isArray(parsed?.items)
+    ? parsed.items
+    : Array.isArray(parsed)
+    ? parsed
+    : [];
 
   if (rawModules.length === 0) {
+    console.warn('[R&D Analysis] Merge modules returned unparseable content:', llmRes.content);
     return {
       success: false,
       moduleBlocks: [],
-      message: 'LLM 未能成功聚合并产出模块列表',
+      message: 'LLM 未能成功聚合并产出模块列表，请检查模型响应或重试',
     };
   }
 
@@ -482,8 +527,7 @@ ${JSON.stringify(fineBlocks.slice(0, 30), null, 2)}`;
     [
       { role: 'system', content: '你输出结构严谨、内容丰富的 Markdown 技术架构报告。' },
       { role: 'user', content: prompt },
-    ],
-    4096
+    ]
   );
 
   if (!llmRes.success || !llmRes.content) {

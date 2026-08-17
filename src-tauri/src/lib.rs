@@ -241,7 +241,10 @@ async fn call_llm_with_fallback(
 ) -> Result<LlmCompletionResult, String> {
     let start = std::time::Instant::now();
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(180))
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .user_agent("OpenAI/Python 1.55.0 (AgentDeck)")
         .build()
     {
         Ok(c) => c,
@@ -257,80 +260,121 @@ async fn call_llm_with_fallback(
         }
     };
 
-    // 1. 先尝试主力模型 (Primary)
-    let primary_url = format!("{}/chat/completions", primary.base_url.trim_end_matches('/'));
-    let primary_payload = serde_json::json!({
-        "model": primary.model,
-        "messages": messages,
-        "max_tokens": max_tokens.unwrap_or(2048),
-    });
+    // 辅助闭包：发送单次 LLM 请求
+    let send_request = |endpoint: &LlmEndpointConfig, attempt_idx: usize| {
+        let url = format!("{}/chat/completions", endpoint.base_url.trim_end_matches('/'));
+        println!("[AgentDeck LLM] 🚀 [{}] POST {} (model: {}, attempt: {})", endpoint.provider_name, url, endpoint.model, attempt_idx + 1);
+        let mut payload = serde_json::json!({
+            "model": endpoint.model,
+            "messages": messages,
+            "temperature": 0.2,
+        });
+        if let Some(mt) = max_tokens {
+            payload["max_tokens"] = serde_json::json!(mt);
+        }
 
-    let mut primary_req = client.post(&primary_url).json(&primary_payload);
-    if !primary.api_key.trim().is_empty() {
-        primary_req = primary_req.header("Authorization", format!("Bearer {}", primary.api_key.trim()));
-    }
+        let mut req = client.post(&url)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&payload);
 
-    let primary_err_msg = match primary_req.send().await {
-        Ok(res) if res.status().is_success() => {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            if let Ok(data) = res.json::<serde_json::Value>().await {
-                if let Some(content) = data.get("choices")
-                    .and_then(|c| c.get(0))
-                    .and_then(|c| c.get("message"))
-                    .and_then(|m| m.get("content"))
-                    .and_then(|s| s.as_str()) {
-                    return Ok(LlmCompletionResult {
-                        success: true,
-                        content: content.to_string(),
-                        provider_used: primary.provider_name,
-                        is_fallback: false,
-                        latency_ms,
-                        error: None,
-                    });
-                }
-            }
-            "主力模型未返回有效的 message.content".to_string()
+        if !endpoint.api_key.trim().is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", endpoint.api_key.trim()));
         }
-        Ok(res) => {
-            let status = res.status();
-            let err_txt = res.text().await.unwrap_or_default();
-            let mut msg = format!("HTTP {}", status);
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
-                if let Some(m) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
-                    msg = m.to_string();
-                }
-            }
-            msg
-        }
-        Err(e) => {
-            format!("网络错误: {}", e)
-        }
+        req
     };
+
+    // 1. 先尝试主力模型 (支持 1 次自动重试)
+    let mut primary_err_msg = String::new();
+    for attempt in 0..2 {
+        let req = send_request(&primary, attempt);
+        let call_start = std::time::Instant::now();
+        match req.send().await {
+            Ok(res) if res.status().is_success() => {
+                let latency_ms = call_start.elapsed().as_millis() as u64;
+                if let Ok(data) = res.json::<serde_json::Value>().await {
+                    if let Some(content) = data.get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|s| s.as_str()) {
+                        if !content.trim().is_empty() {
+                            println!("[AgentDeck LLM] ✅ [{}] HTTP 200 ({}ms, content_len: {})", primary.provider_name, latency_ms, content.len());
+                            return Ok(LlmCompletionResult {
+                                success: true,
+                                content: content.to_string(),
+                                provider_used: primary.provider_name,
+                                is_fallback: false,
+                                latency_ms,
+                                error: None,
+                            });
+                        }
+                    }
+                    if let Some(reasoning) = data.get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("reasoning_content"))
+                        .and_then(|s| s.as_str()) {
+                        if !reasoning.trim().is_empty() {
+                            println!("[AgentDeck LLM] ✅ [{}] HTTP 200 via reasoning ({}ms, reasoning_len: {})", primary.provider_name, latency_ms, reasoning.len());
+                            return Ok(LlmCompletionResult {
+                                success: true,
+                                content: reasoning.to_string(),
+                                provider_used: primary.provider_name,
+                                is_fallback: false,
+                                latency_ms,
+                                error: None,
+                            });
+                        }
+                    }
+                }
+                primary_err_msg = "主力模型未返回有效的 message.content 或 reasoning_content".to_string();
+                println!("[AgentDeck LLM] ⚠️ [{}] HTTP 200 but content empty", primary.provider_name);
+            }
+            Ok(res) => {
+                let status = res.status();
+                let err_txt = res.text().await.unwrap_or_default();
+                let mut msg = format!("HTTP {}", status);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
+                    if let Some(m) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                        msg = m.to_string();
+                    } else if let Some(m) = val.get("message").and_then(|m| m.as_str()) {
+                        msg = m.to_string();
+                    }
+                }
+                println!("[AgentDeck LLM] ❌ [{}] Response error: {} ({})", primary.provider_name, msg, err_txt.chars().take(200).collect::<String>());
+                primary_err_msg = msg;
+                // 鉴权或参数错误不重试
+                if status.as_u16() == 401 || status.as_u16() == 403 || status.as_u16() == 404 {
+                    break;
+                }
+            }
+            Err(e) => {
+                println!("[AgentDeck LLM] ⚠️ [{}] Network error on attempt {}: {}", primary.provider_name, attempt + 1, e);
+                primary_err_msg = format!("网络错误: {}", e);
+                if attempt == 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue;
+                }
+            }
+        }
+    }
 
     // 2. 如果主力模型失败且配置了备用模型，无缝故障转移至备用模型 (Fallback)
     if let Some(fb) = fallback {
-            let fb_start = std::time::Instant::now();
-            let fb_url = format!("{}/chat/completions", fb.base_url.trim_end_matches('/'));
-            let fb_payload = serde_json::json!({
-                "model": fb.model,
-                "messages": messages,
-                "max_tokens": max_tokens.unwrap_or(2048),
-            });
+        let fb_start = std::time::Instant::now();
+        let req = send_request(&fb, 0);
 
-            let mut fb_req = client.post(&fb_url).json(&fb_payload);
-            if !fb.api_key.trim().is_empty() {
-                fb_req = fb_req.header("Authorization", format!("Bearer {}", fb.api_key.trim()));
-            }
-
-            match fb_req.send().await {
-                Ok(res) if res.status().is_success() => {
-                    let latency_ms = fb_start.elapsed().as_millis() as u64;
-                    if let Ok(data) = res.json::<serde_json::Value>().await {
-                        if let Some(content) = data.get("choices")
-                            .and_then(|c| c.get(0))
-                            .and_then(|c| c.get("message"))
-                            .and_then(|m| m.get("content"))
-                            .and_then(|s| s.as_str()) {
+        match req.send().await {
+            Ok(res) if res.status().is_success() => {
+                let latency_ms = fb_start.elapsed().as_millis() as u64;
+                if let Ok(data) = res.json::<serde_json::Value>().await {
+                    if let Some(content) = data.get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|s| s.as_str()) {
+                        if !content.trim().is_empty() {
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: content.to_string(),
@@ -341,31 +385,54 @@ async fn call_llm_with_fallback(
                             });
                         }
                     }
-                }
-                Ok(res) => {
-                    let status = res.status();
-                    let err_txt = res.text().await.unwrap_or_default();
-                    return Ok(LlmCompletionResult {
-                        success: false,
-                        content: String::new(),
-                        provider_used: fb.provider_name,
-                        is_fallback: true,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        error: Some(format!("主力模型失败（{}），备用模型亦失败（HTTP {} {}）", primary_err_msg, status, err_txt)),
-                    });
-                }
-                Err(e) => {
-                    return Ok(LlmCompletionResult {
-                        success: false,
-                        content: String::new(),
-                        provider_used: fb.provider_name,
-                        is_fallback: true,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        error: Some(format!("主力模型失败（{}），备用模型连接异常（{}）", primary_err_msg, e)),
-                    });
+                    if let Some(reasoning) = data.get("choices")
+                        .and_then(|c| c.get(0))
+                        .and_then(|c| c.get("message"))
+                        .and_then(|m| m.get("reasoning_content"))
+                        .and_then(|s| s.as_str()) {
+                        if !reasoning.trim().is_empty() {
+                            return Ok(LlmCompletionResult {
+                                success: true,
+                                content: reasoning.to_string(),
+                                provider_used: fb.provider_name,
+                                is_fallback: true,
+                                latency_ms,
+                                error: Some(format!("主力模型失败（{}），已自动故障转移至备用模型", primary_err_msg)),
+                            });
+                        }
+                    }
                 }
             }
+            Ok(res) => {
+                let status = res.status();
+                let err_txt = res.text().await.unwrap_or_default();
+                let mut msg = format!("HTTP {}", status);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
+                    if let Some(m) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                        msg = m.to_string();
+                    }
+                }
+                return Ok(LlmCompletionResult {
+                    success: false,
+                    content: String::new(),
+                    provider_used: fb.provider_name,
+                    is_fallback: true,
+                    latency_ms: fb_start.elapsed().as_millis() as u64,
+                    error: Some(format!("主力失败: {}; 备用失败: {}", primary_err_msg, msg)),
+                });
+            }
+            Err(e) => {
+                return Ok(LlmCompletionResult {
+                    success: false,
+                    content: String::new(),
+                    provider_used: fb.provider_name,
+                    is_fallback: true,
+                    latency_ms: fb_start.elapsed().as_millis() as u64,
+                    error: Some(format!("主力失败: {}; 备用网络错误: {}", primary_err_msg, e)),
+                });
+            }
         }
+    }
 
     Ok(LlmCompletionResult {
         success: false,

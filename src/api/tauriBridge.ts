@@ -170,7 +170,7 @@ export const api = {
     primary: { provider_name: string; base_url: string; api_key: string; model: string },
     fallback?: { provider_name: string; base_url: string; api_key: string; model: string },
     messages: Array<{ role: string; content: string }> = [],
-    maxTokens = 2048
+    maxTokens?: number
   ): Promise<{
     success: boolean;
     content: string;
@@ -184,7 +184,7 @@ export const api = {
         primary,
         fallback: fallback || null,
         messages,
-        maxTokens,
+        maxTokens: maxTokens ?? null,
       });
     }
     return {
