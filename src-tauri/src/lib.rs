@@ -1,6 +1,7 @@
 pub mod db;
 pub mod sync;
 pub mod http_server;
+pub mod importers;
 
 use db::{
     DbState, DashboardStats, WorkspaceStat, ConversationItem, MessageItem, SearchResultItem,
@@ -476,8 +477,17 @@ async fn test_llm_pipeline(
 }
 
 #[tauri::command]
-fn trigger_sync(full: Option<bool>) -> Result<SyncResultInfo, String> {
-    Ok(execute_sync(full.unwrap_or(false)))
+async fn trigger_sync(app_handle: tauri::AppHandle, full: Option<bool>) -> Result<SyncResultInfo, String> {
+    let is_full = full.unwrap_or(false);
+    let _ = app_handle.emit("sync-started", ());
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        execute_sync(is_full)
+    })
+    .await
+    .map_err(|e| format!("同步任务执行失败: {}", e));
+
+    let _ = app_handle.emit("sync-completed", ());
+    res
 }
 
 #[tauri::command]
@@ -516,10 +526,10 @@ pub fn run() {
                 let _ = window.set_title("AgentDeck - AI Coding Cockpit");
             }
 
-            // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给 HomeCore / EVA 等外部服务无缝调用）
+            // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给外部服务无缝调用）
             http_server::start_http_server(8788);
 
-            // 启动后台多源智能监听线程（每 10 秒探测数据源 mtime 变动）
+            // 启动后台多源智能监听线程（每 10 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> = HashMap::new();
@@ -546,6 +556,7 @@ pub fn run() {
                                         last_mtimes.insert(src.clone(), mtime);
                                     }
                                 } else {
+                                    changed = true;
                                     last_mtimes.insert(src.clone(), mtime);
                                 }
                             }
@@ -553,6 +564,7 @@ pub fn run() {
                     }
 
                     if changed {
+                        let _ = app_handle.emit("sync-started", ());
                         let _res = execute_sync(false);
                         let _ = app_handle.emit("sync-completed", ());
                     }

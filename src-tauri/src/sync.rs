@@ -1,122 +1,139 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Command;
+use crate::importers::{ImporterStats, SyncEngine};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResultInfo {
     pub success: bool,
     pub new_count: u32,
     pub updated_count: u32,
+    pub skipped_count: u32,
+    pub error_count: u32,
     pub message: String,
+    pub details: Vec<ImporterStats>,
 }
 
-/// 获取用户主目录下各 Agent 的关键路径
+/// 获取用户主目录下各 Agent 的关键路径与活跃文件（用于高灵敏度变动检测）
 pub fn get_agent_source_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        // 1. Cursor (globalStorage, workspaceStorage, .cursor/projects)
+        // 1. Cursor
         let cursor_db = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
         if cursor_db.exists() {
             paths.push(cursor_db);
         }
-        let cursor_ws = home.join("Library/Application Support/Cursor/User/workspaceStorage");
-        if cursor_ws.exists() {
-            paths.push(cursor_ws);
-        }
-        let cursor_proj = home.join(".cursor/projects");
-        if cursor_proj.exists() {
-            paths.push(cursor_proj);
+        let cursor_wal = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal");
+        if cursor_wal.exists() {
+            paths.push(cursor_wal);
         }
 
-        // 2. Antigravity
-        let ag_dir = home.join(".gemini/antigravity-ide/brain");
-        if ag_dir.exists() {
-            paths.push(ag_dir);
+        // 2. Antigravity: 探测 brain 目录及其最新的活跃 transcript.jsonl
+        let brain_dir = home.join(".gemini/antigravity-ide/brain");
+        if brain_dir.is_dir() {
+            paths.push(brain_dir.clone());
+            if let Ok(entries) = std::fs::read_dir(&brain_dir) {
+                for e in entries.flatten().take(50) {
+                    let transcript = e.path().join(".system_generated/logs/transcript.jsonl");
+                    if transcript.is_file() {
+                        paths.push(transcript);
+                    }
+                }
+            }
         }
 
         // 3. Claude Code
         let claude_dir = home.join(".claude/projects");
-        if claude_dir.exists() {
+        if claude_dir.is_dir() {
             paths.push(claude_dir);
         }
 
         // 4. Codex
         let codex_dir = home.join(".codex/sessions");
-        if codex_dir.exists() {
+        if codex_dir.is_dir() {
             paths.push(codex_dir);
         }
 
         // 5. Hermes
-        let hermes_dir = home.join(".hermes");
-        if hermes_dir.exists() {
-            paths.push(hermes_dir);
+        let hermes_db = home.join(".hermes/state.db");
+        if hermes_db.exists() {
+            paths.push(hermes_db);
+        }
+        let hermes_wal = home.join(".hermes/state.db-wal");
+        if hermes_wal.exists() {
+            paths.push(hermes_wal);
         }
 
         // 6. WorkBuddy
         let wb_dir = home.join(".workbuddy/projects");
-        if wb_dir.exists() {
+        if wb_dir.is_dir() {
             paths.push(wb_dir);
         }
     }
     paths
 }
 
-/// 执行多源同步（调用已验证的同步引擎脚本）
-pub fn execute_sync(full: bool) -> SyncResultInfo {
-    // 定位 python sync 脚本路径
-    let mut script_path = PathBuf::from("/Users/xiyangxie/workspace/personal/aicoding-chat-viewer/sync.py");
-    if !script_path.exists() {
-        if let Some(home) = dirs::home_dir() {
-            let alt = home.join("workspace/personal/aicoding-chat-viewer/sync.py");
-            if alt.exists() {
-                script_path = alt;
-            }
-        }
-    }
+use std::sync::atomic::{AtomicBool, Ordering};
 
-    if !script_path.exists() {
+static IS_SYNCING: AtomicBool = AtomicBool::new(false);
+
+struct SyncGuard;
+
+impl Drop for SyncGuard {
+    fn drop(&mut self) {
+        IS_SYNCING.store(false, Ordering::SeqCst);
+    }
+}
+
+/// 纯 Rust 原生执行多源同步 (含全局防重入互斥锁)
+pub fn execute_sync(full: bool) -> SyncResultInfo {
+    // 防重入互斥：如果已有任务在运行，立即快速返回，避免 SQLite 事务争抢死锁
+    if IS_SYNCING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
         return SyncResultInfo {
-            success: false,
+            success: true,
             new_count: 0,
             updated_count: 0,
-            message: format!("找不到同步脚本: {:?}", script_path),
+            skipped_count: 0,
+            error_count: 0,
+            message: "同步任务正在执行中，已自动合并".to_string(),
+            details: vec![],
         };
     }
+    let _guard = SyncGuard;
 
-    let mut cmd = Command::new("python3");
-    cmd.arg(&script_path);
     let db_path = crate::db::get_database_path();
-    cmd.env("CHAT_VIEWER_DB_PATH", &db_path);
-    if full {
-        cmd.arg("--full");
-    } else {
-        cmd.arg("--incremental");
-    }
-
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let msg = if !stdout.trim().is_empty() {
-                stdout.trim().to_string()
-            } else if !stderr.trim().is_empty() {
-                stderr.trim().to_string()
-            } else {
-                "同步完成".to_string()
-            };
-
-            SyncResultInfo {
-                success: output.status.success(),
+    let conn = match rusqlite::Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return SyncResultInfo {
+                success: false,
                 new_count: 0,
                 updated_count: 0,
-                message: msg,
-            }
+                skipped_count: 0,
+                error_count: 1,
+                message: format!("无法连接数据库: {}", e),
+                details: vec![],
+            };
         }
-        Err(e) => SyncResultInfo {
-            success: false,
-            new_count: 0,
-            updated_count: 0,
-            message: format!("同步执行失败: {}", e),
-        },
+    };
+
+    // 确保 schema 已初始化
+    let _ = crate::db::init_schema(&conn);
+
+    let incremental = !full;
+    let (new_cnt, updated_cnt, skipped_cnt, error_cnt, details) = SyncEngine::run_all(&conn, incremental);
+
+    let msg = format!(
+        "原生同步完成: 新增 {} 条会话, 更新 {} 条, 跳过 {} 条, 错误 {} 条",
+        new_cnt, updated_cnt, skipped_cnt, error_cnt
+    );
+
+    SyncResultInfo {
+        success: error_cnt == 0 || (new_cnt + updated_cnt > 0),
+        new_count: new_cnt,
+        updated_count: updated_cnt,
+        skipped_count: skipped_cnt,
+        error_count: error_cnt,
+        message: msg,
+        details,
     }
 }

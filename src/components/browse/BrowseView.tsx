@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats } from '../../types';
-import { api } from '../../api/tauriBridge';
+import { api, isTauri } from '../../api/tauriBridge';
+import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import { DashboardView } from '../dashboard/DashboardView';
 import ReactMarkdown from 'react-markdown';
@@ -131,9 +132,22 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
+  // 监听后台实时同步完成事件，自动刷新工作区与会话列表
   useEffect(() => {
-    loadStarredCount();
-  }, [conversations]);
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    listen('sync-completed', () => {
+      loadWorkspaces();
+      loadConversations();
+      loadStarredCount();
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [selectedWorkspace, convSearch, isStarredView]);
 
   // 加载会话消息流
   useEffect(() => {

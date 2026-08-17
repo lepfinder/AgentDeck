@@ -269,4 +269,16 @@ export const api = {
       });
     }
   },
+
+  async getAppVersion(): Promise<string> {
+    if (isTauri()) {
+      try {
+        const { getVersion } = await import('@tauri-apps/api/app');
+        return await getVersion();
+      } catch {
+        return '0.1.0';
+      }
+    }
+    return '0.1.0';
+  },
 };

@@ -345,6 +345,15 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS sync_state (
+            file_path TEXT PRIMARY KEY,
+            conversation_id TEXT,
+            source_type TEXT,
+            file_mtime REAL,
+            file_size INTEGER,
+            synced_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
         CREATE INDEX IF NOT EXISTS idx_blocks_fine_ws ON workspace_blocks_fine(workspace_path);
@@ -353,6 +362,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     )?;
 
     // 自动兼容性迁移（防止旧表缺少新增字段）
+    let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
+
     let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
     let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
     let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);

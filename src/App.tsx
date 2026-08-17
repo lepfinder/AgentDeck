@@ -80,6 +80,13 @@ export function App() {
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
+  const [appVersion, setAppVersion] = useState<string>('0.1.0');
+
+  useEffect(() => {
+    api.getAppVersion().then((v) => {
+      if (v) setAppVersion(v);
+    });
+  }, []);
 
   // 加载大盘数据
   const loadStats = async () => {
@@ -98,21 +105,30 @@ export function App() {
     loadStats();
   }, []);
 
-  // 监听 Tauri 后台文件自动变动同步完成事件 (Auto Realtime Watcher)
+  // 监听 Tauri 后台文件自动变动与同步状态事件 (Auto Realtime Watcher)
   useEffect(() => {
     if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
-    listen('sync-completed', () => {
-      console.log('Realtime sync completed event received, refreshing data...');
-      loadStats();
-      setSyncToast('检测到 Agent 会话更新，已自动完成增量同步！');
-      setTimeout(() => setSyncToast(null), 3500);
+    let unlistenStarted: (() => void) | undefined;
+    let unlistenCompleted: (() => void) | undefined;
+
+    listen('sync-started', () => {
+      setIsSyncing(true);
     }).then((fn) => {
-      unlisten = fn;
+      unlistenStarted = fn;
+    });
+
+    listen('sync-completed', () => {
+      setIsSyncing(false);
+      loadStats();
+      setSyncToast('数据同步完成');
+      setTimeout(() => setSyncToast(null), 3000);
+    }).then((fn) => {
+      unlistenCompleted = fn;
     });
 
     return () => {
-      if (unlisten) unlisten();
+      if (unlistenStarted) unlistenStarted();
+      if (unlistenCompleted) unlistenCompleted();
     };
   }, []);
 
@@ -123,11 +139,13 @@ export function App() {
     try {
       const res = await api.triggerSync(full);
       await loadStats();
-      setSyncToast(res.message || (full ? '全量同步完成' : '增量同步完成'));
-      setTimeout(() => setSyncToast(null), 3500);
+      if (res.message) {
+        setSyncToast(res.message);
+        setTimeout(() => setSyncToast(null), 3500);
+      }
     } catch (err) {
       console.error('Sync failed:', err);
-      setSyncToast('同步失败，请检查数据源或脚本配置');
+      setSyncToast('同步失败，请检查数据源');
       setTimeout(() => setSyncToast(null), 4000);
     } finally {
       setIsSyncing(false);
@@ -310,7 +328,7 @@ export function App() {
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70 animate-pulse" />
             <span>监听中</span>
           </div>
-          <span>AgentDeck</span>
+          <span className="opacity-80 font-medium">AgentDeck v{appVersion}</span>
         </div>
       </footer>
 
