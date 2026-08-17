@@ -57,7 +57,7 @@ export const AI_PROVIDERS: AiProviderConfig[] = [
     id: 'volcano_ark_coding_plan',
     name: '火山方舟 Coding Plan',
     iconName: 'Sparkles',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding',
+    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
     defaultModel: 'deepseek-v4-flash',
     models: ['deepseek-v4-flash', 'doubao-seed-2.0-mini', 'doubao-seed-evolving', 'minimax-m3', 'kimi-k2.7-code', 'kimi-k3'],
     apiKeyLink: 'https://console.volcengine.com/ark/region:cn-beijing/subscription/coding-plan?projectName=default',
@@ -123,7 +123,7 @@ export const SettingsModal: React.FC<Props> = ({
   totalMessages = 0,
 }) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'appearance' | 'about'>('ai');
-  
+
   // 主力与备用模型配置
   const [primaryProviderId, setPrimaryProviderId] = useState<string>(() => {
     return localStorage.getItem('agentdeck_primary_ai_provider') || 'bailian';
@@ -274,11 +274,11 @@ export const SettingsModal: React.FC<Props> = ({
 
     const fallbackCfg = autoFallbackEnabled
       ? {
-          provider_name: fallbackProvider.name,
-          base_url: baseUrls[fallbackProvider.id] || fallbackProvider.baseUrl,
-          api_key: apiKeys[fallbackProvider.id] || '',
-          model: customModels[fallbackProvider.id] || fallbackProvider.defaultModel,
-        }
+        provider_name: fallbackProvider.name,
+        base_url: baseUrls[fallbackProvider.id] || fallbackProvider.baseUrl,
+        api_key: apiKeys[fallbackProvider.id] || '',
+        model: customModels[fallbackProvider.id] || fallbackProvider.defaultModel,
+      }
       : undefined;
 
     try {
@@ -318,7 +318,7 @@ export const SettingsModal: React.FC<Props> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl max-h-[85vh] theme-bg-main border theme-border rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+        className="w-full max-w-4xl h-[620px] max-h-[85vh] min-h-[500px] theme-bg-main border theme-border rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部标题栏 */}
@@ -346,11 +346,10 @@ export const SettingsModal: React.FC<Props> = ({
           <div className="w-48 border-r theme-border p-3 space-y-1 flex-shrink-0 theme-bg-sub">
             <button
               onClick={() => setActiveTab('ai')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeTab === 'ai'
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'ai'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
-              }`}
+                }`}
             >
               <Cpu className="h-4 w-4" />
               <span>AI 供应商与主备</span>
@@ -358,11 +357,10 @@ export const SettingsModal: React.FC<Props> = ({
 
             <button
               onClick={() => setActiveTab('storage')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeTab === 'storage'
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'storage'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
-              }`}
+                }`}
             >
               <Database className="h-4 w-4" />
               <span>数据存储与源</span>
@@ -370,11 +368,10 @@ export const SettingsModal: React.FC<Props> = ({
 
             <button
               onClick={() => setActiveTab('appearance')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeTab === 'appearance'
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'appearance'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
-              }`}
+                }`}
             >
               <Sun className="h-4 w-4" />
               <span>外观与主题</span>
@@ -382,11 +379,10 @@ export const SettingsModal: React.FC<Props> = ({
 
             <button
               onClick={() => setActiveTab('about')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                activeTab === 'about'
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'about'
                   ? 'bg-blue-600 text-white shadow-xs'
                   : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
-              }`}
+                }`}
             >
               <Info className="h-4 w-4" />
               <span>关于 AgentDeck</span>
@@ -457,11 +453,10 @@ export const SettingsModal: React.FC<Props> = ({
 
                   {/* 主备链路测试结果反馈 */}
                   {pipelineResult && (
-                    <div className={`p-3 rounded-xl border text-xs space-y-1.5 ${
-                      pipelineResult.overall_success
+                    <div className={`p-3 rounded-xl border text-xs space-y-1.5 ${pipelineResult.overall_success
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
                         : 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400'
-                    }`}>
+                      }`}>
                       <div className="flex items-center gap-1.5 font-bold">
                         {pipelineResult.overall_success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
                         <span>{pipelineResult.message}</span>
@@ -502,11 +497,10 @@ export const SettingsModal: React.FC<Props> = ({
                           setSelectedProviderId(provider.id);
                           setTestResult(null);
                         }}
-                        className={`flex flex-col p-2.5 rounded-xl border text-xs font-medium transition-all cursor-pointer relative ${
-                          isEditing
+                        className={`flex flex-col p-2.5 rounded-xl border text-xs font-medium transition-all cursor-pointer relative ${isEditing
                             ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
                             : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted hover:theme-text-main'
-                        }`}
+                          }`}
                       >
                         <div className="flex items-center justify-between w-full mb-1">
                           <div className="flex items-center gap-1.5">
@@ -653,9 +647,8 @@ export const SettingsModal: React.FC<Props> = ({
 
                     {testResult && (
                       <div
-                        className={`text-xs flex items-center gap-1.5 ${
-                          testResult.success ? 'text-emerald-500 font-medium' : 'text-red-500 font-medium'
-                        }`}
+                        className={`text-xs flex items-center gap-1.5 ${testResult.success ? 'text-emerald-500 font-medium' : 'text-red-500 font-medium'
+                          }`}
                       >
                         {testResult.success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
                         <span>
@@ -721,11 +714,10 @@ export const SettingsModal: React.FC<Props> = ({
                     onClick={() => {
                       if (theme !== 'dark') onToggleTheme();
                     }}
-                    className={`p-4 rounded-xl border text-xs cursor-pointer transition-all flex flex-col items-center gap-2 ${
-                      theme === 'dark'
+                    className={`p-4 rounded-xl border text-xs cursor-pointer transition-all flex flex-col items-center gap-2 ${theme === 'dark'
                         ? 'bg-blue-600/15 border-blue-500 theme-text-main shadow-xs'
                         : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted'
-                    }`}
+                      }`}
                   >
                     <Moon className="h-6 w-6 text-indigo-400" />
                     <span className="font-semibold">深色模式 (Dark)</span>
@@ -736,11 +728,10 @@ export const SettingsModal: React.FC<Props> = ({
                     onClick={() => {
                       if (theme !== 'light') onToggleTheme();
                     }}
-                    className={`p-4 rounded-xl border text-xs cursor-pointer transition-all flex flex-col items-center gap-2 ${
-                      theme === 'light'
+                    className={`p-4 rounded-xl border text-xs cursor-pointer transition-all flex flex-col items-center gap-2 ${theme === 'light'
                         ? 'bg-blue-600/15 border-blue-500 theme-text-main shadow-xs'
                         : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted'
-                    }`}
+                      }`}
                   >
                     <Sun className="h-6 w-6 text-amber-500" />
                     <span className="font-semibold">浅色模式 (Light)</span>
