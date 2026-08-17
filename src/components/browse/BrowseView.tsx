@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import type { WorkspaceStat, ConversationItem, MessageItem } from '../../types';
+import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats } from '../../types';
 import { api } from '../../api/tauriBridge';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
+import { DashboardView } from '../dashboard/DashboardView';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -26,6 +27,9 @@ interface Props {
   onSelectConversation: (id: string) => void;
   onSwitchToDashboard: () => void;
   onSwitchToStarred: () => void;
+  stats: DashboardStats | null;
+  loadingStats: boolean;
+  onRefreshStats: () => void;
 }
 
 export const BrowseView: React.FC<Props> = ({
@@ -36,6 +40,9 @@ export const BrowseView: React.FC<Props> = ({
   onSelectConversation,
   onSwitchToDashboard,
   onSwitchToStarred,
+  stats,
+  loadingStats,
+  onRefreshStats,
 }) => {
   const [workspaces, setWorkspaces] = useState<WorkspaceStat[]>([]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
@@ -52,10 +59,6 @@ export const BrowseView: React.FC<Props> = ({
     try {
       const list = await api.listWorkspaces(wsSearch);
       setWorkspaces(list);
-      // 默认选中第一个工作区
-      if (list.length > 0 && !selectedWorkspace && !isStarredView) {
-        onSelectWorkspace(list[0].workspace_path);
-      }
     } catch (e) {
       console.error(e);
     }
@@ -196,7 +199,11 @@ export const BrowseView: React.FC<Props> = ({
         <div className="p-2 space-y-1 border-b theme-border">
           <button
             onClick={onSwitchToDashboard}
-            className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-blue-500 hover:opacity-80 rounded-lg transition-colors cursor-pointer"
+            className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              !selectedWorkspace && !isStarredView
+                ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
+                : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
+            }`}
           >
             <div className="flex items-center gap-2">
               <LayoutDashboard className="h-4 w-4" />
@@ -209,8 +216,8 @@ export const BrowseView: React.FC<Props> = ({
             onClick={onSwitchToStarred}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isStarredView
-                ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30'
-                : 'text-amber-500 hover:opacity-80'
+                ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30 shadow-xs font-semibold'
+                : 'theme-text-muted hover:text-amber-500 hover:theme-bg-card'
             }`}
           >
             <div className="flex items-center gap-2">
@@ -303,8 +310,23 @@ export const BrowseView: React.FC<Props> = ({
         </div>
       </aside>
 
-      {/* 第二栏：会话列表 */}
-      <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
+      {/* 右侧主内容区域 */}
+      {!selectedWorkspace && !isStarredView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <DashboardView
+            stats={stats}
+            loading={loadingStats}
+            onRefresh={onRefreshStats}
+            onSelectConversation={(convId, wsPath) => {
+              onSelectWorkspace(wsPath);
+              onSelectConversation(convId);
+            }}
+          />
+        </main>
+      ) : (
+        <>
+          {/* 第二栏：会话列表 */}
+          <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
         <div className="p-3 border-b theme-border space-y-2">
           <div className="flex items-center justify-between">
             <div className="text-xs font-bold theme-text-main flex items-center gap-1.5">
@@ -521,7 +543,9 @@ export const BrowseView: React.FC<Props> = ({
             <p className="text-sm">从左侧选择一个项目工作区查看全景分析</p>
           </div>
         )}
-      </main>
+          </main>
+        </>
+      )}
     </div>
   );
 };

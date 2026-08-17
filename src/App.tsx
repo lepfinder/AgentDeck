@@ -3,17 +3,13 @@ import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import type { DashboardStats } from './types';
-import { DashboardView } from './components/dashboard/DashboardView';
 import { BrowseView } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import {
-  LayoutDashboard,
-  MessageSquare,
   Search,
   Sparkles,
   Command,
-  Star,
   Sun,
   Moon,
   Settings,
@@ -22,7 +18,6 @@ import {
 } from 'lucide-react';
 
 export function App() {
-  const [currentTab, setCurrentTab] = useState<'dashboard' | 'browse'>('dashboard');
   const [isStarredView, setIsStarredView] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
@@ -30,6 +25,13 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+
+  // 点击 Logo 返回全景大盘
+  const handleLogoClick = () => {
+    setSelectedWorkspace('');
+    setSelectedConversationId('');
+    setIsStarredView(false);
+  };
 
   // 顶栏拖拽支持
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
@@ -152,7 +154,6 @@ export function App() {
     setSelectedWorkspace(wsPath);
     setSelectedConversationId(convId);
     setIsStarredView(false);
-    setCurrentTab('browse');
   };
 
   return (
@@ -163,65 +164,21 @@ export function App() {
         onMouseDown={handleHeaderMouseDown}
         className="h-12 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
       >
-        {/* 左侧：Logo 与应用标题 */}
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+        {/* 左侧：可点击的 Logo 与应用标题（点击显示全景大盘） */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleLogoClick}
+            title="点击返回全景大盘"
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer group"
+          >
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
               <Sparkles className="h-3.5 w-3.5" />
             </div>
             <span className="font-bold text-sm tracking-tight theme-text-main">AgentDeck</span>
-            <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
-              Desktop
-            </span>
-          </div>
-
-          {/* 中间核心视图 Tab 切换 */}
-          <nav className="flex items-center theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
-            <button
-              onClick={() => {
-                setCurrentTab('dashboard');
-                setIsStarredView(false);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                currentTab === 'dashboard'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'theme-text-muted hover:theme-text-main'
-              }`}
-            >
-              <LayoutDashboard className="h-3.5 w-3.5" />
-              <span>全景大盘</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentTab('browse');
-                setIsStarredView(false);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                currentTab === 'browse' && !isStarredView
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'theme-text-muted hover:theme-text-main'
-              }`}
-            >
-              <MessageSquare className="h-3.5 w-3.5" />
-              <span>会话浏览</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setCurrentTab('browse');
-                setIsStarredView(true);
-              }}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                currentTab === 'browse' && isStarredView
-                  ? 'bg-amber-500/20 text-amber-500 dark:text-amber-300 border border-amber-500/40 shadow-sm'
-                  : 'theme-text-muted hover:text-amber-500'
-              }`}
-            >
-              <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-              <span>我的收藏</span>
-            </button>
-          </nav>
+          </button>
+          <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
+            Desktop
+          </span>
         </div>
 
         {/* 右侧：Spotlight 搜索唤起入口 + 实时同步 + 亮暗色切换 + 设置入口 */}
@@ -281,34 +238,31 @@ export function App() {
         </div>
       )}
 
-      {/* 主视图区域 */}
+      {/* 主视图区域：左侧工作区列表 + 右侧大盘或会话流 */}
       <div className="flex-1 overflow-hidden">
-        {currentTab === 'dashboard' ? (
-          <DashboardView
-            stats={stats}
-            loading={loadingStats}
-            onRefresh={loadStats}
-            onSelectConversation={handleSelectConversation}
-          />
-        ) : (
-          <BrowseView
-            selectedWorkspace={selectedWorkspace}
-            selectedConversationId={selectedConversationId}
-            isStarredView={isStarredView}
-            onSelectWorkspace={(ws) => {
-              setSelectedWorkspace(ws);
-              setIsStarredView(false);
-            }}
-            onSelectConversation={setSelectedConversationId}
-            onSwitchToDashboard={() => {
-              setCurrentTab('dashboard');
-              setIsStarredView(false);
-            }}
-            onSwitchToStarred={() => {
-              setIsStarredView(true);
-            }}
-          />
-        )}
+        <BrowseView
+          selectedWorkspace={selectedWorkspace}
+          selectedConversationId={selectedConversationId}
+          isStarredView={isStarredView}
+          onSelectWorkspace={(ws) => {
+            setSelectedWorkspace(ws);
+            setIsStarredView(false);
+          }}
+          onSelectConversation={setSelectedConversationId}
+          onSwitchToDashboard={() => {
+            setSelectedWorkspace('');
+            setSelectedConversationId('');
+            setIsStarredView(false);
+          }}
+          onSwitchToStarred={() => {
+            setSelectedWorkspace('');
+            setSelectedConversationId('');
+            setIsStarredView(true);
+          }}
+          stats={stats}
+          loadingStats={loadingStats}
+          onRefreshStats={loadStats}
+        />
       </div>
 
       {/* Spotlight 全局浮窗搜索 */}
@@ -318,14 +272,12 @@ export function App() {
         onSelectResult={handleSelectConversation}
       />
 
-      {/* 全局设置弹窗 */}
+      {/* 应用设置弹窗 (AI 供应商、数据源与外观) */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         theme={theme}
         onToggleTheme={toggleTheme}
-        totalConversations={stats?.total_conversations}
-        totalMessages={stats?.total_messages}
       />
     </div>
   );
