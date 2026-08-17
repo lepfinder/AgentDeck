@@ -120,6 +120,7 @@ export interface SearchResultItem {
 export interface WorkspaceFineBlock {
   id: number;
   block_id: string;
+  batch_index?: number;
   type: string;
   title: string;
   summary: string;

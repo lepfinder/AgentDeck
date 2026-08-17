@@ -11,9 +11,6 @@ import {
   Boxes,
   FileText,
   Clock,
-  ChevronDown,
-  ChevronUp,
-  Tag,
   Sparkles,
   Flame,
   RefreshCw,
@@ -29,7 +26,6 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [detail, setDetail] = useState<WorkspaceDetailStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'fine' | 'modules' | 'report'>('fine');
-  const [expandedBlocks, setExpandedBlocks] = useState<Record<string, boolean>>({});
   const [selectedBlock, setSelectedBlock] = useState<WorkspaceFineBlock | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractMessage, setExtractMessage] = useState<string | null>(null);
@@ -50,10 +46,6 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   useEffect(() => {
     fetchDetail();
   }, [workspacePath]);
-
-  const toggleExpand = (id: string) => {
-    setExpandedBlocks((prev) => ({ ...prev, [id]: !prev[id] }));
-  };
 
   // 提取 Blocks 操作
   const handleExtractBlocks = (force: boolean) => {
@@ -410,64 +402,73 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
               </div>
             )}
 
-            {/* 细粒度 Blocks 卡片列表 */}
-            <div className="space-y-4">
+            {/* 细粒度 Blocks 卡片列表（自适应响应式网格布局，对齐 Python 版） */}
+            <div className="space-y-3">
               <div className="text-xs font-semibold theme-text-muted flex items-center justify-between">
                 <span>分批从用户消息提取的局部功能点（数量较多）</span>
                 <span>共 {detail.fine_blocks.length} 项</span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
                 {detail.fine_blocks.map((block) => {
-                  const isExpanded = !!expandedBlocks[block.block_id || block.id.toString()];
                   return (
                     <div
                       key={block.id}
                       onClick={() => setSelectedBlock(block)}
-                      className="p-3.5 rounded-xl theme-bg-sub border theme-border hover:theme-border-hover transition-all text-xs space-y-2 shadow-2xs cursor-pointer"
+                      className={`p-3 rounded-xl border flex flex-col justify-between transition-all text-xs shadow-2xs hover:shadow-md hover:-translate-y-0.5 cursor-pointer min-h-[145px] ${
+                        block.type.toLowerCase() === 'module'
+                          ? 'bg-purple-500/[0.04] dark:bg-purple-950/20 border-purple-500/25 hover:border-purple-500/60 hover:shadow-purple-500/10'
+                          : block.type.toLowerCase() === 'feature'
+                          ? 'bg-blue-500/[0.04] dark:bg-blue-950/20 border-blue-500/25 hover:border-blue-500/60 hover:shadow-blue-500/10'
+                          : block.type.toLowerCase() === 'refactor'
+                          ? 'bg-amber-500/[0.04] dark:bg-amber-950/20 border-amber-500/25 hover:border-amber-500/60 hover:shadow-amber-500/10'
+                          : 'bg-emerald-500/[0.04] dark:bg-emerald-950/20 border-emerald-500/25 hover:border-emerald-500/60 hover:shadow-emerald-500/10'
+                      }`}
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 flex-wrap">
+                      <div>
+                        {/* 顶部批次与类型 */}
+                        <div className="flex items-center gap-1.5 mb-1.5">
+                          {block.batch_index !== undefined && block.batch_index !== null && (
+                            <span className="px-1.5 py-0.2 text-[9px] bg-black/5 dark:bg-white/10 rounded font-mono text-slate-500 dark:text-slate-400">
+                              批{block.batch_index + 1}
+                            </span>
+                          )}
                           {getBlockTypeBadge(block.type)}
-                          <span className="font-bold theme-text-main">{block.title}</span>
                         </div>
-                        {block.start_date && (
-                          <span className="text-[10px] theme-text-sub font-mono flex-shrink-0">
-                            {block.start_date}
-                          </span>
-                        )}
+
+                        {/* 标题 */}
+                        <h5 className="font-bold text-xs theme-text-main leading-snug line-clamp-2 mb-1">
+                          {block.title}
+                        </h5>
+
+                        {/* 摘要 */}
+                        <p className="text-[11px] theme-text-muted leading-relaxed line-clamp-3 mb-2">
+                          {block.summary}
+                        </p>
                       </div>
 
-                      <p className={`theme-text-muted text-[11px] leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
-                        {block.summary}
-                      </p>
+                      <div>
+                        {/* 关键词 */}
+                        {block.keywords && block.keywords.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap mb-1.5">
+                            {block.keywords.slice(0, 3).map((kw, i) => (
+                              <span
+                                key={i}
+                                className="px-1.5 py-0.2 text-[9px] bg-black/5 dark:bg-white/5 border theme-border rounded text-slate-500 dark:text-slate-400 font-mono"
+                              >
+                                {kw}
+                              </span>
+                            ))}
+                          </div>
+                        )}
 
-                      {block.summary.length > 80 && (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleExpand(block.block_id || block.id.toString());
-                          }}
-                          className="text-[10px] text-blue-500 hover:underline flex items-center gap-0.5 cursor-pointer pt-0.5"
-                        >
-                          <span>{isExpanded ? '收起详情' : '展开完整摘要'}</span>
-                          {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                        </button>
-                      )}
-
-                      {block.keywords && block.keywords.length > 0 && (
-                        <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                          <Tag className="h-3 w-3 theme-text-sub" />
-                          {block.keywords.map((kw, i) => (
-                            <span
-                              key={i}
-                              className="px-1.5 py-0.2 text-[9px] theme-bg-card border theme-border rounded text-slate-400 font-mono"
-                            >
-                              {kw}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                        {/* 底部时间 */}
+                        {(block.start_date || block.end_date) && (
+                          <div className="text-[10px] theme-text-sub font-mono pt-1 border-t theme-border-sub">
+                            {block.start_date || '—'} ~ {block.end_date || '—'}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

@@ -130,6 +130,7 @@ pub struct SearchResultItem {
 pub struct WorkspaceFineBlock {
     pub id: i64,
     pub block_id: String,
+    pub batch_index: Option<i64>,
     pub r#type: String,
     pub title: String,
     pub summary: String,
@@ -990,7 +991,7 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
     if has_fine_table > 0 {
         let mut stmt = conn.prepare(
             r#"
-            SELECT id, block_id, type, title, summary, start_date, end_date, status, keywords_json
+            SELECT id, block_id, batch_index, type, title, summary, start_date, end_date, status, keywords_json
             FROM workspace_blocks_fine
             WHERE workspace_path = ?1
             ORDER BY start_date ASC, sort_order ASC, id ASC
@@ -999,17 +1000,19 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         let f_rows = stmt.query_map(params![workspace_path], |r| {
             let id: i64 = r.get(0)?;
             let block_id: String = r.get(1)?;
-            let b_type: String = r.get(2)?;
-            let title: String = r.get(3)?;
-            let summary: String = r.get(4)?;
-            let start_date: Option<String> = r.get(5)?;
-            let end_date: Option<String> = r.get(6)?;
-            let status: String = r.get(7)?;
-            let kw_json: String = r.get(8).unwrap_or_else(|_| "[]".to_string());
+            let batch_index: Option<i64> = r.get(2)?;
+            let b_type: String = r.get(3)?;
+            let title: String = r.get(4)?;
+            let summary: String = r.get(5)?;
+            let start_date: Option<String> = r.get(6)?;
+            let end_date: Option<String> = r.get(7)?;
+            let status: String = r.get(8)?;
+            let kw_json: String = r.get(9).unwrap_or_else(|_| "[]".to_string());
             let keywords: Vec<String> = serde_json::from_str(&kw_json).unwrap_or_default();
             Ok(WorkspaceFineBlock {
                 id,
                 block_id,
+                batch_index,
                 r#type: b_type,
                 title,
                 summary,
