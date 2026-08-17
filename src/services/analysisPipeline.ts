@@ -192,17 +192,39 @@ export async function runExtractFineBlocksPipeline(
     };
   }
 
-  // 分批切片
+  // 1. 若非强制重新提取，先读取已完成的批次（支持增量与断点续传）
+  const completedBatchMap = new Map<number, WorkspaceFineBlock[]>();
+  if (!force) {
+    try {
+      const currentData = await api.getWorkspaceDetail(workspacePath);
+      if (currentData && currentData.fine_blocks) {
+        currentData.fine_blocks.forEach((fb: WorkspaceFineBlock) => {
+          if (fb.batch_index !== undefined && fb.batch_index !== null) {
+            const list = completedBatchMap.get(fb.batch_index) || [];
+            list.push(fb);
+            completedBatchMap.set(fb.batch_index, list);
+          }
+        });
+      }
+    } catch {}
+  }
+
+  // 2. 分批切片
   const batches: AnalysisUserMessage[][] = [];
   for (let i = 0; i < messages.length; i += BATCH_SIZE) {
     batches.push(messages.slice(i, i + BATCH_SIZE));
   }
 
   const totalBatches = batches.length;
+  const cachedBatchCount = completedBatchMap.size;
+  const isIncremental = cachedBatchCount > 0 && !force;
+
   onProgress?.({
     stage: 'batch',
-    detail: `共找到 ${messages.length} 条用户消息，分 ${totalBatches} 批进行局部 Blocks 提炼…`,
-    current: 0,
+    detail: isIncremental
+      ? `共 ${messages.length} 条消息 (${totalBatches} 批)，其中 ${cachedBatchCount} 批已就绪，正在增量提炼剩余批次…`
+      : `共找到 ${messages.length} 条用户消息，分 ${totalBatches} 批进行局部 Blocks 提炼…`,
+    current: cachedBatchCount,
     total: totalBatches,
     fineBlocksCount: 0,
   });
@@ -213,6 +235,21 @@ export async function runExtractFineBlocksPipeline(
   for (let batchIdx = 0; batchIdx < totalBatches; batchIdx++) {
     const currentBatch = batches[batchIdx];
     const batchNo = batchIdx + 1;
+
+    // 增量模式：如果本批已经提取过且非 force，直接复用已有 Blocks
+    if (!force && completedBatchMap.has(batchIdx)) {
+      const cached = completedBatchMap.get(batchIdx)!;
+      cached.forEach((fb) => extractedBlocks.push(fb));
+      console.log(`[R&D Analysis] ⚡ 批次 ${batchNo}/${totalBatches} 已提取，跳过 LLM 调用 (${cached.length} 个 blocks)`);
+      onProgress?.({
+        stage: 'batch',
+        detail: `跳过第 ${batchNo}/${totalBatches} 批（已在库中，复用 ${cached.length} 个 Blocks）…`,
+        current: batchNo,
+        total: totalBatches,
+        fineBlocksCount: extractedBlocks.length,
+      });
+      continue;
+    }
 
     // 格式化当前批次用户消息（超长智能截断：前300 + 后200，总上限500）
     const formattedMsgs = currentBatch.map((m) => ({
@@ -337,7 +374,7 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
 export async function runMergeModulesPipeline(
   workspacePath: string,
   fineBlocks: WorkspaceFineBlock[],
-  stats: WorkspaceDetailStats,
+  _stats: WorkspaceDetailStats,
   force = true,
   onProgress?: (p: PipelineProgress) => void
 ): Promise<{ success: boolean; moduleBlocks: WorkspaceModuleBlock[]; message: string }> {
@@ -441,7 +478,7 @@ ${JSON.stringify(slimFineBlocks, null, 2)}`;
     };
   }
 
-  const moduleBlocks = rawModules.map((m, idx) => normalizeModuleBlock(m, idx));
+  const moduleBlocks = rawModules.map((m: any, idx: number) => normalizeModuleBlock(m, idx));
 
   // 保存入库
   await api.saveWorkspaceModuleBlocks(workspacePath, moduleBlocks, force);

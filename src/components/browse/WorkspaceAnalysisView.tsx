@@ -22,7 +22,6 @@ import {
   Flame,
   RefreshCw,
   X,
-  Info,
   CheckCircle2,
   AlertTriangle,
 } from 'lucide-react';
