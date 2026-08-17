@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { api } from './api/tauriBridge';
+import { api, isTauri } from './api/tauriBridge';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { DashboardStats } from './types';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { BrowseView } from './components/browse/BrowseView';
@@ -24,6 +25,26 @@ export function App() {
   const [selectedConversationId, setSelectedConversationId] = useState('');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // 顶栏拖拽支持
+  const handleHeaderMouseDown = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    if (
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('select') ||
+      target.closest('a')
+    ) {
+      return;
+    }
+    if (isTauri()) {
+      try {
+        getCurrentWindow().startDragging();
+      } catch (err) {
+        console.error('startDragging error:', err);
+      }
+    }
+  };
 
   // 主题模式支持 (Dark / Light)
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -98,7 +119,8 @@ export function App() {
       {/* 顶部全局导航栏（自定义 macOS 红绿灯留白与原生拖拽区） */}
       <header
         data-tauri-drag-region
-        className="h-12 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10"
+        onMouseDown={handleHeaderMouseDown}
+        className="h-12 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
       >
         {/* 左侧：Logo 与应用标题 */}
         <div className="flex items-center gap-6">
