@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 import type { DashboardStats } from './types';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { BrowseView } from './components/browse/BrowseView';
@@ -16,6 +17,8 @@ import {
   Sun,
   Moon,
   Settings,
+  RefreshCw,
+  CheckCircle2,
 } from 'lucide-react';
 
 export function App() {
@@ -25,6 +28,8 @@ export function App() {
   const [selectedConversationId, setSelectedConversationId] = useState('');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncToast, setSyncToast] = useState<string | null>(null);
 
   // 顶栏拖拽支持
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
@@ -90,6 +95,42 @@ export function App() {
   useEffect(() => {
     loadStats();
   }, []);
+
+  // 监听 Tauri 后台文件自动变动同步完成事件 (Auto Realtime Watcher)
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    listen('sync-completed', () => {
+      console.log('Realtime sync completed event received, refreshing data...');
+      loadStats();
+      setSyncToast('检测到 Agent 会话更新，已自动完成增量同步！');
+      setTimeout(() => setSyncToast(null), 3500);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  // 手动触发同步
+  const handleTriggerSync = async (full: boolean = false) => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    try {
+      const res = await api.triggerSync(full);
+      await loadStats();
+      setSyncToast(res.message || (full ? '全量同步完成' : '增量同步完成'));
+      setTimeout(() => setSyncToast(null), 3500);
+    } catch (err) {
+      console.error('Sync failed:', err);
+      setSyncToast('同步失败，请检查数据源或脚本配置');
+      setTimeout(() => setSyncToast(null), 4000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // 监听全局 Cmd+K / Ctrl+K 快捷键 及 Cmd+, 设置快捷键
   useEffect(() => {
@@ -183,8 +224,19 @@ export function App() {
           </nav>
         </div>
 
-        {/* 右侧：Spotlight 搜索唤起入口 + 亮暗色切换 + 设置入口 */}
+        {/* 右侧：Spotlight 搜索唤起入口 + 实时同步 + 亮暗色切换 + 设置入口 */}
         <div className="flex items-center gap-2">
+          {/* 实时多源同步按钮 */}
+          <button
+            onClick={() => handleTriggerSync(false)}
+            disabled={isSyncing}
+            title="实时增量同步所有 Agent 会话 (Cursor, Antigravity, Claude, Codex, Hermes, WorkBuddy)"
+            className="flex items-center gap-1.5 px-2.5 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin text-blue-500' : 'text-blue-400'}`} />
+            <span>{isSyncing ? '同步中…' : '同步'}</span>
+          </button>
+
           <button
             onClick={() => setIsSpotlightOpen(true)}
             className="flex items-center gap-2 px-3 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm"
@@ -220,6 +272,14 @@ export function App() {
           </button>
         </div>
       </header>
+
+      {/* 实时同步状态浮层 Toast */}
+      {syncToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-slate-900/90 dark:bg-slate-800/95 text-white text-xs font-medium rounded-xl shadow-2xl border border-white/10 backdrop-blur-md">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+          <span>{syncToast}</span>
+        </div>
+      )}
 
       {/* 主视图区域 */}
       <div className="flex-1 overflow-hidden">

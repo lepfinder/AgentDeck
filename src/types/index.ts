@@ -172,3 +172,10 @@ export interface WorkspaceDetailStats {
   module_blocks: WorkspaceModuleBlock[];
   report_md?: string;
 }
+
+export interface SyncResultInfo {
+  success: boolean;
+  new_count: number;
+  updated_count: number;
+  message: string;
+}

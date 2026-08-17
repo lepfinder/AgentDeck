@@ -90,4 +90,14 @@ export const api = {
     const data = await res.json();
     return data.items || [];
   },
+
+  async triggerSync(full?: boolean): Promise<{ success: boolean; message: string }> {
+    if (isTauri()) {
+      return await invoke<{ success: boolean; message: string }>('trigger_sync', { full: !!full });
+    }
+    const res = await fetch(`/api/sync?mode=${full ? 'full' : 'incremental'}`, {
+      method: 'POST',
+    });
+    return await res.json();
+  },
 };
