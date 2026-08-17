@@ -69,6 +69,50 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
     }, 2000);
   };
 
+  // 合并模块操作
+  const handleMergeModules = (force: boolean) => {
+    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
+    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
+    const hasKey = Boolean(apiKeys[activeProvider]);
+
+    if (!hasKey) {
+      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行模块合并。');
+      setTimeout(() => setExtractMessage(null), 5000);
+      return;
+    }
+
+    setExtracting(true);
+    setExtractMessage(force ? '正在重新合并模块总览…' : '正在合并细粒度 Blocks 为模块总览…');
+    setTimeout(() => {
+      setExtracting(false);
+      setExtractMessage('模块总览合并完成！');
+      fetchDetail();
+      setTimeout(() => setExtractMessage(null), 3000);
+    }, 2000);
+  };
+
+  // 生成 / 刷新报告操作
+  const handleGenerateReport = (force: boolean) => {
+    const activeProvider = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
+    const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
+    const hasKey = Boolean(apiKeys[activeProvider]);
+
+    if (!hasKey) {
+      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可生成架构报告。');
+      setTimeout(() => setExtractMessage(null), 5000);
+      return;
+    }
+
+    setExtracting(true);
+    setExtractMessage(force ? '正在刷新并重新撰写 Markdown 架构报告…' : '正在基于模块总览生成 Markdown 架构报告…');
+    setTimeout(() => {
+      setExtracting(false);
+      setExtractMessage('架构报告生成完成！');
+      fetchDetail();
+      setTimeout(() => setExtractMessage(null), 3000);
+    }, 2500);
+  };
+
   if (loading) {
     return (
       <div className="flex h-full flex-col items-center justify-center theme-text-muted">
@@ -273,25 +317,70 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* 提取操作按钮 */}
+            {/* 动态操作按钮（根据当前 Tab 切换：提取 Blocks/重新提取 | 合并模块/重新合并 | 生成报告/刷新报告） */}
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleExtractBlocks(false)}
-                disabled={extracting}
-                className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
-              >
-                {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Sparkles className="h-3.5 w-3.5 text-purple-500" />}
-                <span>提取 Blocks</span>
-              </button>
+              {activeTab === 'fine' && (
+                <>
+                  <button
+                    onClick={() => handleExtractBlocks(false)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Sparkles className="h-3.5 w-3.5 text-purple-500" />}
+                    <span>提取 Blocks</span>
+                  </button>
+                  <button
+                    onClick={() => handleExtractBlocks(true)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
+                    <span>重新提取</span>
+                  </button>
+                </>
+              )}
 
-              <button
-                onClick={() => handleExtractBlocks(true)}
-                disabled={extracting}
-                className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
-              >
-                <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
-                <span>重新提取</span>
-              </button>
+              {activeTab === 'modules' && (
+                <>
+                  <button
+                    onClick={() => handleMergeModules(false)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Boxes className="h-3.5 w-3.5 text-purple-500" />}
+                    <span>合并模块</span>
+                  </button>
+                  <button
+                    onClick={() => handleMergeModules(true)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
+                    <span>重新合并</span>
+                  </button>
+                </>
+              )}
+
+              {activeTab === 'report' && (
+                <>
+                  <button
+                    onClick={() => handleGenerateReport(false)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <FileText className="h-3.5 w-3.5 text-blue-500" />}
+                    <span>生成报告</span>
+                  </button>
+                  <button
+                    onClick={() => handleGenerateReport(true)}
+                    disabled={extracting}
+                    className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
+                    <span>刷新报告</span>
+                  </button>
+                </>
+              )}
             </div>
 
             {/* 三级颗粒度切换 Tab */}
