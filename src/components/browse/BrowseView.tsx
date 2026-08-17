@@ -208,7 +208,28 @@ export const BrowseView: React.FC<Props> = ({
   return (
     <div className="flex h-full w-full overflow-hidden theme-bg-main">
       {/* 第一栏：工作区列表 */}
-      <aside className="w-64 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
+      <aside className="w-64 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0 select-none">
+        {/* 侧边栏顶部品牌区域 (对齐效果：Logo + 主标题 + 紧凑子标题) */}
+        <div
+          onClick={onSwitchToDashboard}
+          title="点击返回全景大盘"
+          className="p-3.5 border-b theme-border flex items-center gap-3 cursor-pointer hover:theme-bg-card transition-colors group"
+        >
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 p-[1.5px] flex items-center justify-center shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform flex-shrink-0">
+            <div className="w-full h-full rounded-[14.5px] theme-bg-sub flex items-center justify-center">
+              <Sparkles className="h-5 w-5 text-blue-500" />
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="font-bold text-sm theme-text-main tracking-tight flex items-center gap-1.5 leading-none">
+              <span>AgentDeck</span>
+            </div>
+            <div className="text-[9.5px] font-mono tracking-wider uppercase text-slate-400 dark:text-slate-500 mt-1 font-semibold">
+              AGENT COGNITION HUB
+            </div>
+          </div>
+        </div>
+
         {/* 顶部搜索 */}
         <div className="p-3 border-b theme-border">
           <div className="relative">
@@ -335,6 +356,17 @@ export const BrowseView: React.FC<Props> = ({
               </div>
             );
           })}
+        </div>
+
+        {/* 侧边栏底部状态指示器 (CORE ONLINE · LOCAL READY) */}
+        <div className="p-2.5 px-3 border-t theme-border flex items-center justify-between text-[10px] theme-text-sub select-none bg-black/5 dark:bg-white/[0.02]">
+          <div className="flex items-center gap-1.5 font-mono">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span className="font-semibold theme-text-main">CORE ONLINE</span>
+          </div>
+          <span className="font-mono text-[9px] px-1.5 py-0.2 rounded theme-bg-sub border theme-border theme-text-sub">
+            LOCAL READY
+          </span>
         </div>
       </aside>
 

@@ -8,7 +8,6 @@ import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import {
   Search,
-  Sparkles,
   Command,
   Sun,
   Moon,
@@ -25,13 +24,6 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
-
-  // 点击 Logo 返回全景大盘
-  const handleLogoClick = () => {
-    setSelectedWorkspace('');
-    setSelectedConversationId('');
-    setIsStarredView(false);
-  };
 
   // 顶栏拖拽支持
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
@@ -162,23 +154,11 @@ export function App() {
       <header
         data-tauri-drag-region
         onMouseDown={handleHeaderMouseDown}
-        className="h-12 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
+        className="h-11 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
       >
-        {/* 左侧：可点击的 Logo 与应用标题（点击显示全景大盘） */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleLogoClick}
-            title="点击返回全景大盘"
-            className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer group"
-          >
-            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
-              <Sparkles className="h-3.5 w-3.5" />
-            </div>
-            <span className="font-bold text-sm tracking-tight theme-text-main">AgentDeck</span>
-          </button>
-          <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
-            Desktop
-          </span>
+        {/* 左侧：原生拖拽区 */}
+        <div data-tauri-drag-region className="flex items-center gap-2 text-xs theme-text-sub font-mono select-none">
+          <span className="opacity-0">macOS Traffic Lights Area</span>
         </div>
 
         {/* 右侧：Spotlight 搜索唤起入口 + 实时同步 + 亮暗色切换 + 设置入口 */}
