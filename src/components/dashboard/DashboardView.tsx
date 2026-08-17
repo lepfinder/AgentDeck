@@ -26,7 +26,7 @@ export const DashboardView: React.FC<Props> = ({
   onRefresh,
   onSelectConversation,
 }) => {
-  const [agentTab, setAgentTab] = useState<'convs' | 'msgs'>('convs');
+  const [agentTab, setAgentTab] = useState<'convs' | 'msgs'>('msgs');
   const [punchcardTab, setPunchcardTab] = useState<'msgs' | 'convs'>('msgs');
   const [topRankTab, setTopRankTab] = useState<'all' | 'user'>('all');
 
