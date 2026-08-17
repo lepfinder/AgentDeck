@@ -300,6 +300,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS workspace_blocks_fine (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_path TEXT NOT NULL,
+            message_fingerprint TEXT NOT NULL DEFAULT '',
             block_id TEXT NOT NULL,
             batch_index INTEGER,
             type TEXT NOT NULL DEFAULT 'feature',
@@ -309,6 +310,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             end_date TEXT,
             status TEXT NOT NULL DEFAULT 'completed',
             keywords_json TEXT NOT NULL DEFAULT '[]',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT
         );
@@ -316,6 +318,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS workspace_blocks_modules (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_path TEXT NOT NULL,
+            message_fingerprint TEXT NOT NULL DEFAULT '',
             module_id TEXT NOT NULL,
             type TEXT NOT NULL DEFAULT 'module',
             title TEXT NOT NULL,
@@ -324,6 +327,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             end_date TEXT,
             status TEXT NOT NULL DEFAULT 'completed',
             keywords_json TEXT NOT NULL DEFAULT '[]',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
             child_fine_ids_json TEXT NOT NULL DEFAULT '[]',
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT
@@ -341,6 +345,22 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_blocks_modules_ws ON workspace_blocks_modules(workspace_path);
         "#
     )?;
+
+    // 自动兼容性迁移（防止旧表缺少新增字段）
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN child_fine_ids_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+
     Ok(())
 }
 
@@ -1243,6 +1263,14 @@ pub fn save_workspace_fine_blocks(
     blocks: &[WorkspaceFineBlock],
     clear_existing: bool,
 ) -> Result<usize> {
+    // 确保旧表缺少列时平滑自愈
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+
     if clear_existing {
         conn.execute(
             "DELETE FROM workspace_blocks_fine WHERE workspace_path = ?1",
@@ -1255,9 +1283,9 @@ pub fn save_workspace_fine_blocks(
     let mut stmt = conn.prepare(
         r#"
         INSERT INTO workspace_blocks_fine (
-            workspace_path, block_id, batch_index, type, title, summary,
-            start_date, end_date, status, keywords_json, sort_order, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            workspace_path, message_fingerprint, block_id, batch_index, type, title, summary,
+            start_date, end_date, status, keywords_json, evidence_json, sort_order, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
         "#,
     )?;
 
@@ -1265,6 +1293,7 @@ pub fn save_workspace_fine_blocks(
         let kw_json = serde_json::to_string(&block.keywords).unwrap_or_else(|_| "[]".to_string());
         stmt.execute(params![
             workspace_path,
+            "",
             block.block_id,
             block.batch_index,
             block.r#type,
@@ -1274,6 +1303,7 @@ pub fn save_workspace_fine_blocks(
             block.end_date,
             block.status,
             kw_json,
+            "[]",
             idx as i64,
             now,
         ])?;
@@ -1289,6 +1319,14 @@ pub fn save_workspace_module_blocks(
     modules: &[WorkspaceModuleBlock],
     clear_existing: bool,
 ) -> Result<usize> {
+    // 确保旧表缺少列时平滑自愈
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN child_fine_ids_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+
     if clear_existing {
         conn.execute(
             "DELETE FROM workspace_blocks_modules WHERE workspace_path = ?1",
@@ -1301,9 +1339,9 @@ pub fn save_workspace_module_blocks(
     let mut stmt = conn.prepare(
         r#"
         INSERT INTO workspace_blocks_modules (
-            workspace_path, module_id, type, title, summary,
-            start_date, end_date, status, keywords_json, child_fine_ids_json, sort_order, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            workspace_path, message_fingerprint, module_id, type, title, summary,
+            start_date, end_date, status, keywords_json, evidence_json, child_fine_ids_json, sort_order, created_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
         "#,
     )?;
 
@@ -1312,6 +1350,7 @@ pub fn save_workspace_module_blocks(
         let child_json = serde_json::to_string(&m.child_fine_ids).unwrap_or_else(|_| "[]".to_string());
         stmt.execute(params![
             workspace_path,
+            "",
             m.module_id,
             m.r#type,
             m.title,
@@ -1320,6 +1359,7 @@ pub fn save_workspace_module_blocks(
             m.end_date,
             m.status,
             kw_json,
+            "[]",
             child_json,
             idx as i64,
             now,

@@ -285,10 +285,19 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
         : [];
 
       if (rawBlocks.length > 0) {
+        const batchBlocks: WorkspaceFineBlock[] = [];
         rawBlocks.forEach((rb: any, seq: number) => {
-          extractedBlocks.push(normalizeFineBlock(rb, batchIdx, seq));
+          const norm = normalizeFineBlock(rb, batchIdx, seq);
+          batchBlocks.push(norm);
+          extractedBlocks.push(norm);
         });
-        console.log(`[R&D Analysis] Batch ${batchNo} parsed ${rawBlocks.length} blocks`);
+        console.log(`[R&D Analysis] Batch ${batchNo} parsed ${rawBlocks.length} blocks, writing to DB...`);
+        // 关键点：每完成一批立即持久化写入 SQLite（第 1 批根据 force 参数决定是否清理旧数据）
+        try {
+          await api.saveWorkspaceFineBlocks(workspacePath, batchBlocks, force && batchIdx === 0);
+        } catch (dbErr) {
+          console.error(`[R&D Analysis] Batch ${batchNo} DB save error:`, dbErr);
+        }
       } else {
         console.warn(`[R&D Analysis] Batch ${batchNo} JSON parsed but no blocks found. Raw content:`, llmRes.content.slice(0, 300));
       }
@@ -308,16 +317,14 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
     };
   }
 
-  // 持久化存入 SQLite
+  // 全部批次提炼完成
   onProgress?.({
     stage: 'done',
-    detail: `提取完成！正在将 ${extractedBlocks.length} 个细粒度 Blocks 保存入库…`,
+    detail: `全部分批提炼完成！共持久化入库 ${extractedBlocks.length} 个细粒度 Blocks。`,
     current: totalBatches,
     total: totalBatches,
     fineBlocksCount: extractedBlocks.length,
   });
-
-  await api.saveWorkspaceFineBlocks(workspacePath, extractedBlocks, force);
 
   return {
     success: true,
