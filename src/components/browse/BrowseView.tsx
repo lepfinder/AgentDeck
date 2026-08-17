@@ -15,6 +15,7 @@ import {
   Sparkles,
   BarChart3,
   ArrowLeft,
+  ArrowUpDown,
 } from 'lucide-react';
 
 interface Props {
@@ -52,6 +53,7 @@ export const BrowseView: React.FC<Props> = ({
   const [loadingConv, setLoadingConv] = useState(false);
   const [starredCount, setStarredCount] = useState(0);
   const [expandedTurns, setExpandedTurns] = useState<Record<number, boolean>>({});
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // 切换会话时重置折叠状态
   useEffect(() => {
@@ -81,9 +83,6 @@ export const BrowseView: React.FC<Props> = ({
         isStarredView
       );
       setConversations(list);
-      if (isStarredView) {
-        setStarredCount(list.length);
-      }
     } catch (e) {
       console.error(e);
     }
@@ -93,37 +92,50 @@ export const BrowseView: React.FC<Props> = ({
     loadConversations();
   }, [selectedWorkspace, convSearch, isStarredView]);
 
-  // 加载会话详情
+  // 加载收藏会话总数
+  const loadStarredCount = async () => {
+    try {
+      const list = await api.listConversations(undefined, undefined, true);
+      setStarredCount(list.length);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    loadStarredCount();
+  }, [conversations]);
+
+  // 加载会话消息流
   useEffect(() => {
     if (!selectedConversationId) {
       setMessages([]);
       setCurrentConv(null);
       return;
     }
-    const fetchMsgs = async () => {
-      setLoadingConv(true);
-      try {
-        const msgs = await api.getConversationMessages(selectedConversationId);
-        setMessages(msgs);
-        const found = conversations.find((c) => c.id === selectedConversationId);
-        if (found) setCurrentConv(found);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoadingConv(false);
-      }
-    };
-    fetchMsgs();
-  }, [selectedConversationId, conversations]);
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (conv) setCurrentConv(conv);
 
-  // 切换星标
+    setLoadingConv(true);
+    api
+      .getConversationMessages(selectedConversationId)
+      .then((msgs) => {
+        setMessages(msgs);
+      })
+      .catch((e) => {
+        console.error(e);
+      })
+      .finally(() => {
+        setLoadingConv(false);
+      });
+  }, [selectedConversationId]);
+
+  // 切换收藏状态
   const handleToggleStar = async () => {
-    if (!selectedConversationId) return;
+    if (!selectedConversationId || !currentConv) return;
     try {
       const isNowStarred = await api.toggleStar(selectedConversationId);
-      if (currentConv) {
-        setCurrentConv({ ...currentConv, is_starred: isNowStarred });
-      }
+      setCurrentConv((prev) => (prev ? { ...prev, is_starred: isNowStarred } : null));
       setConversations((prev) =>
         prev.map((c) => (c.id === selectedConversationId ? { ...c, is_starred: isNowStarred } : c))
       );
@@ -154,7 +166,12 @@ export const BrowseView: React.FC<Props> = ({
   const formatRelativeTime = (timeStr?: string) => {
     if (!timeStr) return '';
     try {
-      const d = new Date(timeStr.replace('Z', '+00:00'));
+      let str = timeStr.trim();
+      if (/^\d{10,13}$/.test(str)) {
+        const num = Number(str);
+        str = new Date(str.length === 10 ? num * 1000 : num).toISOString();
+      }
+      const d = new Date(str);
       if (isNaN(d.getTime())) return timeStr;
       const now = new Date();
       const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
@@ -173,8 +190,36 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
-  const formatTime = (timeStr?: string) => {
+  // 严格按北京时间 (UTC+8 / Asia/Shanghai) 格式化时间
+  const formatTime = (timeStr?: string, includeSeconds = false) => {
     if (!timeStr) return '';
+    try {
+      let str = timeStr.trim();
+      if (/^\d{10,13}$/.test(str)) {
+        const num = Number(str);
+        str = new Date(str.length === 10 ? num * 1000 : num).toISOString();
+      }
+      const d = new Date(str);
+      if (!isNaN(d.getTime())) {
+        const parts = new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: includeSeconds ? '2-digit' : undefined,
+          hour12: false,
+        }).formatToParts(d);
+        const p = Object.fromEntries(parts.map((it) => [it.type, it.value]));
+        if (includeSeconds) {
+          return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+        }
+        return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
+      }
+    } catch {
+      // fallback
+    }
     if (timeStr.length >= 16) {
       return timeStr.substring(0, 16).replace('T', ' ');
     }
@@ -183,6 +228,7 @@ export const BrowseView: React.FC<Props> = ({
 
   // 会话消息按 User Turn 轮次进行分组
   interface MessageTurn {
+    origIndex: number;
     user?: MessageItem;
     replies: MessageItem[];
   }
@@ -190,16 +236,18 @@ export const BrowseView: React.FC<Props> = ({
   let curTurn: MessageTurn | null = null;
   for (const msg of messages) {
     if (msg.sender === 'user') {
-      curTurn = { user: msg, replies: [] };
+      curTurn = { origIndex: messageTurns.length, user: msg, replies: [] };
       messageTurns.push(curTurn);
     } else {
       if (!curTurn) {
-        curTurn = { replies: [] };
+        curTurn = { origIndex: messageTurns.length, replies: [] };
         messageTurns.push(curTurn);
       }
       curTurn.replies.push(msg);
     }
   }
+
+  const displayTurns = sortOrder === 'desc' ? [...messageTurns].reverse() : messageTurns;
 
   const toggleTurn = (idx: number) => {
     setExpandedTurns((prev) => ({ ...prev, [idx]: !prev[idx] }));
@@ -460,8 +508,18 @@ export const BrowseView: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {/* 顶部操作区：展开/折叠全部 + 收藏按钮 */}
+                  {/* 顶部操作区：正序/倒序 + 展开/折叠全部 + 收藏按钮 */}
                   <div className="flex items-center gap-2">
+                    {/* 正序 / 倒序切换按钮 */}
+                    <button
+                      onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
+                      title={`当前：${sortOrder === 'asc' ? '正序 (最早在前)' : '倒序 (最新在前)'}，点击切换`}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs"
+                    >
+                      <ArrowUpDown className="h-3.5 w-3.5 text-blue-500" />
+                      <span>{sortOrder === 'asc' ? '正序' : '倒序'}</span>
+                    </button>
+
                     <button
                       onClick={() => {
                         const allExpanded =
@@ -509,22 +567,22 @@ export const BrowseView: React.FC<Props> = ({
                     <div className="flex h-full items-center justify-center theme-text-muted">
                       <Clock className="h-6 w-6 animate-spin mr-2" /> 正在加载对话流…
                     </div>
-                  ) : messageTurns.length === 0 ? (
+                  ) : displayTurns.length === 0 ? (
                     <div className="py-12 text-center text-xs theme-text-sub">此会话暂无消息记录</div>
                   ) : (
-                    messageTurns.map((turn, turnIdx) => {
-                      const isExpanded = !!expandedTurns[turnIdx];
+                    displayTurns.map((turn) => {
+                      const isExpanded = !!expandedTurns[turn.origIndex];
                       const userMsg = turn.user;
                       const replyCount = turn.replies.length;
 
                       return (
                         <div
-                          key={turnIdx}
+                          key={turn.origIndex}
                           className="border theme-border rounded-2xl theme-bg-card p-4 transition-all shadow-xs max-w-4xl mx-auto space-y-3"
                         >
                           {/* 用户消息头部信息栏（点击可切换展开/折叠本轮 Agent 回复） */}
                           <div
-                            onClick={() => toggleTurn(turnIdx)}
+                            onClick={() => toggleTurn(turn.origIndex)}
                             className="flex items-center justify-between gap-2 cursor-pointer select-none text-xs pb-2 border-b theme-border-sub"
                           >
                             <div className="flex items-center gap-2">

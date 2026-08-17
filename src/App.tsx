@@ -3,6 +3,7 @@ import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import type { DashboardStats } from './types';
+import { formatBeijingTime } from './utils/date';
 import { BrowseView } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { SettingsModal } from './components/settings/SettingsModal';
@@ -296,10 +297,7 @@ export function App() {
           <span>· 全部 {stats?.total_messages?.toLocaleString() ?? 0}</span>
           {stats?.last_sync_time && (
             <span>
-              · 同步{' '}
-              {stats.last_sync_time.length >= 16
-                ? stats.last_sync_time.substring(0, 16).replace('T', ' ')
-                : stats.last_sync_time}
+              · 同步 {formatBeijingTime(stats.last_sync_time)}
             </span>
           )}
         </div>
