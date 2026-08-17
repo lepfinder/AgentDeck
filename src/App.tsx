@@ -288,9 +288,6 @@ export function App() {
                 : stats.last_sync_time}
             </span>
           )}
-          <span className="text-blue-500 bg-blue-500/10 px-1 py-0.2 rounded border border-blue-500/20 text-[10px]">
-            Cursor 直读
-          </span>
         </div>
 
         <div className="flex items-center gap-3 flex-shrink-0 text-[10px]">
