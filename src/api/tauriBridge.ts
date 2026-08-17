@@ -136,4 +136,61 @@ export const api = {
       return { success: false, message: e.message, latency_ms: Date.now() - start };
     }
   },
+
+  async testLlmPipeline(
+    primary: { provider_name: string; base_url: string; api_key: string; model: string },
+    fallback?: { provider_name: string; base_url: string; api_key: string; model: string }
+  ): Promise<{
+    primary: { success: boolean; message: string; latency_ms: number };
+    fallback?: { success: boolean; message: string; latency_ms: number };
+    overall_success: boolean;
+    message: string;
+  }> {
+    if (isTauri()) {
+      return await invoke('test_llm_pipeline', { primary, fallback: fallback || null });
+    }
+    const p = await api.testLlmConnection(primary.base_url, primary.api_key, primary.model);
+    let fb = undefined;
+    if (fallback) {
+      fb = await api.testLlmConnection(fallback.base_url, fallback.api_key, fallback.model);
+    }
+    const overall = p.success || (fb ? fb.success : false);
+    return {
+      primary: p,
+      fallback: fb,
+      overall_success: overall,
+      message: p.success && fb?.success ? '主备链路双重连通正常' : p.message,
+    };
+  },
+
+  async callLlmWithFallback(
+    primary: { provider_name: string; base_url: string; api_key: string; model: string },
+    fallback?: { provider_name: string; base_url: string; api_key: string; model: string },
+    messages: Array<{ role: string; content: string }> = [],
+    maxTokens = 2048
+  ): Promise<{
+    success: boolean;
+    content: string;
+    provider_used: string;
+    is_fallback: boolean;
+    latency_ms: number;
+    error?: string;
+  }> {
+    if (isTauri()) {
+      return await invoke('call_llm_with_fallback', {
+        primary,
+        fallback: fallback || null,
+        messages,
+        maxTokens,
+      });
+    }
+    return {
+      success: false,
+      content: '',
+      provider_used: primary.provider_name,
+      is_fallback: false,
+      latency_ms: 0,
+      error: 'Web mode fallback not implemented',
+    };
+  },
 };

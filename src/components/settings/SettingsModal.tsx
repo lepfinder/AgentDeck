@@ -123,8 +123,21 @@ export const SettingsModal: React.FC<Props> = ({
   totalMessages = 0,
 }) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'appearance' | 'about'>('ai');
+  
+  // 主力与备用模型配置
+  const [primaryProviderId, setPrimaryProviderId] = useState<string>(() => {
+    return localStorage.getItem('agentdeck_primary_ai_provider') || 'bailian';
+  });
+  const [fallbackProviderId, setFallbackProviderId] = useState<string>(() => {
+    return localStorage.getItem('agentdeck_fallback_ai_provider') || 'deepseek';
+  });
+  const [autoFallbackEnabled, setAutoFallbackEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('agentdeck_auto_fallback') !== 'false';
+  });
+
+  // 当前正在编辑查看的 Provider 卡片
   const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
-    return localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
+    return localStorage.getItem('agentdeck_primary_ai_provider') || 'bailian';
   });
 
   // 每个供应商的配置状态
@@ -159,10 +172,23 @@ export const SettingsModal: React.FC<Props> = ({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; msg: string; latency?: number } | null>(null);
 
+  // 主备双链路测试状态
+  const [testingPipeline, setTestingPipeline] = useState(false);
+  const [pipelineResult, setPipelineResult] = useState<{
+    primary: { success: boolean; message: string; latency_ms: number };
+    fallback?: { success: boolean; message: string; latency_ms: number };
+    overall_success: boolean;
+    message: string;
+  } | null>(null);
+
   const activeProvider = AI_PROVIDERS.find((p) => p.id === selectedProviderId) || AI_PROVIDERS[0];
   const currentKey = apiKeys[activeProvider.id] || '';
   const currentBaseUrl = baseUrls[activeProvider.id] || activeProvider.baseUrl;
   const currentModel = customModels[activeProvider.id] || activeProvider.defaultModel;
+
+  // 主力与备用 Provider 对象
+  const primaryProvider = AI_PROVIDERS.find((p) => p.id === primaryProviderId) || AI_PROVIDERS[0];
+  const fallbackProvider = AI_PROVIDERS.find((p) => p.id === fallbackProviderId) || AI_PROVIDERS[1];
 
   // 保存到 LocalStorage
   const handleKeyChange = (val: string) => {
@@ -183,13 +209,35 @@ export const SettingsModal: React.FC<Props> = ({
     localStorage.setItem('agentdeck_ai_models', JSON.stringify(next));
   };
 
-  const handleSetActiveProvider = (id: string) => {
-    setSelectedProviderId(id);
-    localStorage.setItem('agentdeck_active_ai_provider', id);
-    setTestResult(null);
+  const handleSetAsPrimary = (id: string) => {
+    setPrimaryProviderId(id);
+    localStorage.setItem('agentdeck_primary_ai_provider', id);
+    if (id === fallbackProviderId) {
+      // 避免主备相同，自动为备用切换
+      const alt = AI_PROVIDERS.find((p) => p.id !== id)?.id || 'custom';
+      setFallbackProviderId(alt);
+      localStorage.setItem('agentdeck_fallback_ai_provider', alt);
+    }
   };
 
-  // 测试连接（通过 Rust 原生端点发起，彻底避免 WebKit/浏览器 CORS 拦截）
+  const handleSetAsFallback = (id: string) => {
+    setFallbackProviderId(id);
+    localStorage.setItem('agentdeck_fallback_ai_provider', id);
+    if (id === primaryProviderId) {
+      // 避免主备相同，自动为主力切换
+      const alt = AI_PROVIDERS.find((p) => p.id !== id)?.id || 'bailian';
+      setPrimaryProviderId(alt);
+      localStorage.setItem('agentdeck_primary_ai_provider', alt);
+    }
+  };
+
+  const handleToggleAutoFallback = () => {
+    const next = !autoFallbackEnabled;
+    setAutoFallbackEnabled(next);
+    localStorage.setItem('agentdeck_auto_fallback', String(next));
+  };
+
+  // 单个模型测试连接（通过 Rust 原生端点发起，彻底避免 WebKit/浏览器 CORS 拦截）
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -209,6 +257,41 @@ export const SettingsModal: React.FC<Props> = ({
       });
     } finally {
       setTesting(false);
+    }
+  };
+
+  // 一键测试主备链路连通性
+  const handleTestPipeline = async () => {
+    setTestingPipeline(true);
+    setPipelineResult(null);
+
+    const primaryCfg = {
+      provider_name: primaryProvider.name,
+      base_url: baseUrls[primaryProvider.id] || primaryProvider.baseUrl,
+      api_key: apiKeys[primaryProvider.id] || '',
+      model: customModels[primaryProvider.id] || primaryProvider.defaultModel,
+    };
+
+    const fallbackCfg = autoFallbackEnabled
+      ? {
+          provider_name: fallbackProvider.name,
+          base_url: baseUrls[fallbackProvider.id] || fallbackProvider.baseUrl,
+          api_key: apiKeys[fallbackProvider.id] || '',
+          model: customModels[fallbackProvider.id] || fallbackProvider.defaultModel,
+        }
+      : undefined;
+
+    try {
+      const res = await api.testLlmPipeline(primaryCfg, fallbackCfg);
+      setPipelineResult(res);
+    } catch (e: any) {
+      setPipelineResult({
+        primary: { success: false, message: e.message || String(e), latency_ms: 0 },
+        overall_success: false,
+        message: '主备链路测试调用异常',
+      });
+    } finally {
+      setTestingPipeline(false);
     }
   };
 
@@ -235,32 +318,32 @@ export const SettingsModal: React.FC<Props> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-3xl theme-bg-card border theme-border rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[80vh] max-h-[680px]"
+        className="w-full max-w-4xl max-h-[85vh] theme-bg-main border theme-border rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 顶部标题栏 */}
-        <div className="px-6 py-4 border-b theme-border flex items-center justify-between theme-bg-header">
-          <div className="flex items-center gap-2.5">
-            <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-500 border border-blue-500/20">
-              <Sliders className="h-4 w-4" />
+        <div className="flex items-center justify-between px-6 py-4 border-b theme-border flex-shrink-0 theme-bg-header">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-blue-600/10 text-blue-500 border border-blue-500/20">
+              <Sliders className="h-5 w-5" />
             </div>
             <div>
               <h2 className="text-sm font-bold theme-text-main">应用设置 (Settings)</h2>
-              <p className="text-[11px] theme-text-muted">配置 AI 模型供应商、数据同步与全局偏好</p>
+              <p className="text-xs theme-text-muted">配置 AI 模型高可用主备架构、多数据源增量同步与全局偏好</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg theme-text-sub hover:theme-text-main hover:theme-bg-sub transition-colors cursor-pointer"
+            className="p-1.5 rounded-lg hover:theme-bg-sub theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* 主体左右分栏 */}
-        <div className="flex-1 flex overflow-hidden">
-          {/* 左侧导航菜单 */}
-          <div className="w-48 border-r theme-border theme-bg-sub p-3 space-y-1 flex-shrink-0">
+        <div className="flex flex-1 overflow-hidden">
+          {/* 左侧 Tab 切换 */}
+          <div className="w-48 border-r theme-border p-3 space-y-1 flex-shrink-0 theme-bg-sub">
             <button
               onClick={() => setActiveTab('ai')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${
@@ -270,7 +353,7 @@ export const SettingsModal: React.FC<Props> = ({
               }`}
             >
               <Cpu className="h-4 w-4" />
-              <span>AI 供应商配置</span>
+              <span>AI 供应商与主备</span>
             </button>
 
             <button
@@ -314,35 +397,144 @@ export const SettingsModal: React.FC<Props> = ({
           <div className="flex-1 overflow-y-auto p-6">
             {activeTab === 'ai' && (
               <div className="space-y-5">
+                {/* 顶部高可用主备架构说明卡片 */}
+                <div className="border border-blue-500/30 bg-blue-500/5 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="h-4 w-4 text-blue-500" />
+                      <span className="font-bold text-xs theme-text-main">高可用主备模型架构 (HA Dual-LLM Pipeline)</span>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                      <span className="theme-text-muted text-[11px]">自动故障降级 (Failover)</span>
+                      <input
+                        type="checkbox"
+                        checked={autoFallbackEnabled}
+                        onChange={handleToggleAutoFallback}
+                        className="rounded border-slate-600 text-blue-600 focus:ring-0 cursor-pointer"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    {/* 主力模型指示 */}
+                    <div className="p-2.5 rounded-xl border theme-border theme-bg-card flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-600 text-white rounded">
+                          主力 Primary
+                        </span>
+                        <span className="font-medium theme-text-main truncate">{primaryProvider.name}</span>
+                      </div>
+                      <span className="text-[10px] font-mono theme-text-sub">
+                        {customModels[primaryProvider.id] || primaryProvider.defaultModel}
+                      </span>
+                    </div>
+
+                    {/* 备用模型指示 */}
+                    <div className={`p-2.5 rounded-xl border theme-border theme-bg-card flex items-center justify-between ${!autoFallbackEnabled ? 'opacity-50' : ''}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="px-1.5 py-0.5 text-[10px] font-bold bg-purple-600 text-white rounded">
+                          备用 Fallback
+                        </span>
+                        <span className="font-medium theme-text-main truncate">{fallbackProvider.name}</span>
+                      </div>
+                      <span className="text-[10px] font-mono theme-text-sub">
+                        {customModels[fallbackProvider.id] || fallbackProvider.defaultModel}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 text-[11px] theme-text-muted">
+                    <span>当主力模型遇到超时、限流 (429) 或服务器异常时，系统将无缝自动切换至备用模型。</span>
+                    <button
+                      onClick={handleTestPipeline}
+                      disabled={testingPipeline}
+                      className="flex items-center gap-1 text-blue-500 hover:underline font-medium cursor-pointer flex-shrink-0"
+                    >
+                      {testingPipeline ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                      <span>一键测试主备链路</span>
+                    </button>
+                  </div>
+
+                  {/* 主备链路测试结果反馈 */}
+                  {pipelineResult && (
+                    <div className={`p-3 rounded-xl border text-xs space-y-1.5 ${
+                      pipelineResult.overall_success
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
+                        : 'bg-red-500/10 border-red-500/30 text-red-600 dark:text-red-400'
+                    }`}>
+                      <div className="flex items-center gap-1.5 font-bold">
+                        {pipelineResult.overall_success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
+                        <span>{pipelineResult.message}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono opacity-90">
+                        <div>
+                          主力 [{primaryProvider.name}]: {pipelineResult.primary.success ? `✅ 正常 (${pipelineResult.primary.latency_ms}ms)` : `❌ 失败 (${pipelineResult.primary.message})`}
+                        </div>
+                        {pipelineResult.fallback && (
+                          <div>
+                            备用 [{fallbackProvider.name}]: {pipelineResult.fallback.success ? `✅ 正常 (${pipelineResult.fallback.latency_ms}ms)` : `❌ 失败 (${pipelineResult.fallback.message})`}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">AI 供应商 (LLM Providers)</h3>
+                  <h3 className="text-sm font-bold theme-text-main">AI 供应商列表</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    选择激活的 AI 大模型，用于自动化会话洞察、深度复盘与代码报告生成。
+                    点击供应商卡片可配置 API 密钥并指定为主力或备用模型。
                   </p>
                 </div>
 
                 {/* 供应商选择网格 */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {AI_PROVIDERS.map((provider) => {
-                    const isSelected = provider.id === selectedProviderId;
+                    const isEditing = provider.id === selectedProviderId;
+                    const isPrimary = provider.id === primaryProviderId;
+                    const isFallback = provider.id === fallbackProviderId;
                     const hasKey = Boolean(apiKeys[provider.id]);
+
                     return (
                       <button
                         key={provider.id}
-                        onClick={() => handleSetActiveProvider(provider.id)}
-                        className={`flex items-center justify-between p-2.5 rounded-xl border text-xs font-medium transition-all cursor-pointer ${
-                          isSelected
+                        onClick={() => {
+                          setSelectedProviderId(provider.id);
+                          setTestResult(null);
+                        }}
+                        className={`flex flex-col p-2.5 rounded-xl border text-xs font-medium transition-all cursor-pointer relative ${
+                          isEditing
                             ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
                             : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted hover:theme-text-main'
                         }`}
                       >
-                        <div className="flex items-center gap-2">
-                          {renderProviderIcon(provider.iconName)}
-                          <span className="truncate">{provider.name}</span>
+                        <div className="flex items-center justify-between w-full mb-1">
+                          <div className="flex items-center gap-1.5">
+                            {renderProviderIcon(provider.iconName)}
+                            <span className="truncate font-semibold">{provider.name}</span>
+                          </div>
+                          {hasKey && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title="已配置 API Key" />
+                          )}
                         </div>
-                        {hasKey && (
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title="已配置 API Key" />
-                        )}
+
+                        <div className="flex items-center gap-1 mt-1">
+                          {isPrimary && (
+                            <span className="px-1.5 py-0.2 text-[9px] font-bold bg-blue-600 text-white rounded">
+                              主力模型
+                            </span>
+                          )}
+                          {isFallback && (
+                            <span className="px-1.5 py-0.2 text-[9px] font-bold bg-purple-600 text-white rounded">
+                              备用模型
+                            </span>
+                          )}
+                          {!isPrimary && !isFallback && (
+                            <span className="text-[10px] theme-text-sub font-mono truncate">
+                              {customModels[provider.id] || provider.defaultModel}
+                            </span>
+                          )}
+                        </div>
                       </button>
                     );
                   })}
@@ -353,19 +545,38 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       {renderProviderIcon(activeProvider.iconName)}
-                      <span className="font-bold text-xs theme-text-main">{activeProvider.name} 配置</span>
+                      <span className="font-bold text-xs theme-text-main">{activeProvider.name} 配置详情</span>
                     </div>
-                    {activeProvider.apiKeyLink && (
-                      <a
-                        href={activeProvider.apiKeyLink}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[11px] text-blue-500 hover:underline flex items-center gap-1"
-                      >
-                        <span>获取 API Key</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    )}
+
+                    <div className="flex items-center gap-2">
+                      {activeProvider.id !== primaryProviderId && (
+                        <button
+                          onClick={() => handleSetAsPrimary(activeProvider.id)}
+                          className="px-2 py-1 text-[11px] rounded-lg border theme-border bg-blue-600/10 text-blue-500 hover:bg-blue-600 hover:text-white transition-all cursor-pointer"
+                        >
+                          设为主力模型
+                        </button>
+                      )}
+                      {activeProvider.id !== fallbackProviderId && (
+                        <button
+                          onClick={() => handleSetAsFallback(activeProvider.id)}
+                          className="px-2 py-1 text-[11px] rounded-lg border theme-border bg-purple-600/10 text-purple-500 hover:bg-purple-600 hover:text-white transition-all cursor-pointer"
+                        >
+                          设为备用模型
+                        </button>
+                      )}
+                      {activeProvider.apiKeyLink && (
+                        <a
+                          href={activeProvider.apiKeyLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 ml-1"
+                        >
+                          <span>获取 Key</span>
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                    </div>
                   </div>
 
                   {/* API Key */}
@@ -437,7 +648,7 @@ export const SettingsModal: React.FC<Props> = ({
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-all cursor-pointer shadow-xs"
                     >
                       {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                      <span>测试接口连通性</span>
+                      <span>测试当前端点连通性</span>
                     </button>
 
                     {testResult && (
