@@ -16,6 +16,8 @@ import {
   BarChart3,
   ArrowLeft,
   ArrowUpDown,
+  Maximize2,
+  X,
 } from 'lucide-react';
 
 interface Props {
@@ -54,6 +56,33 @@ export const BrowseView: React.FC<Props> = ({
   const [starredCount, setStarredCount] = useState(0);
   const [expandedTurns, setExpandedTurns] = useState<Record<number, boolean>>({});
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+
+  const parseImages = (raw: any): Array<{ src: string; width?: number; height?: number }> => {
+    if (!raw) return [];
+    let list = raw;
+    if (typeof raw === 'string') {
+      try {
+        list = JSON.parse(raw);
+      } catch {
+        return [];
+      }
+    }
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((item: any) => {
+        if (typeof item === 'string') {
+          const src = item.startsWith('/') ? `http://127.0.0.1:8788${item}` : item;
+          return { src };
+        }
+        if (item && typeof item.src === 'string') {
+          const src = item.src.startsWith('/') ? `http://127.0.0.1:8788${item.src}` : item.src;
+          return { ...item, src };
+        }
+        return null;
+      })
+      .filter((x): x is { src: string; width?: number; height?: number } => Boolean(x && x.src));
+  };
 
   // 切换会话时重置折叠状态
   useEffect(() => {
@@ -614,10 +643,45 @@ export const BrowseView: React.FC<Props> = ({
                             )}
                           </div>
 
-                          {/* 用户 Prompt 提问内容（直接清晰展示） */}
+                          {/* 用户 Prompt 提问内容与附图展示 */}
                           {userMsg && (
-                            <div className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap font-sans pl-1">
-                              {userMsg.text}
+                            <div className="space-y-2">
+                              {userMsg.text && (
+                                <div className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap font-sans pl-1">
+                                  {userMsg.text}
+                                </div>
+                              )}
+
+                              {/* 用户附图渲染 */}
+                              {(() => {
+                                const imgs = parseImages(userMsg.images);
+                                if (imgs.length === 0) return null;
+                                return (
+                                  <div className="flex flex-wrap gap-2.5 pt-1 pl-1">
+                                    {imgs.map((img, i) => (
+                                      <div
+                                        key={i}
+                                        className="relative group rounded-xl overflow-hidden border theme-border theme-bg-sub shadow-xs cursor-pointer max-w-sm max-h-60"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setLightboxImg(img.src);
+                                        }}
+                                      >
+                                        <img
+                                          src={img.src}
+                                          alt={`附图 ${i + 1}`}
+                                          loading="lazy"
+                                          className="w-full h-full object-contain max-h-60 rounded-xl transition-transform group-hover:scale-105"
+                                        />
+                                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs gap-1 font-medium pointer-events-none">
+                                          <Maximize2 className="h-3.5 w-3.5" />
+                                          <span>点击放大</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
 
@@ -673,6 +737,37 @@ export const BrowseView: React.FC<Props> = ({
                                       </div>
                                     )}
 
+                                    {/* Agent 消息附图（若有） */}
+                                    {(() => {
+                                      const replyImgs = parseImages(m.images);
+                                      if (replyImgs.length === 0) return null;
+                                      return (
+                                        <div className="flex flex-wrap gap-2.5 pt-1">
+                                          {replyImgs.map((img, i) => (
+                                            <div
+                                              key={i}
+                                              className="relative group rounded-xl overflow-hidden border theme-border theme-bg-card shadow-xs cursor-pointer max-w-sm max-h-60"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setLightboxImg(img.src);
+                                              }}
+                                            >
+                                              <img
+                                                src={img.src}
+                                                alt={`回复附图 ${i + 1}`}
+                                                loading="lazy"
+                                                className="w-full h-full object-contain max-h-60 rounded-xl transition-transform group-hover:scale-105"
+                                              />
+                                              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs gap-1 font-medium pointer-events-none">
+                                                <Maximize2 className="h-3.5 w-3.5" />
+                                                <span>点击放大</span>
+                                              </div>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      );
+                                    })()}
+
                                     {/* 工具调用块 */}
                                     {toolCalls.length > 0 && (
                                       <div className="space-y-1.5 pt-1">
@@ -721,6 +816,32 @@ export const BrowseView: React.FC<Props> = ({
             )}
           </main>
         </>
+      )}
+
+      {/* 图片大图预览 Lightbox 模态框 */}
+      {lightboxImg && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setLightboxImg(null)}
+        >
+          <div
+            className="relative max-w-5xl max-h-[90vh] flex flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setLightboxImg(null)}
+              className="absolute -top-10 right-0 text-white/80 hover:text-white p-1.5 rounded-lg bg-black/50 hover:bg-black/80 transition-all cursor-pointer"
+              title="关闭预览"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <img
+              src={lightboxImg}
+              alt="原图预览"
+              className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl border border-white/15"
+            />
+          </div>
+        </div>
       )}
     </div>
   );

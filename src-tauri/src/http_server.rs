@@ -308,6 +308,30 @@ fn handle_connection(mut stream: TcpStream) {
             }
         }
 
+        ("GET", "/ag-image") => {
+            let path_param = query_params.get("path").cloned().unwrap_or_default();
+            if let Some(img_path) = get_ag_image_path(&path_param) {
+                if let Ok(bytes) = std::fs::read(&img_path) {
+                    let mime = get_mime_from_path(&img_path);
+                    send_binary_response(&mut stream, 200, mime, &bytes);
+                    return;
+                }
+            }
+            send_response(&mut stream, 404, "application/json", &json!({"ok": false, "error": "Image not found"}).to_string());
+        }
+
+        ("GET", p) if p.starts_with("/cursor-image/") => {
+            let uuid = &p["/cursor-image/".len()..];
+            if let Some(img_path) = get_cursor_image_path(uuid) {
+                if let Ok(bytes) = std::fs::read(&img_path) {
+                    let mime = get_mime_from_path(&img_path);
+                    send_binary_response(&mut stream, 200, mime, &bytes);
+                    return;
+                }
+            }
+            send_response(&mut stream, 404, "application/json", &json!({"ok": false, "error": "Cursor image not found"}).to_string());
+        }
+
         ("POST", "/sync") => {
             let res = execute_sync(false);
             let body = json!({
@@ -327,6 +351,81 @@ fn handle_connection(mut stream: TcpStream) {
             send_response(&mut stream, 404, "application/json", &body.to_string());
         }
     }
+}
+
+fn get_mime_from_path(p: &std::path::Path) -> &'static str {
+    match p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        _ => "application/octet-stream",
+    }
+}
+
+fn get_ag_image_path(raw: &str) -> Option<std::path::PathBuf> {
+    if raw.is_empty() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(raw);
+    if path.is_file() {
+        return Some(path);
+    }
+    if let Some(home) = dirs::home_dir() {
+        if raw.starts_with('~') {
+            let clean = raw.trim_start_matches('~').trim_start_matches('/');
+            let p = home.join(clean);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    None
+}
+
+fn get_cursor_image_path(image_uuid: &str) -> Option<std::path::PathBuf> {
+    if image_uuid.is_empty() {
+        return None;
+    }
+    let home = dirs::home_dir()?;
+    let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+    if !ws_storage.exists() {
+        return None;
+    }
+    let clean_uuid = image_uuid.trim().to_lowercase();
+    for entry in walkdir::WalkDir::new(&ws_storage).max_depth(3) {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(fname) = path.file_name() {
+                    let name = fname.to_string_lossy().to_lowercase();
+                    if name.contains(&clean_uuid) {
+                        return Some(path.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn send_binary_response(stream: &mut TcpStream, status_code: u16, content_type: &str, body: &[u8]) {
+    let header = format!(
+        "HTTP/1.1 {} OK\r\n\
+        Content-Type: {}\r\n\
+        Content-Length: {}\r\n\
+        Access-Control-Allow-Origin: *\r\n\
+        Cache-Control: public, max-age=86400\r\n\
+        Connection: close\r\n\
+        \r\n",
+        status_code,
+        content_type,
+        body.len()
+    );
+    let _ = stream.write_all(header.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
 }
 
 fn send_response(stream: &mut TcpStream, status_code: u16, content_type: &str, body: &str) {

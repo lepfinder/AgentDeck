@@ -47,6 +47,7 @@ pub struct MessageItem {
     pub token_count: Option<i64>,
     pub duration_ms: Option<i64>,
     pub tool_calls_json: Option<String>,
+    pub images: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -776,7 +777,8 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
                 source as model_name,
                 NULL as token_count,
                 NULL as duration_ms,
-                CASE WHEN tool_name IS NOT NULL AND tool_name != '' THEN json_array(json_object('name', tool_name, 'args', tool_args)) ELSE NULL END as tool_calls_json
+                CASE WHEN tool_name IS NOT NULL AND tool_name != '' THEN json_array(json_object('name', tool_name, 'args', tool_args)) ELSE NULL END as tool_calls_json,
+                images
          FROM messages
          WHERE conversation_id = ?1
          ORDER BY step_index ASC, id ASC"
@@ -796,6 +798,7 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
             token_count: row.get(8)?,
             duration_ms: row.get(9)?,
             tool_calls_json: row.get(10)?,
+            images: row.get(11)?,
         })
     })?;
 

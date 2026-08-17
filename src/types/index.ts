@@ -45,6 +45,7 @@ export interface MessageItem {
   token_count?: number;
   duration_ms?: number;
   tool_calls_json?: string;
+  images?: string | Array<{ src: string; width?: number; height?: number }>;
 }
 
 export interface AgentShare {
