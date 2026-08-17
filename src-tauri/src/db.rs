@@ -114,6 +114,7 @@ pub struct DashboardStats {
     pub top_conversations_all: Vec<TopRankItem>,
     pub top_conversations_user: Vec<TopRankItem>,
     pub top_workspaces: Vec<TopWorkspaceItem>,
+    pub last_sync_time: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,6 +632,12 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_workspaces.push(r);
     }
 
+    let last_sync_time: Option<String> = conn.query_row(
+        "SELECT COALESCE(finished_at, created_at) FROM sync_runs ORDER BY id DESC LIMIT 1",
+        [],
+        |r| r.get(0),
+    ).ok();
+
     Ok(DashboardStats {
         total_conversations,
         total_messages,
@@ -646,6 +653,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_conversations_all,
         top_conversations_user,
         top_workspaces,
+        last_sync_time,
     })
 }
 

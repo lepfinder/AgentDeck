@@ -106,6 +106,7 @@ export interface DashboardStats {
   top_conversations_all: TopRankItem[];
   top_conversations_user: TopRankItem[];
   top_workspaces: TopWorkspaceItem[];
+  last_sync_time?: string;
 }
 
 export interface SearchResultItem {

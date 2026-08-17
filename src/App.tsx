@@ -8,6 +8,7 @@ import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import {
   Search,
+  Sparkles,
   Command,
   Sun,
   Moon,
@@ -24,6 +25,13 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+
+  // 点击 Logo 返回全景大盘
+  const handleLogoClick = () => {
+    setSelectedWorkspace('');
+    setSelectedConversationId('');
+    setIsStarredView(false);
+  };
 
   // 顶栏拖拽支持
   const handleHeaderMouseDown = (e: React.MouseEvent) => {
@@ -154,11 +162,23 @@ export function App() {
       <header
         data-tauri-drag-region
         onMouseDown={handleHeaderMouseDown}
-        className="h-11 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
+        className="h-12 border-b theme-border theme-bg-header backdrop-blur-md pl-20 pr-4 flex items-center justify-between flex-shrink-0 z-10 select-none cursor-default"
       >
-        {/* 左侧：原生拖拽区 */}
-        <div data-tauri-drag-region className="flex items-center gap-2 text-xs theme-text-sub font-mono select-none">
-          <span className="opacity-0">macOS Traffic Lights Area</span>
+        {/* 左侧：可点击的 Logo 与应用标题（点击显示全景大盘） */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleLogoClick}
+            title="点击返回全景大盘"
+            className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer group"
+          >
+            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
+              <Sparkles className="h-3.5 w-3.5" />
+            </div>
+            <span className="font-bold text-sm tracking-tight theme-text-main">AgentDeck</span>
+          </button>
+          <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
+            Desktop
+          </span>
         </div>
 
         {/* 右侧：Spotlight 搜索唤起入口 + 实时同步 + 亮暗色切换 + 设置入口 */}
@@ -244,6 +264,46 @@ export function App() {
           onRefreshStats={loadStats}
         />
       </div>
+
+      {/* 底部全局状态栏（对齐原 Python 统计信息） */}
+      <footer className="h-7 border-t theme-border theme-bg-header px-3 flex items-center justify-between text-[11px] theme-text-sub font-mono select-none flex-shrink-0 z-10">
+        <div className="flex items-center gap-2 truncate pr-4">
+          <span className="font-bold theme-text-main">AI 历史会话</span>
+          <span>{stats?.total_conversations?.toLocaleString() ?? 0} 会话</span>
+          {(() => {
+            const parts = (stats?.agent_comparison_convs || [])
+              .filter((a) => a.count > 0)
+              .map((a) => `${a.label} ${a.count}`);
+            return parts.length > 0 ? (
+              <span className="theme-text-muted">（{parts.join(' · ')}）</span>
+            ) : null;
+          })()}
+          <span>· 用户 {stats?.total_user_messages?.toLocaleString() ?? 0}</span>
+          <span>· 全部 {stats?.total_messages?.toLocaleString() ?? 0}</span>
+          {stats?.last_sync_time && (
+            <span>
+              · 同步{' '}
+              {stats.last_sync_time.length >= 16
+                ? stats.last_sync_time.substring(0, 16).replace('T', ' ')
+                : stats.last_sync_time}
+            </span>
+          )}
+          <span className="text-blue-500 bg-blue-500/10 px-1 py-0.2 rounded border border-blue-500/20 text-[10px]">
+            Cursor 直读
+          </span>
+        </div>
+
+        <div className="flex items-center gap-3 flex-shrink-0 text-[10px]">
+          <div
+            className="flex items-center gap-1.5 theme-text-muted"
+            title="本地多源 Agent 会话文件监听中，有更新将自动增量同步"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span>监听中</span>
+          </div>
+          <span className="theme-text-sub">AgentDeck Desktop</span>
+        </div>
+      </footer>
 
       {/* Spotlight 全局浮窗搜索 */}
       <SpotlightModal
