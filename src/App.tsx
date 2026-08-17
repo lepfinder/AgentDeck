@@ -4,6 +4,7 @@ import type { DashboardStats } from './types';
 import { DashboardView } from './components/dashboard/DashboardView';
 import { BrowseView } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
+import { SettingsModal } from './components/settings/SettingsModal';
 import {
   LayoutDashboard,
   MessageSquare,
@@ -13,6 +14,7 @@ import {
   Star,
   Sun,
   Moon,
+  Settings,
 } from 'lucide-react';
 
 export function App() {
@@ -21,6 +23,7 @@ export function App() {
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // 主题模式支持 (Dark / Light)
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -67,12 +70,15 @@ export function App() {
     loadStats();
   }, []);
 
-  // 监听全局 Cmd+K / Ctrl+K 快捷键
+  // 监听全局 Cmd+K / Ctrl+K 快捷键 及 Cmd+, 设置快捷键
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsSpotlightOpen((prev) => !prev);
+      } else if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault();
+        setIsSettingsOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -155,8 +161,8 @@ export function App() {
           </nav>
         </div>
 
-        {/* 右侧：Spotlight 搜索唤起入口 + 亮暗色切换 */}
-        <div className="flex items-center gap-2.5">
+        {/* 右侧：Spotlight 搜索唤起入口 + 亮暗色切换 + 设置入口 */}
+        <div className="flex items-center gap-2">
           <button
             onClick={() => setIsSpotlightOpen(true)}
             className="flex items-center gap-2 px-3 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm"
@@ -180,6 +186,15 @@ export function App() {
             ) : (
               <Moon className="h-4 w-4 text-slate-700" />
             )}
+          </button>
+
+          {/* 设置入口按钮 */}
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            title="应用设置 (AI 供应商、数据源与偏好设置 Cmd+,)"
+            className="p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
+          >
+            <Settings className="h-4 w-4" />
           </button>
         </div>
       </header>
@@ -219,6 +234,16 @@ export function App() {
         isOpen={isSpotlightOpen}
         onClose={() => setIsSpotlightOpen(false)}
         onSelectResult={handleSelectConversation}
+      />
+
+      {/* 全局设置弹窗 */}
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        totalConversations={stats?.total_conversations}
+        totalMessages={stats?.total_messages}
       />
     </div>
   );

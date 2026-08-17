@@ -389,7 +389,7 @@ export const DashboardView: React.FC<Props> = ({
               热门项目工作区分布 Top 8
             </h2>
             <div className="space-y-2">
-              {stats.top_workspaces.slice(0, 5).map((ws) => (
+              {stats.top_workspaces.slice(0, 8).map((ws) => (
                 <div
                   key={ws.path}
                   className="p-2 rounded theme-bg-sub border theme-border flex items-center justify-between text-xs"
