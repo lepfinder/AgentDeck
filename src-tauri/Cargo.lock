@@ -25,6 +25,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
+ "url",
  "walkdir",
 ]
 
