@@ -265,17 +265,17 @@ export function App() {
         />
       </div>
 
-      {/* 底部全局状态栏（对齐原 Python 统计信息） */}
-      <footer className="h-7 border-t theme-border theme-bg-header px-3 flex items-center justify-between text-[11px] theme-text-sub font-mono select-none flex-shrink-0 z-10">
-        <div className="flex items-center gap-2 truncate pr-4">
-          <span className="font-bold theme-text-main">AI 历史会话</span>
+      {/* 底部全局状态栏（低对比度浅色样式，安静不喧宾夺主） */}
+      <footer className="h-6 border-t theme-border-sub theme-bg-header/40 px-3 flex items-center justify-between text-[10.5px] theme-text-sub font-mono select-none flex-shrink-0 z-10 opacity-75 hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1.5 truncate pr-4">
+          <span className="font-medium">AI 历史会话</span>
           <span>{stats?.total_conversations?.toLocaleString() ?? 0} 会话</span>
           {(() => {
             const parts = (stats?.agent_comparison_convs || [])
               .filter((a) => a.count > 0)
               .map((a) => `${a.label} ${a.count}`);
             return parts.length > 0 ? (
-              <span className="theme-text-muted">（{parts.join(' · ')}）</span>
+              <span>（{parts.join(' · ')}）</span>
             ) : null;
           })()}
           <span>· 用户 {stats?.total_user_messages?.toLocaleString() ?? 0}</span>
@@ -292,13 +292,13 @@ export function App() {
 
         <div className="flex items-center gap-3 flex-shrink-0 text-[10px]">
           <div
-            className="flex items-center gap-1.5 theme-text-muted"
+            className="flex items-center gap-1"
             title="本地多源 Agent 会话文件监听中，有更新将自动增量同步"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70 animate-pulse" />
             <span>监听中</span>
           </div>
-          <span className="theme-text-sub">AgentDeck Desktop</span>
+          <span>AgentDeck</span>
         </div>
       </footer>
 
