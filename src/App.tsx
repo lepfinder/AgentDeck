@@ -8,7 +8,6 @@ import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { SettingsModal } from './components/settings/SettingsModal';
 import {
   Search,
-  Sparkles,
   Command,
   Sun,
   Moon,
@@ -169,11 +168,13 @@ export function App() {
           <button
             onClick={handleLogoClick}
             title="点击返回全景大盘"
-            className="flex items-center gap-2 hover:opacity-80 transition-opacity cursor-pointer group"
+            className="flex items-center gap-2 hover:opacity-85 transition-opacity cursor-pointer group"
           >
-            <div className="w-6 h-6 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
-              <Sparkles className="h-3.5 w-3.5" />
-            </div>
+            <img
+              src="/app-icon.png"
+              alt="AgentDeck"
+              className="w-6 h-6 rounded-lg shadow-sm group-hover:scale-105 transition-transform object-cover"
+            />
             <span className="font-bold text-sm tracking-tight theme-text-main">AgentDeck</span>
           </button>
           <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
