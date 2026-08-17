@@ -36,8 +36,10 @@ export interface ToolCallItem {
 export interface MessageItem {
   id: string;
   conversation_id: string;
+  step_index?: number;
   sender: 'user' | 'assistant' | 'tool' | 'system' | string;
   text: string;
+  thinking?: string;
   created_at?: string;
   model_name?: string;
   token_count?: number;

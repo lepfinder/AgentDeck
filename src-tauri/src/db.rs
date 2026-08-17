@@ -38,8 +38,10 @@ pub struct ConversationItem {
 pub struct MessageItem {
     pub id: String,
     pub conversation_id: String,
+    pub step_index: Option<i64>,
     pub sender: String,
     pub text: String,
+    pub thinking: Option<String>,
     pub created_at: Option<String>,
     pub model_name: Option<String>,
     pub token_count: Option<i64>,
@@ -758,9 +760,10 @@ pub fn fetch_conversations(
 pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> Result<Vec<MessageItem>> {
     let mut list = Vec::new();
     let mut stmt = conn.prepare(
-        "SELECT id, conversation_id,
+        "SELECT id, conversation_id, step_index,
                 CASE WHEN role LIKE '%user%' THEN 'user' WHEN role LIKE '%tool%' THEN 'tool' ELSE 'assistant' END as sender,
                 content as text,
+                thinking,
                 created_at,
                 source as model_name,
                 NULL as token_count,
@@ -776,13 +779,15 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
         Ok(MessageItem {
             id: id_val.to_string(),
             conversation_id: row.get(1)?,
-            sender: row.get(2)?,
-            text: row.get(3)?,
-            created_at: row.get(4)?,
-            model_name: row.get(5)?,
-            token_count: row.get(6)?,
-            duration_ms: row.get(7)?,
-            tool_calls_json: row.get(8)?,
+            step_index: row.get(2)?,
+            sender: row.get(3)?,
+            text: row.get(4)?,
+            thinking: row.get(5)?,
+            created_at: row.get(6)?,
+            model_name: row.get(7)?,
+            token_count: row.get(8)?,
+            duration_ms: row.get(9)?,
+            tool_calls_json: row.get(10)?,
         })
     })?;
 
