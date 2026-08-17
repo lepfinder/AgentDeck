@@ -11,6 +11,7 @@ import {
   Star,
   Clock,
   ArrowUpRight,
+  Calendar,
 } from 'lucide-react';
 
 interface Props {
@@ -28,6 +29,7 @@ export const DashboardView: React.FC<Props> = ({
 }) => {
   const [agentTab, setAgentTab] = useState<'convs' | 'msgs'>('msgs');
   const [punchcardTab, setPunchcardTab] = useState<'msgs' | 'convs'>('msgs');
+  const [heatmapTab, setHeatmapTab] = useState<'msgs' | 'convs'>('msgs');
   const [topRankTab, setTopRankTab] = useState<'all' | 'user'>('all');
 
   if (loading && !stats) {
@@ -50,6 +52,50 @@ export const DashboardView: React.FC<Props> = ({
   const agentData = agentTab === 'convs' ? stats.agent_comparison_convs : stats.agent_comparison_msgs;
   const punchcardData = punchcardTab === 'msgs' ? stats.punchcard_msgs : stats.punchcard_convs;
   const topRankData = topRankTab === 'all' ? stats.top_conversations_all : stats.top_conversations_user;
+
+  // 将 365 天日历组织为 52 周 × 7 天网格
+  const heatmapData = heatmapTab === 'msgs' ? (stats.heatmap_cells || []) : (stats.heatmap_cells_convs || []);
+  const weeks: Array<Array<{ date: string; count: number; level: number } | null>> = [];
+  if (heatmapData.length > 0) {
+    let currentWeek: Array<{ date: string; count: number; level: number } | null> = [];
+    const firstDate = new Date(heatmapData[0].date);
+    const startDayOfWeek = firstDate.getDay(); // 0 is Sunday
+
+    for (let i = 0; i < startDayOfWeek; i++) {
+      currentWeek.push(null);
+    }
+
+    for (const cell of heatmapData) {
+      currentWeek.push(cell);
+      if (currentWeek.length === 7) {
+        weeks.push(currentWeek);
+        currentWeek = [];
+      }
+    }
+    if (currentWeek.length > 0) {
+      while (currentWeek.length < 7) {
+        currentWeek.push(null);
+      }
+      weeks.push(currentWeek);
+    }
+  }
+
+  // 月份表头标签
+  const monthLabels: { month: string; colIndex: number }[] = [];
+  let lastMonth = -1;
+  weeks.forEach((week, colIdx) => {
+    const validDay = week.find((d) => d !== null);
+    if (validDay) {
+      const m = new Date(validDay.date).getMonth();
+      if (m !== lastMonth) {
+        monthLabels.push({
+          month: `${m + 1}月`,
+          colIndex: colIdx,
+        });
+        lastMonth = m;
+      }
+    }
+  });
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6">
@@ -254,7 +300,7 @@ export const DashboardView: React.FC<Props> = ({
               ))}
             </div>
 
-            {/* 底部图例 */}
+              {/* 底部图例 */}
             <div className="flex items-center justify-between text-[11px] theme-text-muted pt-2 border-t theme-border-sub">
               <span>0h (午夜)</span>
               <div className="flex items-center gap-1.5">
@@ -272,7 +318,147 @@ export const DashboardView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* 中部第二排：深度会话排行榜 Top 10 + 工具调用分布与热门项目 */}
+      {/* 中部第二排：GitHub 风格年度活跃全景热力图 (Annual Contribution Calendar) */}
+      <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-emerald-500" />
+              AI 编码活跃热力全景 (Annual Contribution Heatmap)
+            </h2>
+            <p className="text-xs theme-text-muted mt-0.5">
+              过去 365 天跨平台智能体会话密度与每日代码交互节奏
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {/* 核心副指标 Chips */}
+            <div className="hidden md:flex items-center gap-3 text-xs theme-text-muted mr-2">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <span>活跃天数:</span>
+                <strong className="theme-text-main font-mono">{stats.heatmap_active_days || 0} 天</strong>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-blue-500" />
+                <span>连续活跃:</span>
+                <strong className="theme-text-main font-mono">{stats.heatmap_longest_streak || 0} 天</strong>
+              </div>
+              {stats.heatmap_peak_day && (
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  <span>单日最高:</span>
+                  <strong className="theme-text-main font-mono">
+                    {stats.heatmap_peak_count} 条
+                  </strong>
+                  <span className="text-[10px] opacity-75">({stats.heatmap_peak_day})</span>
+                </div>
+              )}
+            </div>
+
+            {/* 切换 Tab */}
+            <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+              <button
+                onClick={() => setHeatmapTab('msgs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  heatmapTab === 'msgs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按消息数
+              </button>
+              <button
+                onClick={() => setHeatmapTab('convs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  heatmapTab === 'convs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按会话数
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* 52 周日历热力网格 */}
+        <div className="overflow-x-auto pb-2 scrollbar-thin">
+          <div className="inline-block min-w-full">
+            {/* 月份表头 */}
+            <div className="flex text-[11px] theme-text-muted mb-1.5 pl-7 h-4 relative">
+              {monthLabels.map((lbl, idx) => (
+                <span
+                  key={idx}
+                  style={{
+                    position: 'absolute',
+                    left: `${lbl.colIndex * 15 + 28}px`,
+                  }}
+                  className="font-medium"
+                >
+                  {lbl.month}
+                </span>
+              ))}
+            </div>
+
+            {/* 网格主体：左侧星期 + 52 周列 */}
+            <div className="flex gap-1.5">
+              {/* 左侧星期标签 (日/二/四/六 或 Mon/Wed/Fri) */}
+              <div className="flex flex-col justify-between text-[9px] theme-text-muted pr-1 py-0.5 h-[104px] select-none">
+                <span>周日</span>
+                <span>周二</span>
+                <span>周四</span>
+                <span>周六</span>
+              </div>
+
+              {/* 52 周列 */}
+              <div className="flex gap-[3px]">
+                {weeks.map((week, wIdx) => (
+                  <div key={wIdx} className="flex flex-col gap-[3px]">
+                    {week.map((cell, dIdx) => {
+                      if (!cell) {
+                        return (
+                          <div
+                            key={dIdx}
+                            className="w-3 h-3 rounded-[2.5px] opacity-0 pointer-events-none"
+                          />
+                        );
+                      }
+                      return (
+                        <div
+                          key={dIdx}
+                          title={`${cell.date}: ${cell.count.toLocaleString()} ${
+                            heatmapTab === 'msgs' ? '条消息' : '个会话'
+                          }`}
+                          className={`w-3 h-3 rounded-[2.5px] gh-heatmap-cell lvl-${cell.level} border border-black/5 dark:border-white/5 cursor-pointer`}
+                        />
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 底部 Legend 与说明 */}
+            <div className="flex items-center justify-between text-[11px] theme-text-muted mt-3 pt-2.5 border-t theme-border-sub">
+              <span className="text-[11px]">
+                过去 365 天共活跃 <strong className="theme-text-main font-mono">{stats.heatmap_active_days || 0}</strong> 天
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span>少</span>
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
+                <span>多</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 中部第三排：深度会话排行榜 Top 10 + 工具调用分布与热门项目 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 深度会话排行榜 Top 10（占 2 列） */}
         <div className="lg:col-span-2 theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">

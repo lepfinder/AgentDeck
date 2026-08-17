@@ -103,6 +103,12 @@ export interface DashboardStats {
   agent_comparison_msgs: AgentShare[];
   punchcard_msgs: PunchcardSlot[];
   punchcard_convs: PunchcardSlot[];
+  heatmap_cells: HeatmapCell[];
+  heatmap_cells_convs: HeatmapCell[];
+  heatmap_active_days: number;
+  heatmap_longest_streak: number;
+  heatmap_peak_day?: string;
+  heatmap_peak_count: number;
   tool_usage: ToolUsageStat[];
   top_conversations_all: TopRankItem[];
   top_conversations_user: TopRankItem[];

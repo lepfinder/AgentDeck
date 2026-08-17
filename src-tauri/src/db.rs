@@ -130,6 +130,12 @@ pub struct DashboardStats {
     pub agent_comparison_msgs: Vec<AgentShare>,
     pub punchcard_msgs: Vec<PunchcardSlot>,
     pub punchcard_convs: Vec<PunchcardSlot>,
+    pub heatmap_cells: Vec<HeatmapCell>,
+    pub heatmap_cells_convs: Vec<HeatmapCell>,
+    pub heatmap_active_days: i64,
+    pub heatmap_longest_streak: i64,
+    pub heatmap_peak_day: Option<String>,
+    pub heatmap_peak_count: i64,
     pub tool_usage: Vec<ToolUsageStat>,
     pub top_conversations_all: Vec<TopRankItem>,
     pub top_conversations_user: Vec<TopRankItem>,
@@ -714,6 +720,97 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_workspaces.push(r);
     }
 
+    // 5.5 全景 365 天日历热力图 (GitHub 风格)
+    let mut heatmap_cells = Vec::new();
+    let mut heatmap_cells_convs = Vec::new();
+    let today = Utc::now().date_naive();
+    let start_date = today - chrono::Duration::days(364);
+
+    let mut day_msg_counts: HashMap<String, i64> = HashMap::new();
+    let mut stmt_hm_msg = conn.prepare(
+        "SELECT substr(m.created_at, 1, 10) as d, COUNT(*)
+         FROM messages m
+         WHERE m.created_at IS NOT NULL AND m.created_at != ''
+         GROUP BY d"
+    )?;
+    let hm_msg_rows = stmt_hm_msg.query_map([], |r| {
+        let d: String = r.get(0)?;
+        let c: i64 = r.get(1)?;
+        Ok((d, c))
+    })?;
+    for r in hm_msg_rows.flatten() {
+        day_msg_counts.insert(r.0, r.1);
+    }
+
+    let mut day_conv_counts: HashMap<String, i64> = HashMap::new();
+    let mut stmt_hm_conv = conn.prepare(
+        "SELECT substr(COALESCE(c.created_at, c.updated_at), 1, 10) as d, COUNT(*)
+         FROM conversations c
+         WHERE (c.created_at IS NOT NULL AND c.created_at != '') OR (c.updated_at IS NOT NULL AND c.updated_at != '')
+         GROUP BY d"
+    )?;
+    let hm_conv_rows = stmt_hm_conv.query_map([], |r| {
+        let d: String = r.get(0)?;
+        let c: i64 = r.get(1)?;
+        Ok((d, c))
+    })?;
+    for r in hm_conv_rows.flatten() {
+        day_conv_counts.insert(r.0, r.1);
+    }
+
+    let mut heatmap_active_days = 0i64;
+    let mut heatmap_longest_streak = 0i64;
+    let mut current_streak = 0i64;
+    let mut heatmap_peak_day: Option<String> = None;
+    let mut heatmap_peak_count = 0i64;
+
+    for i in 0..365 {
+        let curr = start_date + chrono::Duration::days(i);
+        let date_str = curr.format("%Y-%m-%d").to_string();
+        let msg_cnt = *day_msg_counts.get(&date_str).unwrap_or(&0);
+        let conv_cnt = *day_conv_counts.get(&date_str).unwrap_or(&0);
+
+        if msg_cnt > 0 {
+            heatmap_active_days += 1;
+            current_streak += 1;
+            if current_streak > heatmap_longest_streak {
+                heatmap_longest_streak = current_streak;
+            }
+            if msg_cnt > heatmap_peak_count {
+                heatmap_peak_count = msg_cnt;
+                heatmap_peak_day = Some(date_str.clone());
+            }
+        } else {
+            current_streak = 0;
+        }
+
+        let level_msg = match msg_cnt {
+            0 => 0,
+            1..=10 => 1,
+            11..=40 => 2,
+            41..=100 => 3,
+            _ => 4,
+        };
+        let level_conv = match conv_cnt {
+            0 => 0,
+            1..=2 => 1,
+            3..=5 => 2,
+            6..=12 => 3,
+            _ => 4,
+        };
+
+        heatmap_cells.push(HeatmapCell {
+            date: date_str.clone(),
+            count: msg_cnt,
+            level: level_msg,
+        });
+        heatmap_cells_convs.push(HeatmapCell {
+            date: date_str,
+            count: conv_cnt,
+            level: level_conv,
+        });
+    }
+
     let raw_sync: Option<String> = conn.query_row(
         "SELECT COALESCE(finished_at, created_at) FROM sync_runs ORDER BY id DESC LIMIT 1",
         [],
@@ -732,6 +829,12 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         agent_comparison_msgs,
         punchcard_msgs,
         punchcard_convs,
+        heatmap_cells,
+        heatmap_cells_convs,
+        heatmap_active_days,
+        heatmap_longest_streak,
+        heatmap_peak_day,
+        heatmap_peak_count,
         tool_usage,
         top_conversations_all,
         top_conversations_user,

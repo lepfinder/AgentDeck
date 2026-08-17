@@ -126,6 +126,45 @@
   box-shadow: 0 0 10px rgba(37, 99, 235, 0.4);
 }
 
+/* GitHub 风格年度活跃热力图色阶 (Emerald Theme) */
+.gh-heatmap-cell {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.gh-heatmap-cell:hover {
+  transform: scale(1.25);
+  z-index: 10;
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.gh-heatmap-cell.lvl-0 {
+  background: var(--bg-tag);
+}
+.gh-heatmap-cell.lvl-1 {
+  background: #0e4429;
+}
+[data-theme='light'] .gh-heatmap-cell.lvl-1 {
+  background: #9be9a8;
+}
+.gh-heatmap-cell.lvl-2 {
+  background: #006d32;
+}
+[data-theme='light'] .gh-heatmap-cell.lvl-2 {
+  background: #40c463;
+}
+.gh-heatmap-cell.lvl-3 {
+  background: #26a641;
+}
+[data-theme='light'] .gh-heatmap-cell.lvl-3 {
+  background: #30a14e;
+}
+.gh-heatmap-cell.lvl-4 {
+  background: #39d353;
+  box-shadow: 0 0 6px rgba(57, 211, 83, 0.4);
+}
+[data-theme='light'] .gh-heatmap-cell.lvl-4 {
+  background: #216e39;
+  box-shadow: 0 0 6px rgba(33, 110, 57, 0.3);
+}
+
 /* Markdown 样式（精致紧凑桌面端字阶） */
 .markdown-body {
   color: var(--text-main);
