@@ -100,4 +100,40 @@ export const api = {
     });
     return await res.json();
   },
+
+  async testLlmConnection(
+    baseUrl: string,
+    apiKey: string,
+    model: string
+  ): Promise<{ success: boolean; message: string; latency_ms: number }> {
+    if (isTauri()) {
+      return await invoke<{ success: boolean; message: string; latency_ms: number }>(
+        'test_llm_connection',
+        { baseUrl, apiKey, model }
+      );
+    }
+    const start = Date.now();
+    try {
+      const targetUrl = `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+      const res = await fetch(targetUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: apiKey ? `Bearer ${apiKey}` : '',
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'Ping' }],
+          max_tokens: 5,
+        }),
+      });
+      const latency = Date.now() - start;
+      if (res.ok) {
+        return { success: true, message: '连接成功！模型响应正常', latency_ms: latency };
+      }
+      return { success: false, message: `HTTP ${res.status}`, latency_ms: latency };
+    } catch (e: any) {
+      return { success: false, message: e.message, latency_ms: Date.now() - start };
+    }
+  },
 };

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { api } from '../../api/tauriBridge';
 import {
   X,
   Bot,
@@ -188,52 +189,23 @@ export const SettingsModal: React.FC<Props> = ({
     setTestResult(null);
   };
 
-  // 测试连接
+  // 测试连接（通过 Rust 原生端点发起，彻底避免 WebKit/浏览器 CORS 拦截）
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    const startTime = Date.now();
 
     try {
-      const targetUrl = `${currentBaseUrl.replace(/\/+$/, '')}/chat/completions`;
-      const res = await fetch(targetUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${currentKey}`,
-        },
-        body: JSON.stringify({
-          model: currentModel,
-          messages: [{ role: 'user', content: 'Ping: reply with 1 word' }],
-          max_tokens: 5,
-        }),
+      const res = await api.testLlmConnection(currentBaseUrl, currentKey, currentModel);
+      setTestResult({
+        success: res.success,
+        msg: res.message,
+        latency: res.latency_ms,
       });
-
-      const latency = Date.now() - startTime;
-      if (res.ok) {
-        setTestResult({
-          success: true,
-          msg: `连接成功！模型响应正常`,
-          latency,
-        });
-      } else {
-        const errText = await res.text().catch(() => '');
-        let errMsg = `HTTP ${res.status} ${res.statusText}`;
-        try {
-          const errObj = JSON.parse(errText);
-          if (errObj.error?.message) errMsg = errObj.error.message;
-        } catch {}
-        setTestResult({
-          success: false,
-          msg: `连接失败: ${errMsg}`,
-          latency,
-        });
-      }
     } catch (e: any) {
       setTestResult({
         success: false,
-        msg: `网络请求失败: ${e.message || '无法连接到接口端点'}`,
-        latency: Date.now() - startTime,
+        msg: `请求异常: ${e.message || e}`,
+        latency: 0,
       });
     } finally {
       setTesting(false);

@@ -6,6 +6,7 @@ use db::{
     WorkspaceDetailStats, fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
     toggle_star_session, search_global_messages, fetch_workspace_detail_stats
 };
+use serde::{Deserialize, Serialize};
 use sync::{SyncResultInfo, execute_sync, get_agent_source_paths};
 use tauri::{State, Manager, Emitter};
 use std::collections::HashMap;
@@ -70,6 +71,85 @@ fn search_messages(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmTestResult {
+    pub success: bool,
+    pub message: String,
+    pub latency_ms: u64,
+}
+
+#[tauri::command]
+async fn test_llm_connection(
+    base_url: String,
+    api_key: String,
+    model: String,
+) -> Result<LlmTestResult, String> {
+    let start = std::time::Instant::now();
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return Ok(LlmTestResult {
+                success: false,
+                message: format!("HTTP客户端初始化失败: {}", e),
+                latency_ms: 0,
+            });
+        }
+    };
+
+    let payload = serde_json::json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Ping: reply 1 word"}],
+        "max_tokens": 5
+    });
+
+    let mut req = client.post(&url).json(&payload);
+    if !api_key.trim().is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key.trim()));
+    }
+
+    match req.send().await {
+        Ok(res) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            let status = res.status();
+            if status.is_success() {
+                Ok(LlmTestResult {
+                    success: true,
+                    message: "连接成功！模型响应正常".to_string(),
+                    latency_ms,
+                })
+            } else {
+                let err_body = res.text().await.unwrap_or_default();
+                let mut err_msg = format!("HTTP {}", status);
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_body) {
+                    if let Some(msg) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                        err_msg = msg.to_string();
+                    } else if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
+                        err_msg = msg.to_string();
+                    }
+                }
+                Ok(LlmTestResult {
+                    success: false,
+                    message: format!("连接失败: {}", err_msg),
+                    latency_ms,
+                })
+            }
+        }
+        Err(e) => {
+            let latency_ms = start.elapsed().as_millis() as u64;
+            Ok(LlmTestResult {
+                success: false,
+                message: format!("网络连接异常: {}", e),
+                latency_ms,
+            })
+        }
+    }
+}
+
 #[tauri::command]
 fn trigger_sync(full: Option<bool>) -> Result<SyncResultInfo, String> {
     Ok(execute_sync(full.unwrap_or(false)))
@@ -90,7 +170,8 @@ pub fn run() {
             get_conversation_messages,
             toggle_star,
             search_messages,
-            trigger_sync
+            trigger_sync,
+            test_llm_connection
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
