@@ -71,8 +71,8 @@ export const DashboardView: React.FC<Props> = ({
   const resolvedHourlyDate =
     hourlyDate && hourlyDateList.includes(hourlyDate)
       ? hourlyDate
-      : hourlyDateList.includes(yesterdayStr)
-        ? yesterdayStr
+      : hourlyDateList.includes(todayStr)
+        ? todayStr
         : hourlyDateList[hourlyDateList.length - 1] || todayStr;
   const hourlyDateIdx = hourlyDateList.indexOf(resolvedHourlyDate);
   const canPrevDay = hourlyDateIdx > 0;

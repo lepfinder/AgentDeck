@@ -11,6 +11,10 @@ use super::{
     ImporterStats, RawConversation, RawMessage,
 };
 
+/// 解析格式版本：变更后即使 Cursor 主库未改动，也强制重写已入库会话的消息时间戳
+const CURSOR_PARSER_REV: &str = "bubble-created-at-v1";
+const CURSOR_PARSER_REV_KEY: &str = "agentdeck:cursor_parser_rev";
+
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
         app: "Cursor".to_string(),
@@ -30,8 +34,9 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         return stats;
     }
 
-    // 增量：Cursor 主库未变则整源跳过，避免全表扫 composerData
-    if incremental && !needs_sync(conn, &cursor_db, true) {
+    // 增量：Cursor 主库未变则整源跳过。解析格式升级时除外，否则旧时间戳不会被重写。
+    let force_reparse = cursor_parser_rev_stale(conn);
+    if incremental && !force_reparse && !needs_sync(conn, &cursor_db, true) {
         stats.skipped_count += 1;
         return stats;
     }
@@ -105,7 +110,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                     String::new()
                 };
 
-                if incremental {
+                if incremental && !force_reparse {
                     if let Some((prev_up, prev_cnt)) = existing_map.get(&cid) {
                         if *prev_cnt == msg_cnt && *prev_up == norm_updated {
                             stats.skipped_count += 1;
@@ -176,14 +181,14 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
 
         if stats.error_count == 0 {
-            record_sync_state(conn, &cursor_db, "cursor:state_vscdb", "cursor_db");
+            mark_cursor_synced(conn, &cursor_db);
         }
         return stats;
     }
 
     if changed_keys.is_empty() {
         if stats.error_count == 0 {
-            record_sync_state(conn, &cursor_db, "cursor:state_vscdb", "cursor_db");
+            mark_cursor_synced(conn, &cursor_db);
         }
         return stats;
     }
@@ -217,7 +222,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     }
 
     if stats.error_count == 0 {
-        record_sync_state(conn, &cursor_db, "cursor:state_vscdb", "cursor_db");
+        mark_cursor_synced(conn, &cursor_db);
     }
 
     stats
@@ -646,4 +651,30 @@ fn bubble_created_at(header: &Value, bubble: &Value) -> Option<String> {
     }
     let ms = raw.as_i64().or_else(|| raw.as_f64().map(|v| v as i64))?;
     chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+}
+
+fn cursor_parser_rev_stale(conn: &Connection) -> bool {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM sync_state WHERE source_path = ?",
+            params![CURSOR_PARSER_REV_KEY],
+            |r| r.get(0),
+        )
+        .ok();
+    stored.as_deref() != Some(CURSOR_PARSER_REV)
+}
+
+fn mark_cursor_synced(conn: &Connection, cursor_db: &Path) {
+    record_sync_state(conn, cursor_db, "cursor:state_vscdb", "cursor_db");
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        VALUES (?1, ?2, 'cursor_parser', 0, 0, ?3)
+        ON CONFLICT(source_path) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            synced_at = excluded.synced_at
+        "#,
+        params![CURSOR_PARSER_REV_KEY, CURSOR_PARSER_REV, now],
+    );
 }
