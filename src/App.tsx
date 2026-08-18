@@ -100,7 +100,7 @@ export function App() {
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [appVersion, setAppVersion] = useState<string>('0.2.1');
+  const [appVersion, setAppVersion] = useState<string>('0.2.2');
 
   useEffect(() => {
     api.getAppVersion().then((v) => {

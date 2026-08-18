@@ -234,91 +234,54 @@ export const DashboardView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* 中部第一排：Agent 平台分布占比 + 24 小时活跃时段分布 */}
+      {/* 中部第一排：按日 24 小时柱状图 + 近 30 天柱状图 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Agent 平台分布占比 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-                <Layers className="h-4 w-4 text-blue-500" />
-                Agent 平台分布占比
-              </h2>
-              {/* 双维切换 Tab */}
-              <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-blue-500" />
+              按日 24 小时活跃量
+            </h2>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center theme-bg-sub rounded-lg border theme-border text-xs">
                 <button
-                  onClick={() => setAgentTab('convs')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    agentTab === 'convs'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'theme-text-muted hover:theme-text-main'
+                  type="button"
+                  disabled={!canPrevDay}
+                  onClick={() => canPrevDay && setHourlyDate(hourlyDateList[hourlyDateIdx - 1])}
+                  className={`p-1 rounded-l-md transition-all ${
+                    canPrevDay
+                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
+                      : 'theme-text-sub opacity-40 cursor-not-allowed'
                   }`}
+                  title="前一天"
                 >
-                  <Layers className="h-3 w-3" /> 按会话数
+                  <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
-                <button
-                  onClick={() => setAgentTab('msgs')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    agentTab === 'msgs'
-                      ? 'bg-blue-600 text-white shadow-sm'
-                      : 'theme-text-muted hover:theme-text-main'
-                  }`}
+                <span
+                  className="px-2 py-1 font-medium theme-text-main tabular-nums min-w-[5.5rem] text-center"
+                  title={resolvedHourlyDate}
                 >
-                  <MessageSquare className="h-3 w-3" /> 按消息数
+                  {formatDayNavLabel(resolvedHourlyDate, todayStr, yesterdayStr)}
+                </span>
+                <button
+                  type="button"
+                  disabled={!canNextDay}
+                  onClick={() => canNextDay && setHourlyDate(hourlyDateList[hourlyDateIdx + 1])}
+                  className={`p-1 rounded-r-md transition-all ${
+                    canNextDay
+                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
+                      : 'theme-text-sub opacity-40 cursor-not-allowed'
+                  }`}
+                  title="后一天"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
                 </button>
               </div>
-            </div>
-
-            {/* 彩色复合进度条 */}
-            <div className="h-3 w-full theme-bg-sub rounded-full overflow-hidden flex mb-5 border theme-border-sub">
-              {agentData.map((item) => (
-                <div
-                  key={item.app}
-                  style={{ width: `${Math.max(1, item.percent)}%`, backgroundColor: item.color }}
-                  title={`${item.label}: ${item.count.toLocaleString()} (${item.percent}%)`}
-                  className="h-full transition-all duration-500 first:rounded-l-full last:rounded-r-full"
-                />
-              ))}
-            </div>
-
-            {/* 各 Agent 明细列表 */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {agentData.map((item) => (
-                <div
-                  key={item.app}
-                  className="theme-bg-sub border theme-border rounded-lg p-2.5 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                      style={{ backgroundColor: item.color }}
-                    />
-                    <span className="text-xs font-medium theme-text-main">{item.label}</span>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs font-bold theme-text-main font-mono">{item.count.toLocaleString()}</div>
-                    <div className="text-[10px] theme-text-muted">{item.percent}%</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* 24 小时活跃时段分布 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-                <Clock className="h-4 w-4 text-emerald-500" />
-                24 小时活跃时段分布 (Hourly Punchcard)
-              </h2>
-              {/* 双维切换 Tab */}
               <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
                 <button
-                  onClick={() => setPunchcardTab('msgs')}
+                  onClick={() => setHourlyTab('msgs')}
                   className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    punchcardTab === 'msgs'
+                    hourlyTab === 'msgs'
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
@@ -326,9 +289,9 @@ export const DashboardView: React.FC<Props> = ({
                   按消息数
                 </button>
                 <button
-                  onClick={() => setPunchcardTab('convs')}
+                  onClick={() => setHourlyTab('convs')}
                   className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    punchcardTab === 'convs'
+                    hourlyTab === 'convs'
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
@@ -337,36 +300,81 @@ export const DashboardView: React.FC<Props> = ({
                 </button>
               </div>
             </div>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
+            <span>
+              当日合计 <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
+            </span>
+            {dayPeak && dayPeak.count > 0 && (
+              <span>
+                峰值 {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
+              </span>
+            )}
+            {viewingToday && (
+              <span className="ml-auto flex items-center gap-1">
+                <span className="w-2 h-2 rounded-sm bg-blue-500 inline-block" />
+                当前小时
+              </span>
+            )}
+          </div>
+          <ActivityBarChart
+            items={dayBarItems}
+            emptyHint="这一天没有交互"
+          />
+        </div>
 
-            {/* 24 小时格子矩阵 */}
-            <div className="grid grid-cols-12 gap-1.5 my-3">
-              {punchcardData.map((slot) => (
-                <div
-                  key={slot.hour}
-                  title={`${slot.hour}:00 - ${slot.count.toLocaleString()} 次 (${slot.percent}%)`}
-                  className={`punchcard-cell lvl-${slot.level} rounded-md h-12 flex flex-col items-center justify-center transition-all hover:scale-105 cursor-pointer border theme-border-sub`}
-                >
-                  <span className="text-[10px] font-bold">{slot.hour}h</span>
-                  <span className="text-[9px] opacity-80">{slot.count}</span>
-                </div>
-              ))}
-            </div>
-
-              {/* 底部图例 */}
-            <div className="flex items-center justify-between text-[11px] theme-text-muted pt-2 border-t theme-border-sub">
-              <span>0h (午夜)</span>
-              <div className="flex items-center gap-1.5">
-                <span>低</span>
-                <span className="w-3 h-3 rounded punchcard-cell lvl-0 inline-block border theme-border-sub" />
-                <span className="w-3 h-3 rounded punchcard-cell lvl-1 inline-block" />
-                <span className="w-3 h-3 rounded punchcard-cell lvl-2 inline-block" />
-                <span className="w-3 h-3 rounded punchcard-cell lvl-3 inline-block" />
-                <span className="w-3 h-3 rounded punchcard-cell lvl-4 inline-block" />
-                <span>高</span>
-              </div>
-              <span>23h (深夜)</span>
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+              <CalendarRange className="h-4 w-4 text-emerald-500" />
+              近 30 天每日活跃量
+            </h2>
+            <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+              <button
+                onClick={() => setLast30Tab('msgs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  last30Tab === 'msgs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按消息数
+              </button>
+              <button
+                onClick={() => setLast30Tab('convs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  last30Tab === 'convs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按会话数
+              </button>
             </div>
           </div>
+          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
+            <span>
+              合计 <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
+            </span>
+            <span>
+              日均 <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
+            </span>
+            {last30Peak && last30Peak.count > 0 && (
+              <span>
+                峰值 {last30Peak.key} · <strong className="theme-text-main font-mono">{last30Peak.count.toLocaleString()}</strong>
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-1">
+              <span className="w-2 h-2 rounded-sm bg-slate-400/45 inline-block" />
+              周末
+            </span>
+          </div>
+          <ActivityBarChart
+            items={last30BarItems}
+            emptyHint="近 30 天暂无数据"
+            onBarClick={(date) => setHourlyDate(date)}
+            showLine
+          />
         </div>
       </div>
 
@@ -510,54 +518,91 @@ export const DashboardView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* 热力图下方：按日 24 小时柱状图 + 近 30 天柱状图 */}
+      {/* 热力图下方：Agent 平台分布占比 + 24 小时活跃时段分布 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
-          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-              <BarChart3 className="h-4 w-4 text-blue-500" />
-              按日 24 小时活跃量
-            </h2>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center theme-bg-sub rounded-lg border theme-border text-xs">
-                <button
-                  type="button"
-                  disabled={!canPrevDay}
-                  onClick={() => canPrevDay && setHourlyDate(hourlyDateList[hourlyDateIdx - 1])}
-                  className={`p-1 rounded-l-md transition-all ${
-                    canPrevDay
-                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
-                      : 'theme-text-sub opacity-40 cursor-not-allowed'
-                  }`}
-                  title="前一天"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                <span
-                  className="px-2 py-1 font-medium theme-text-main tabular-nums min-w-[5.5rem] text-center"
-                  title={resolvedHourlyDate}
-                >
-                  {formatDayNavLabel(resolvedHourlyDate, todayStr, yesterdayStr)}
-                </span>
-                <button
-                  type="button"
-                  disabled={!canNextDay}
-                  onClick={() => canNextDay && setHourlyDate(hourlyDateList[hourlyDateIdx + 1])}
-                  className={`p-1 rounded-r-md transition-all ${
-                    canNextDay
-                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
-                      : 'theme-text-sub opacity-40 cursor-not-allowed'
-                  }`}
-                  title="后一天"
-                >
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+        {/* Agent 平台分布占比 */}
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+                <Layers className="h-4 w-4 text-blue-500" />
+                Agent 平台分布占比
+              </h2>
+              {/* 双维切换 Tab */}
               <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
                 <button
-                  onClick={() => setHourlyTab('msgs')}
+                  onClick={() => setAgentTab('convs')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                    agentTab === 'convs'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'theme-text-muted hover:theme-text-main'
+                  }`}
+                >
+                  <Layers className="h-3 w-3" /> 按会话数
+                </button>
+                <button
+                  onClick={() => setAgentTab('msgs')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                    agentTab === 'msgs'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'theme-text-muted hover:theme-text-main'
+                  }`}
+                >
+                  <MessageSquare className="h-3 w-3" /> 按消息数
+                </button>
+              </div>
+            </div>
+
+            {/* 彩色复合进度条 */}
+            <div className="h-3 w-full theme-bg-sub rounded-full overflow-hidden flex mb-5 border theme-border-sub">
+              {agentData.map((item) => (
+                <div
+                  key={item.app}
+                  style={{ width: `${Math.max(1, item.percent)}%`, backgroundColor: item.color }}
+                  title={`${item.label}: ${item.count.toLocaleString()} (${item.percent}%)`}
+                  className="h-full transition-all duration-500 first:rounded-l-full last:rounded-r-full"
+                />
+              ))}
+            </div>
+
+            {/* 各 Agent 明细列表 */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {agentData.map((item) => (
+                <div
+                  key={item.app}
+                  className="theme-bg-sub border theme-border rounded-lg p-2.5 flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: item.color }}
+                    />
+                    <span className="text-xs font-medium theme-text-main">{item.label}</span>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs font-bold theme-text-main font-mono">{item.count.toLocaleString()}</div>
+                    <div className="text-[10px] theme-text-muted">{item.percent}%</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 24 小时活跃时段分布 */}
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+                <Clock className="h-4 w-4 text-emerald-500" />
+                24 小时活跃时段分布 (Hourly Punchcard)
+              </h2>
+              {/* 双维切换 Tab */}
+              <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+                <button
+                  onClick={() => setPunchcardTab('msgs')}
                   className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    hourlyTab === 'msgs'
+                    punchcardTab === 'msgs'
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
@@ -565,9 +610,9 @@ export const DashboardView: React.FC<Props> = ({
                   按消息数
                 </button>
                 <button
-                  onClick={() => setHourlyTab('convs')}
+                  onClick={() => setPunchcardTab('convs')}
                   className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                    hourlyTab === 'convs'
+                    punchcardTab === 'convs'
                       ? 'bg-blue-600 text-white shadow-sm'
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
@@ -576,80 +621,36 @@ export const DashboardView: React.FC<Props> = ({
                 </button>
               </div>
             </div>
-          </div>
-          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
-            <span>
-              当日合计 <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
-            </span>
-            {dayPeak && dayPeak.count > 0 && (
-              <span>
-                峰值 {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
-              </span>
-            )}
-            {viewingToday && (
-              <span className="ml-auto flex items-center gap-1">
-                <span className="w-2 h-2 rounded-sm bg-blue-500 inline-block" />
-                当前小时
-              </span>
-            )}
-          </div>
-          <ActivityBarChart
-            items={dayBarItems}
-            emptyHint="这一天没有交互"
-          />
-        </div>
 
-        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-              <CalendarRange className="h-4 w-4 text-emerald-500" />
-              近 30 天每日活跃量
-            </h2>
-            <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
-              <button
-                onClick={() => setLast30Tab('msgs')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                  last30Tab === 'msgs'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'theme-text-muted hover:theme-text-main'
-                }`}
-              >
-                按消息数
-              </button>
-              <button
-                onClick={() => setLast30Tab('convs')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
-                  last30Tab === 'convs'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'theme-text-muted hover:theme-text-main'
-                }`}
-              >
-                按会话数
-              </button>
+            {/* 24 小时格子矩阵 */}
+            <div className="grid grid-cols-12 gap-1.5 my-3">
+              {punchcardData.map((slot) => (
+                <div
+                  key={slot.hour}
+                  title={`${slot.hour}:00 - ${slot.count.toLocaleString()} 次 (${slot.percent}%)`}
+                  className={`punchcard-cell lvl-${slot.level} rounded-md h-12 flex flex-col items-center justify-center transition-all hover:scale-105 cursor-pointer border theme-border-sub`}
+                >
+                  <span className="text-[10px] font-bold">{slot.hour}h</span>
+                  <span className="text-[9px] opacity-80">{slot.count}</span>
+                </div>
+              ))}
+            </div>
+
+              {/* 底部图例 */}
+            <div className="flex items-center justify-between text-[11px] theme-text-muted pt-2 border-t theme-border-sub">
+              <span>0h (午夜)</span>
+              <div className="flex items-center gap-1.5">
+                <span>低</span>
+                <span className="w-3 h-3 rounded punchcard-cell lvl-0 inline-block border theme-border-sub" />
+                <span className="w-3 h-3 rounded punchcard-cell lvl-1 inline-block" />
+                <span className="w-3 h-3 rounded punchcard-cell lvl-2 inline-block" />
+                <span className="w-3 h-3 rounded punchcard-cell lvl-3 inline-block" />
+                <span className="w-3 h-3 rounded punchcard-cell lvl-4 inline-block" />
+                <span>高</span>
+              </div>
+              <span>23h (深夜)</span>
             </div>
           </div>
-          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
-            <span>
-              合计 <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
-            </span>
-            <span>
-              日均 <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
-            </span>
-            {last30Peak && last30Peak.count > 0 && (
-              <span>
-                峰值 {last30Peak.key} · <strong className="theme-text-main font-mono">{last30Peak.count.toLocaleString()}</strong>
-              </span>
-            )}
-            <span className="ml-auto flex items-center gap-1">
-              <span className="w-2 h-2 rounded-sm bg-slate-400/45 inline-block" />
-              周末
-            </span>
-          </div>
-          <ActivityBarChart
-            items={last30BarItems}
-            emptyHint="近 30 天暂无数据"
-            onBarClick={(date) => setHourlyDate(date)}
-          />
         </div>
       </div>
 

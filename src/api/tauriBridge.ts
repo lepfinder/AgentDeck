@@ -284,7 +284,7 @@ export const api = {
         const { getVersion } = await import('@tauri-apps/api/app');
         return await getVersion();
       } catch {
-        return '0.2.1';
+        return '0.2.2';
       }
     }
     return '0.2.1';
