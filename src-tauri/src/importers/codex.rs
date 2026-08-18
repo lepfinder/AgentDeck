@@ -5,7 +5,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use walkdir::WalkDir;
 
-use super::{needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage};
+use super::{
+    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+};
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -29,7 +31,9 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let files: Vec<_> = WalkDir::new(&codex_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        .filter(|e| {
+            e.path().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("jsonl")
+        })
         .collect();
 
     for entry in files {
@@ -40,7 +44,11 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
             continue;
         }
 
-        let stem = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let stem = p
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let session_id = if stem.starts_with("rollout-") {
             let parts: Vec<&str> = stem.split('-').collect();
             if parts.len() >= 5 {
@@ -83,7 +91,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     stats
 }
 
-fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
+fn parse_codex_file(
+    cid: &str,
+    path: &Path,
+) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -136,7 +147,10 @@ fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, B
             if let Some(payload) = val.get("payload") {
                 let p_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if p_type == "message" {
-                    let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                    let role = payload
+                        .get("role")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("user");
                     let mut text_parts = Vec::new();
                     if let Some(arr) = payload.get("content").and_then(|v| v.as_array()) {
                         for b in arr {
@@ -173,8 +187,14 @@ fn parse_codex_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, B
                     });
                     step_idx += 1;
                 } else if p_type == "function_call" {
-                    let fn_name = payload.get("name").and_then(|v| v.as_str()).unwrap_or("function");
-                    let fn_args = payload.get("arguments").map(|v| v.to_string()).unwrap_or_default();
+                    let fn_name = payload
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("function");
+                    let fn_args = payload
+                        .get("arguments")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
                     messages.push(RawMessage {
                         step_index: step_idx,
                         role: "assistant".to_string(),

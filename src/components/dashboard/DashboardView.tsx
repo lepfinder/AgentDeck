@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import type { DashboardStats, TopRankItem } from '../../types';
+import type { DashboardStats, DailyBarSlot, HourlyBarSlot, TopRankItem } from '../../types';
 import {
   Layers,
   MessageSquare,
@@ -12,7 +12,13 @@ import {
   Clock,
   ArrowUpRight,
   Calendar,
+  BarChart3,
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
+import { ActivityBarChart } from './ActivityBarChart';
+import type { ActivityBarItem } from './ActivityBarChart';
 
 interface Props {
   stats: DashboardStats | null;
@@ -29,6 +35,9 @@ export const DashboardView: React.FC<Props> = ({
 }) => {
   const [agentTab, setAgentTab] = useState<'convs' | 'msgs'>('msgs');
   const [punchcardTab, setPunchcardTab] = useState<'msgs' | 'convs'>('msgs');
+  const [hourlyTab, setHourlyTab] = useState<'msgs' | 'convs'>('msgs');
+  const [last30Tab, setLast30Tab] = useState<'msgs' | 'convs'>('msgs');
+  const [hourlyDate, setHourlyDate] = useState<string | null>(null);
   const [heatmapTab, setHeatmapTab] = useState<'msgs' | 'convs'>('msgs');
   const [topRankTab, setTopRankTab] = useState<'all' | 'user'>('all');
 
@@ -51,7 +60,46 @@ export const DashboardView: React.FC<Props> = ({
 
   const agentData = agentTab === 'convs' ? stats.agent_comparison_convs : stats.agent_comparison_msgs;
   const punchcardData = punchcardTab === 'msgs' ? stats.punchcard_msgs : stats.punchcard_convs;
+  const hourlyDays = hourlyTab === 'msgs' ? stats.last30_hourly_msgs : stats.last30_hourly_convs;
   const topRankData = topRankTab === 'all' ? stats.top_conversations_all : stats.top_conversations_user;
+  const volumeUnit = (tab: 'msgs' | 'convs') => (tab === 'msgs' ? '条消息' : '个会话');
+  const beijingNow = getBeijingNow();
+  const currentHour = beijingNow.getHours();
+  const todayStr = stats.beijing_today || formatBeijingDate(beijingNow);
+  const yesterdayStr = shiftDateStr(todayStr, -1);
+  const hourlyDateList = (hourlyDays || []).map((d) => d.date);
+  const resolvedHourlyDate =
+    hourlyDate && hourlyDateList.includes(hourlyDate)
+      ? hourlyDate
+      : hourlyDateList.includes(yesterdayStr)
+        ? yesterdayStr
+        : hourlyDateList[hourlyDateList.length - 1] || todayStr;
+  const hourlyDateIdx = hourlyDateList.indexOf(resolvedHourlyDate);
+  const canPrevDay = hourlyDateIdx > 0;
+  const canNextDay = hourlyDateIdx >= 0 && hourlyDateIdx < hourlyDateList.length - 1;
+  const viewingToday = resolvedHourlyDate === todayStr;
+  const dayMsgHours =
+    (stats.last30_hourly_msgs || []).find((d) => d.date === resolvedHourlyDate)?.hours || [];
+  const dayConvHours =
+    (stats.last30_hourly_convs || []).find((d) => d.date === resolvedHourlyDate)?.hours || [];
+  const dayBarItems = toHourlyBarItems(
+    dayMsgHours,
+    dayConvHours,
+    hourlyTab,
+    viewingToday ? currentHour : -1,
+    resolvedHourlyDate,
+  );
+  const last30BarItems = toLast30BarItems(
+    stats.last30_daily_msgs || [],
+    stats.last30_daily_convs || [],
+    last30Tab,
+    resolvedHourlyDate,
+  );
+  const dayTotal = dayBarItems.reduce((sum, item) => sum + item.count, 0);
+  const last30Total = last30BarItems.reduce((sum, item) => sum + item.count, 0);
+  const last30Avg = last30BarItems.length > 0 ? Math.round(last30Total / last30BarItems.length) : 0;
+  const dayPeak = peakItem(dayBarItems);
+  const last30Peak = peakItem(last30BarItems);
 
   // 将 365 天日历组织为 52 周 × 7 天网格
   const heatmapData = heatmapTab === 'msgs' ? (stats.heatmap_cells || []) : (stats.heatmap_cells_convs || []);
@@ -458,7 +506,150 @@ export const DashboardView: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* 中部第三排：深度会话排行榜 Top 10 + 工具调用分布与热门项目 */}
+      {/* 热力图下方：按日 24 小时柱状图 + 近 30 天柱状图 */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
+          <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+              <BarChart3 className="h-4 w-4 text-blue-500" />
+              按日 24 小时活跃量
+            </h2>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center theme-bg-sub rounded-lg border theme-border text-xs">
+                <button
+                  type="button"
+                  disabled={!canPrevDay}
+                  onClick={() => canPrevDay && setHourlyDate(hourlyDateList[hourlyDateIdx - 1])}
+                  className={`p-1 rounded-l-md transition-all ${
+                    canPrevDay
+                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
+                      : 'theme-text-sub opacity-40 cursor-not-allowed'
+                  }`}
+                  title="前一天"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span
+                  className="px-2 py-1 font-medium theme-text-main tabular-nums min-w-[5.5rem] text-center"
+                  title={resolvedHourlyDate}
+                >
+                  {formatDayNavLabel(resolvedHourlyDate, todayStr, yesterdayStr)}
+                </span>
+                <button
+                  type="button"
+                  disabled={!canNextDay}
+                  onClick={() => canNextDay && setHourlyDate(hourlyDateList[hourlyDateIdx + 1])}
+                  className={`p-1 rounded-r-md transition-all ${
+                    canNextDay
+                      ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
+                      : 'theme-text-sub opacity-40 cursor-not-allowed'
+                  }`}
+                  title="后一天"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+                <button
+                  onClick={() => setHourlyTab('msgs')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                    hourlyTab === 'msgs'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'theme-text-muted hover:theme-text-main'
+                  }`}
+                >
+                  按消息数
+                </button>
+                <button
+                  onClick={() => setHourlyTab('convs')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                    hourlyTab === 'convs'
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : 'theme-text-muted hover:theme-text-main'
+                  }`}
+                >
+                  按会话数
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
+            <span>
+              当日合计 <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
+            </span>
+            {dayPeak && dayPeak.count > 0 && (
+              <span>
+                峰值 {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
+              </span>
+            )}
+            {viewingToday && (
+              <span className="ml-auto flex items-center gap-1">
+                <span className="w-2 h-2 rounded-sm bg-blue-500 inline-block" />
+                当前小时
+              </span>
+            )}
+          </div>
+          <ActivityBarChart
+            items={dayBarItems}
+            emptyHint="这一天没有交互"
+          />
+        </div>
+
+        <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+              <CalendarRange className="h-4 w-4 text-emerald-500" />
+              近 30 天每日活跃量
+            </h2>
+            <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
+              <button
+                onClick={() => setLast30Tab('msgs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  last30Tab === 'msgs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按消息数
+              </button>
+              <button
+                onClick={() => setLast30Tab('convs')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+                  last30Tab === 'convs'
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                按会话数
+              </button>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
+            <span>
+              合计 <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
+            </span>
+            <span>
+              日均 <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
+            </span>
+            {last30Peak && last30Peak.count > 0 && (
+              <span>
+                峰值 {last30Peak.key} · <strong className="theme-text-main font-mono">{last30Peak.count.toLocaleString()}</strong>
+              </span>
+            )}
+            <span className="ml-auto flex items-center gap-1">
+              <span className="w-2 h-2 rounded-sm bg-slate-400/45 inline-block" />
+              周末
+            </span>
+          </div>
+          <ActivityBarChart
+            items={last30BarItems}
+            emptyHint="近 30 天暂无数据"
+            onBarClick={(date) => setHourlyDate(date)}
+          />
+        </div>
+      </div>
+
+      {/* 底部：深度会话排行榜 Top 10 + 工具调用分布与热门项目 */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* 深度会话排行榜 Top 10（占 2 列） */}
         <div className="lg:col-span-2 theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
@@ -597,3 +788,94 @@ export const DashboardView: React.FC<Props> = ({
     </div>
   );
 };
+
+function getBeijingNow(): Date {
+  const now = new Date();
+  return new Date(now.getTime() + now.getTimezoneOffset() * 60000 + 8 * 3600 * 1000);
+}
+
+function formatBeijingDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function shiftDateStr(dateStr: string, deltaDays: number): string {
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+  dt.setDate(dt.getDate() + deltaDays);
+  const y = dt.getFullYear();
+  const m = String(dt.getMonth() + 1).padStart(2, '0');
+  const d = String(dt.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function toHourlyBarItems(
+  msgHours: HourlyBarSlot[],
+  convHours: HourlyBarSlot[],
+  metric: 'msgs' | 'convs',
+  currentHour: number,
+  dateStr: string,
+): ActivityBarItem[] {
+  const hours = metric === 'msgs' ? msgHours : convHours;
+  return hours.map((slot, idx) => {
+    const messageCount = msgHours[idx]?.count ?? 0;
+    const conversationCount = convHours[idx]?.count ?? 0;
+    return {
+      key: String(slot.hour),
+      label: slot.hour % 3 === 0 || slot.hour === currentHour ? String(slot.hour) : '',
+      count: slot.count,
+      emphasize: slot.hour === currentHour,
+      tooltipTitle: `${dateStr} ${String(slot.hour).padStart(2, '0')}:00`,
+      messageCount,
+      conversationCount,
+    };
+  });
+}
+
+function toLast30BarItems(
+  msgSlots: DailyBarSlot[],
+  convSlots: DailyBarSlot[],
+  metric: 'msgs' | 'convs',
+  selectedDate: string,
+): ActivityBarItem[] {
+  const slots = metric === 'msgs' ? msgSlots : convSlots;
+  const convByDate = new Map(convSlots.map((s) => [s.date, s.count]));
+  const msgByDate = new Map(msgSlots.map((s) => [s.date, s.count]));
+  return slots.map((slot, idx) => {
+    const parts = slot.date.split('-');
+    const year = parts.length === 3 ? Number(parts[0]) : 0;
+    const month = parts.length === 3 ? Number(parts[1]) : 0;
+    const day = parts.length === 3 ? Number(parts[2]) : 0;
+    const weekday = year > 0 ? new Date(year, month - 1, day).getDay() : -1;
+    const isSelected = slot.date === selectedDate;
+    const showLabel =
+      idx === 0 || idx === slots.length - 1 || day === 1 || isSelected || idx % 5 === 0;
+    const showFull = idx === 0 || idx === slots.length - 1 || day === 1 || isSelected;
+    return {
+      key: slot.date,
+      label: showLabel && month > 0 ? (showFull ? `${month}/${day}` : String(day)) : '',
+      count: slot.count,
+      emphasize: isSelected,
+      muted: weekday === 0 || weekday === 6,
+      tooltipTitle: slot.date,
+      messageCount: msgByDate.get(slot.date) ?? 0,
+      conversationCount: convByDate.get(slot.date) ?? 0,
+    };
+  });
+}
+
+function formatDayNavLabel(dateStr: string, today: string, yesterday: string): string {
+  if (dateStr === today) return '今天';
+  if (dateStr === yesterday) return '昨天';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  return `${Number(parts[1])}月${Number(parts[2])}日`;
+}
+
+function peakItem(items: ActivityBarItem[]): ActivityBarItem | null {
+  if (items.length === 0) return null;
+  return items.reduce((best, item) => (item.count > best.count ? item : best));
+}

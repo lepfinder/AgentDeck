@@ -70,6 +70,21 @@ export interface PunchcardSlot {
   percent: number;
 }
 
+export interface HourlyBarSlot {
+  hour: number;
+  count: number;
+}
+
+export interface DailyBarSlot {
+  date: string;
+  count: number;
+}
+
+export interface DayHourlyBars {
+  date: string;
+  hours: HourlyBarSlot[];
+}
+
 export interface TopRankItem {
   id: string;
   title: string;
@@ -103,6 +118,10 @@ export interface DashboardStats {
   agent_comparison_msgs: AgentShare[];
   punchcard_msgs: PunchcardSlot[];
   punchcard_convs: PunchcardSlot[];
+  last30_hourly_msgs: DayHourlyBars[];
+  last30_hourly_convs: DayHourlyBars[];
+  last30_daily_msgs: DailyBarSlot[];
+  last30_daily_convs: DailyBarSlot[];
   heatmap_cells: HeatmapCell[];
   heatmap_cells_convs: HeatmapCell[];
   heatmap_active_days: number;
@@ -114,6 +133,7 @@ export interface DashboardStats {
   top_conversations_user: TopRankItem[];
   top_workspaces: TopWorkspaceItem[];
   last_sync_time?: string;
+  beijing_today: string;
 }
 
 export interface SearchResultItem {

@@ -1,7 +1,7 @@
+use crate::importers::{ImporterStats, SyncEngine};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::importers::{ImporterStats, SyncEngine};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResultInfo {
@@ -19,11 +19,13 @@ pub fn get_agent_source_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(home) = dirs::home_dir() {
         // 1. Cursor
-        let cursor_db = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+        let cursor_db =
+            home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
         if cursor_db.exists() {
             paths.push(cursor_db);
         }
-        let cursor_wal = home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal");
+        let cursor_wal =
+            home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal");
         if cursor_wal.exists() {
             paths.push(cursor_wal);
         }
@@ -173,7 +175,12 @@ fn run_once(full: bool) -> SyncResultInfo {
         details,
     };
 
-    record_sync_run(&conn, if full { "full" } else { "incremental" }, &result, &started_at);
+    record_sync_run(
+        &conn,
+        if full { "full" } else { "incremental" },
+        &result,
+        &started_at,
+    );
     result
 }
 
@@ -206,7 +213,10 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
             break;
         }
         want_full = PENDING_FULL.swap(false, Ordering::SeqCst);
-        println!("[AgentDeck SyncEngine] 检测到排队请求，继续执行 (full: {})...", want_full);
+        println!(
+            "[AgentDeck SyncEngine] 检测到排队请求，继续执行 (full: {})...",
+            want_full
+        );
     }
 
     aggregate.unwrap_or_else(queued_result)

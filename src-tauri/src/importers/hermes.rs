@@ -5,7 +5,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::{needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage};
+use super::{
+    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+};
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -58,7 +60,11 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                     continue;
                 }
 
-                let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                let stem = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let cid = format!("hermes:{}", stem);
                 if synced_cids.contains(&cid) {
                     continue;
@@ -70,22 +76,20 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                 }
 
                 match parse_hermes_jsonl(&cid, &path) {
-                    Ok(Some(conv)) => {
-                        match save_conversation_tx(conn, &conv) {
-                            Ok(is_new) => {
-                                record_sync_state(conn, &path, &cid, "hermes_jsonl");
-                                if is_new {
-                                    stats.new_count += 1;
-                                } else {
-                                    stats.updated_count += 1;
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("[Hermes Importer] 保存失败 {}: {}", cid, e);
-                                stats.error_count += 1;
+                    Ok(Some(conv)) => match save_conversation_tx(conn, &conv) {
+                        Ok(is_new) => {
+                            record_sync_state(conn, &path, &cid, "hermes_jsonl");
+                            if is_new {
+                                stats.new_count += 1;
+                            } else {
+                                stats.updated_count += 1;
                             }
                         }
-                    }
+                        Err(e) => {
+                            eprintln!("[Hermes Importer] 保存失败 {}: {}", cid, e);
+                            stats.error_count += 1;
+                        }
+                    },
                     Ok(None) => {
                         stats.skipped_count += 1;
                     }
@@ -123,11 +127,15 @@ fn sync_hermes_state_db(
         let cwd: Option<String> = row.get(4)?;
 
         let created_at = started_sec.and_then(|s| {
-            chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32).map(|dt| dt.to_rfc3339())
+            chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32)
+                .map(|dt| dt.to_rfc3339())
         });
-        let updated_at = updated_sec.and_then(|s| {
-            chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32).map(|dt| dt.to_rfc3339())
-        }).or_else(|| created_at.clone());
+        let updated_at = updated_sec
+            .and_then(|s| {
+                chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32)
+                    .map(|dt| dt.to_rfc3339())
+            })
+            .or_else(|| created_at.clone());
 
         Ok((id, title, created_at, updated_at, cwd))
     })?;
@@ -139,9 +147,9 @@ fn sync_hermes_state_db(
     let mut updated_cnt = 0;
 
     let mut existing_map: HashMap<String, (Option<String>, i64)> = HashMap::new();
-    if let Ok(mut exist_stmt) = conn.prepare(
-        "SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'hermes:%'",
-    ) {
+    if let Ok(mut exist_stmt) = conn
+        .prepare("SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'hermes:%'")
+    {
         if let Ok(rows) = exist_stmt.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -184,7 +192,8 @@ fn sync_hermes_state_db(
             let tool_calls: Option<String> = m_row.get(3)?;
 
             let m_created = ts_sec.and_then(|s| {
-                chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32).map(|dt| dt.to_rfc3339())
+                chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32)
+                    .map(|dt| dt.to_rfc3339())
             });
 
             Ok((role, content, m_created, tool_calls))
@@ -204,7 +213,11 @@ fn sync_hermes_state_db(
             messages.push(RawMessage {
                 step_index: step_idx,
                 role,
-                message_type: if tool_calls.is_some() { "tool_call".to_string() } else { "text".to_string() },
+                message_type: if tool_calls.is_some() {
+                    "tool_call".to_string()
+                } else {
+                    "text".to_string()
+                },
                 content: text,
                 thinking: None,
                 created_at: m_created,
@@ -247,7 +260,10 @@ fn sync_hermes_state_db(
     Ok((new_cnt, updated_cnt))
 }
 
-fn parse_hermes_jsonl(cid: &str, path: &Path) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
+fn parse_hermes_jsonl(
+    cid: &str,
+    path: &Path,
+) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -274,12 +290,20 @@ fn parse_hermes_jsonl(cid: &str, path: &Path) -> Result<Option<RawConversation>,
         };
 
         if workspace_path.is_empty() {
-            if let Some(ws) = val.get("cwd").or_else(|| val.get("workspace")).and_then(|v| v.as_str()) {
+            if let Some(ws) = val
+                .get("cwd")
+                .or_else(|| val.get("workspace"))
+                .and_then(|v| v.as_str())
+            {
                 workspace_path = super::canonicalize_workspace_path(ws);
             }
         }
 
-        let ts = val.get("timestamp").or_else(|| val.get("created_at")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let ts = val
+            .get("timestamp")
+            .or_else(|| val.get("created_at"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         if created_at.is_none() && ts.is_some() {
             created_at = ts.clone();
         }
@@ -288,7 +312,11 @@ fn parse_hermes_jsonl(cid: &str, path: &Path) -> Result<Option<RawConversation>,
         }
 
         let role = val.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-        let content = val.get("content").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let content = val
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
 
         if content.is_empty() {
             continue;

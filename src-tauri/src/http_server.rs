@@ -1,7 +1,6 @@
 use crate::db::{
-    fetch_conversations, fetch_conversation_messages, fetch_dashboard_stats,
-    fetch_workspace_detail_stats, fetch_workspaces, search_global_messages,
-    get_database_path,
+    fetch_conversation_messages, fetch_conversations, fetch_dashboard_stats,
+    fetch_workspace_detail_stats, fetch_workspaces, get_database_path, search_global_messages,
 };
 use crate::sync::execute_sync;
 use rusqlite::Connection;
@@ -62,7 +61,12 @@ fn handle_connection(mut stream: TcpStream) {
     let parsed_url = match Url::parse(&format!("http://127.0.0.1{}", full_path)) {
         Ok(u) => u,
         Err(_) => {
-            send_response(&mut stream, 400, "application/json", &json!({"ok": false, "error": "Invalid URL"}).to_string());
+            send_response(
+                &mut stream,
+                400,
+                "application/json",
+                &json!({"ok": false, "error": "Invalid URL"}).to_string(),
+            );
             return;
         }
     };
@@ -85,7 +89,8 @@ fn handle_connection(mut stream: TcpStream) {
                 &mut stream,
                 500,
                 "application/json",
-                &json!({"ok": false, "error": format!("Database connection error: {}", e)}).to_string(),
+                &json!({"ok": false, "error": format!("Database connection error: {}", e)})
+                    .to_string(),
             );
             return;
         }
@@ -119,7 +124,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -159,7 +169,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -167,7 +182,10 @@ fn handle_connection(mut stream: TcpStream) {
         ("GET", "/api/conversations") => {
             let workspace = query_params.get("workspace").map(|s| s.as_str());
             let q = query_params.get("q").map(|s| s.as_str());
-            let starred = query_params.get("starred").map(|s| s == "1" || s == "true").unwrap_or(false);
+            let starred = query_params
+                .get("starred")
+                .map(|s| s == "1" || s == "true")
+                .unwrap_or(false);
 
             match fetch_conversations(&conn, workspace, q, starred) {
                 Ok(conversations) => {
@@ -180,7 +198,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -197,7 +220,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -214,7 +242,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -222,7 +255,10 @@ fn handle_connection(mut stream: TcpStream) {
         ("GET", "/api/search") | ("GET", "/api/spotlight") => {
             let q = query_params.get("q").cloned().unwrap_or_default();
             let role = query_params.get("role").map(|s| s.as_str());
-            let limit = query_params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(30);
+            let limit = query_params
+                .get("limit")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(30);
 
             match search_global_messages(&conn, &q, role, limit) {
                 Ok(items) => {
@@ -234,7 +270,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -242,12 +283,30 @@ fn handle_connection(mut stream: TcpStream) {
         ("GET", "/api/user-messages") => {
             let q = query_params.get("q").cloned().unwrap_or_default();
             let workspace = query_params.get("workspace").map(|s| s.as_str());
-            let date = query_params.get("date").map(|s| s.trim()).filter(|s| !s.is_empty());
-            let source = query_params.get("source").map(|s| s.trim()).filter(|s| !s.is_empty());
-            let order = query_params.get("order").map(|s| s.as_str()).unwrap_or("desc");
-            let fmt = query_params.get("format").map(|s| s.as_str()).unwrap_or("compact");
-            let limit = query_params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(50);
-            let offset = query_params.get("offset").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
+            let date = query_params
+                .get("date")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty());
+            let source = query_params
+                .get("source")
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty());
+            let order = query_params
+                .get("order")
+                .map(|s| s.as_str())
+                .unwrap_or("desc");
+            let fmt = query_params
+                .get("format")
+                .map(|s| s.as_str())
+                .unwrap_or("compact");
+            let limit = query_params
+                .get("limit")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(50);
+            let offset = query_params
+                .get("offset")
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
             let is_single_date = date.map(|d| d.len() == 10).unwrap_or(false);
 
             let order_clause = if order == "asc" { "ASC" } else { "DESC" };
@@ -271,7 +330,12 @@ fn handle_connection(mut stream: TcpStream) {
             let mut stmt = match conn.prepare(&sql) {
                 Ok(s) => s,
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                     return;
                 }
             };
@@ -310,10 +374,23 @@ fn handle_connection(mut stream: TcpStream) {
                     let mut conv_order: Vec<String> = Vec::new();
 
                     for msg in &flat_msgs {
-                        let cid = msg.get("conversation_id").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-                        let title = msg.get("conversation_title").and_then(|v| v.as_str()).unwrap_or(&cid);
-                        let src = msg.get("source").and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let ws = msg.get("workspace_path").and_then(|v| v.as_str()).unwrap_or("");
+                        let cid = msg
+                            .get("conversation_id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let title = msg
+                            .get("conversation_title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(&cid);
+                        let src = msg
+                            .get("source")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let ws = msg
+                            .get("workspace_path")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         let created = msg.get("created_at").and_then(|v| v.as_str());
                         let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -333,7 +410,9 @@ fn handle_connection(mut stream: TcpStream) {
                                 }),
                             );
                         } else if let Some(item) = conv_map.get_mut(&cid) {
-                            if let Some(arr) = item.get_mut("messages").and_then(|v| v.as_array_mut()) {
+                            if let Some(arr) =
+                                item.get_mut("messages").and_then(|v| v.as_array_mut())
+                            {
                                 arr.push(json!(line));
                             }
                         }
@@ -371,7 +450,12 @@ fn handle_connection(mut stream: TcpStream) {
                     }
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -388,7 +472,12 @@ fn handle_connection(mut stream: TcpStream) {
                     send_response(&mut stream, 200, "application/json", &body.to_string());
                 }
                 Err(e) => {
-                    send_response(&mut stream, 500, "application/json", &json!({"ok": false, "error": e.to_string()}).to_string());
+                    send_response(
+                        &mut stream,
+                        500,
+                        "application/json",
+                        &json!({"ok": false, "error": e.to_string()}).to_string(),
+                    );
                 }
             }
         }
@@ -402,7 +491,12 @@ fn handle_connection(mut stream: TcpStream) {
                     return;
                 }
             }
-            send_response(&mut stream, 404, "application/json", &json!({"ok": false, "error": "Image not found"}).to_string());
+            send_response(
+                &mut stream,
+                404,
+                "application/json",
+                &json!({"ok": false, "error": "Image not found"}).to_string(),
+            );
         }
 
         ("GET", p) if p.starts_with("/cursor-image/") => {
@@ -414,7 +508,12 @@ fn handle_connection(mut stream: TcpStream) {
                     return;
                 }
             }
-            send_response(&mut stream, 404, "application/json", &json!({"ok": false, "error": "Cursor image not found"}).to_string());
+            send_response(
+                &mut stream,
+                404,
+                "application/json",
+                &json!({"ok": false, "error": "Cursor image not found"}).to_string(),
+            );
         }
 
         ("POST", "/sync") => {
@@ -439,7 +538,13 @@ fn handle_connection(mut stream: TcpStream) {
 }
 
 fn get_mime_from_path(p: &std::path::Path) -> &'static str {
-    match p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase().as_str() {
+    match p
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "webp" => "image/webp",
@@ -588,7 +693,11 @@ fn format_beijing_tag(raw: Option<&str>, is_single_date: bool) -> String {
     }
     if s.contains('T') {
         let parts: Vec<&str> = s.split('T').collect();
-        let time_clean = parts[1].split('.').next().unwrap_or(parts[1]).trim_end_matches('Z');
+        let time_clean = parts[1]
+            .split('.')
+            .next()
+            .unwrap_or(parts[1])
+            .trim_end_matches('Z');
         if is_single_date {
             format!("[{}] ", time_clean)
         } else {

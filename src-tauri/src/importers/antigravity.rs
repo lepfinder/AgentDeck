@@ -1,11 +1,13 @@
+use regex::Regex;
 use rusqlite::Connection;
+use serde_json::Value;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use regex::Regex;
-use serde_json::Value;
 
-use super::{needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage};
+use super::{
+    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+};
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -53,22 +55,20 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
 
         match parse_antigravity_session(&cid, &transcript_path, &path) {
-            Ok(Some(conv)) => {
-                match save_conversation_tx(conn, &conv) {
-                    Ok(is_new) => {
-                        record_sync_state(conn, &transcript_path, &cid, "antigravity_jsonl");
-                        if is_new {
-                            stats.new_count += 1;
-                        } else {
-                            stats.updated_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[Antigravity Importer] 保存失败 {}: {}", cid, e);
-                        stats.error_count += 1;
+            Ok(Some(conv)) => match save_conversation_tx(conn, &conv) {
+                Ok(is_new) => {
+                    record_sync_state(conn, &transcript_path, &cid, "antigravity_jsonl");
+                    if is_new {
+                        stats.new_count += 1;
+                    } else {
+                        stats.updated_count += 1;
                     }
                 }
-            }
+                Err(e) => {
+                    eprintln!("[Antigravity Importer] 保存失败 {}: {}", cid, e);
+                    stats.error_count += 1;
+                }
+            },
             Ok(None) => {
                 stats.skipped_count += 1;
             }
@@ -82,7 +82,11 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     stats
 }
 
-fn parse_antigravity_session(cid: &str, transcript_path: &Path, session_dir: &Path) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
+fn parse_antigravity_session(
+    cid: &str,
+    transcript_path: &Path,
+    session_dir: &Path,
+) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(transcript_path)?;
     let reader = BufReader::new(file);
 
@@ -124,8 +128,12 @@ fn parse_antigravity_session(cid: &str, transcript_path: &Path, session_dir: &Pa
         };
 
         let step_type = json_val.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let raw_content = json_val.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        let timestamp = json_val.get("created_at")
+        let raw_content = json_val
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let timestamp = json_val
+            .get("created_at")
             .or_else(|| json_val.get("timestamp"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
@@ -151,7 +159,9 @@ fn parse_antigravity_session(cid: &str, transcript_path: &Path, session_dir: &Pa
                 for line in raw_content.lines() {
                     if let Some(idx) = line.find("/workspace/") {
                         let sub = &line[idx..];
-                        let cand = super::project_root_from_path(sub.split_whitespace().next().unwrap_or(""));
+                        let cand = super::project_root_from_path(
+                            sub.split_whitespace().next().unwrap_or(""),
+                        );
                         if !cand.is_empty() {
                             workspace_path = cand;
                             break;
@@ -164,7 +174,9 @@ fn parse_antigravity_session(cid: &str, transcript_path: &Path, session_dir: &Pa
         match step_type {
             "USER_INPUT" => {
                 let user_text = if let Some(caps) = user_req_re.captures(raw_content) {
-                    caps.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_else(|| raw_content.to_string())
+                    caps.get(1)
+                        .map(|m| m.as_str().trim().to_string())
+                        .unwrap_or_else(|| raw_content.to_string())
                 } else {
                     raw_content.trim().to_string()
                 };
@@ -190,12 +202,19 @@ fn parse_antigravity_session(cid: &str, transcript_path: &Path, session_dir: &Pa
             }
             "PLANNER_RESPONSE" => {
                 let tool_calls_json = json_val.get("tool_calls").map(|v| v.to_string());
-                let thinking = json_val.get("thinking").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let thinking = json_val
+                    .get("thinking")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
 
                 messages.push(RawMessage {
                     step_index: step_idx,
                     role: "assistant".to_string(),
-                    message_type: if tool_calls_json.is_some() { "tool_call".to_string() } else { "text".to_string() },
+                    message_type: if tool_calls_json.is_some() {
+                        "tool_call".to_string()
+                    } else {
+                        "text".to_string()
+                    },
                     content: raw_content.to_string(),
                     thinking,
                     created_at: timestamp,

@@ -1,20 +1,20 @@
 pub mod db;
-pub mod sync;
 pub mod http_server;
 pub mod importers;
+pub mod sync;
 
 use db::{
-    DbState, DashboardStats, WorkspaceStat, ConversationItem, MessageItem, SearchResultItem,
-    WorkspaceDetailStats, WorkspaceFineBlock, WorkspaceModuleBlock, AnalysisUserMessage,
-    fetch_dashboard_stats, fetch_workspaces, fetch_conversations, fetch_conversation_messages,
-    toggle_star_session, search_global_messages, fetch_workspace_detail_stats,
-    fetch_workspace_analysis_messages, save_workspace_fine_blocks, save_workspace_module_blocks,
-    save_workspace_report, clear_workspace_analysis,
+    clear_workspace_analysis, fetch_conversation_messages, fetch_conversations,
+    fetch_dashboard_stats, fetch_workspace_analysis_messages, fetch_workspace_detail_stats,
+    fetch_workspaces, save_workspace_fine_blocks, save_workspace_module_blocks,
+    save_workspace_report, search_global_messages, toggle_star_session, AnalysisUserMessage,
+    ConversationItem, DashboardStats, DbState, MessageItem, SearchResultItem, WorkspaceDetailStats,
+    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat,
 };
 use serde::{Deserialize, Serialize};
-use sync::{SyncResultInfo, execute_sync, get_agent_source_paths};
-use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use std::collections::HashMap;
+use sync::{execute_sync, get_agent_source_paths, SyncResultInfo};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 
 #[tauri::command]
 fn get_workspace_analysis_messages(
@@ -33,8 +33,13 @@ fn save_workspace_fine_blocks_cmd(
     state: State<'_, DbState>,
 ) -> Result<usize, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    save_workspace_fine_blocks(&conn, &workspace_path, &blocks, clear_existing.unwrap_or(false))
-        .map_err(|e| e.to_string())
+    save_workspace_fine_blocks(
+        &conn,
+        &workspace_path,
+        &blocks,
+        clear_existing.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -45,8 +50,13 @@ fn save_workspace_module_blocks_cmd(
     state: State<'_, DbState>,
 ) -> Result<usize, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    save_workspace_module_blocks(&conn, &workspace_path, &modules, clear_existing.unwrap_or(false))
-        .map_err(|e| e.to_string())
+    save_workspace_module_blocks(
+        &conn,
+        &workspace_path,
+        &modules,
+        clear_existing.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -75,13 +85,19 @@ fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, Stri
 }
 
 #[tauri::command]
-fn get_workspace_detail(workspace_path: String, state: State<'_, DbState>) -> Result<WorkspaceDetailStats, String> {
+fn get_workspace_detail(
+    workspace_path: String,
+    state: State<'_, DbState>,
+) -> Result<WorkspaceDetailStats, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     fetch_workspace_detail_stats(&conn, &workspace_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn list_workspaces(search: Option<String>, state: State<'_, DbState>) -> Result<Vec<WorkspaceStat>, String> {
+fn list_workspaces(
+    search: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<Vec<WorkspaceStat>, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     fetch_workspaces(&conn, search.as_deref()).map_err(|e| e.to_string())
 }
@@ -94,8 +110,13 @@ fn list_conversations(
     state: State<'_, DbState>,
 ) -> Result<Vec<ConversationItem>, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_conversations(&conn, workspace.as_deref(), search.as_deref(), starred_only.unwrap_or(false))
-        .map_err(|e| e.to_string())
+    fetch_conversations(
+        &conn,
+        workspace.as_deref(),
+        search.as_deref(),
+        starred_only.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -108,10 +129,7 @@ fn get_conversation_messages(
 }
 
 #[tauri::command]
-fn toggle_star(
-    conversation_id: String,
-    state: State<'_, DbState>,
-) -> Result<bool, String> {
+fn toggle_star(conversation_id: String, state: State<'_, DbState>) -> Result<bool, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     toggle_star_session(&conn, &conversation_id).map_err(|e| e.to_string())
 }
@@ -183,7 +201,11 @@ async fn test_llm_connection(
                 let err_body = res.text().await.unwrap_or_default();
                 let mut err_msg = format!("HTTP {}", status);
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_body) {
-                    if let Some(msg) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                    if let Some(msg) = val
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                    {
                         err_msg = msg.to_string();
                     } else if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
                         err_msg = msg.to_string();
@@ -263,8 +285,17 @@ async fn call_llm_with_fallback(
 
     // 辅助闭包：发送单次 LLM 请求
     let send_request = |endpoint: &LlmEndpointConfig, attempt_idx: usize| {
-        let url = format!("{}/chat/completions", endpoint.base_url.trim_end_matches('/'));
-        println!("[AgentDeck LLM] 🚀 [{}] POST {} (model: {}, attempt: {})", endpoint.provider_name, url, endpoint.model, attempt_idx + 1);
+        let url = format!(
+            "{}/chat/completions",
+            endpoint.base_url.trim_end_matches('/')
+        );
+        println!(
+            "[AgentDeck LLM] 🚀 [{}] POST {} (model: {}, attempt: {})",
+            endpoint.provider_name,
+            url,
+            endpoint.model,
+            attempt_idx + 1
+        );
         let mut payload = serde_json::json!({
             "model": endpoint.model,
             "messages": messages,
@@ -274,13 +305,17 @@ async fn call_llm_with_fallback(
             payload["max_tokens"] = serde_json::json!(mt);
         }
 
-        let mut req = client.post(&url)
+        let mut req = client
+            .post(&url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&payload);
 
         if !endpoint.api_key.trim().is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", endpoint.api_key.trim()));
+            req = req.header(
+                "Authorization",
+                format!("Bearer {}", endpoint.api_key.trim()),
+            );
         }
         req
     };
@@ -294,13 +329,20 @@ async fn call_llm_with_fallback(
             Ok(res) if res.status().is_success() => {
                 let latency_ms = call_start.elapsed().as_millis() as u64;
                 if let Ok(data) = res.json::<serde_json::Value>().await {
-                    if let Some(content) = data.get("choices")
+                    if let Some(content) = data
+                        .get("choices")
                         .and_then(|c| c.get(0))
                         .and_then(|c| c.get("message"))
                         .and_then(|m| m.get("content"))
-                        .and_then(|s| s.as_str()) {
+                        .and_then(|s| s.as_str())
+                    {
                         if !content.trim().is_empty() {
-                            println!("[AgentDeck LLM] ✅ [{}] HTTP 200 ({}ms, content_len: {})", primary.provider_name, latency_ms, content.len());
+                            println!(
+                                "[AgentDeck LLM] ✅ [{}] HTTP 200 ({}ms, content_len: {})",
+                                primary.provider_name,
+                                latency_ms,
+                                content.len()
+                            );
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: content.to_string(),
@@ -311,11 +353,13 @@ async fn call_llm_with_fallback(
                             });
                         }
                     }
-                    if let Some(reasoning) = data.get("choices")
+                    if let Some(reasoning) = data
+                        .get("choices")
                         .and_then(|c| c.get(0))
                         .and_then(|c| c.get("message"))
                         .and_then(|m| m.get("reasoning_content"))
-                        .and_then(|s| s.as_str()) {
+                        .and_then(|s| s.as_str())
+                    {
                         if !reasoning.trim().is_empty() {
                             println!("[AgentDeck LLM] ✅ [{}] HTTP 200 via reasoning ({}ms, reasoning_len: {})", primary.provider_name, latency_ms, reasoning.len());
                             return Ok(LlmCompletionResult {
@@ -329,21 +373,34 @@ async fn call_llm_with_fallback(
                         }
                     }
                 }
-                primary_err_msg = "主力模型未返回有效的 message.content 或 reasoning_content".to_string();
-                println!("[AgentDeck LLM] ⚠️ [{}] HTTP 200 but content empty", primary.provider_name);
+                primary_err_msg =
+                    "主力模型未返回有效的 message.content 或 reasoning_content".to_string();
+                println!(
+                    "[AgentDeck LLM] ⚠️ [{}] HTTP 200 but content empty",
+                    primary.provider_name
+                );
             }
             Ok(res) => {
                 let status = res.status();
                 let err_txt = res.text().await.unwrap_or_default();
                 let mut msg = format!("HTTP {}", status);
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
-                    if let Some(m) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                    if let Some(m) = val
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                    {
                         msg = m.to_string();
                     } else if let Some(m) = val.get("message").and_then(|m| m.as_str()) {
                         msg = m.to_string();
                     }
                 }
-                println!("[AgentDeck LLM] ❌ [{}] Response error: {} ({})", primary.provider_name, msg, err_txt.chars().take(200).collect::<String>());
+                println!(
+                    "[AgentDeck LLM] ❌ [{}] Response error: {} ({})",
+                    primary.provider_name,
+                    msg,
+                    err_txt.chars().take(200).collect::<String>()
+                );
                 primary_err_msg = msg;
                 // 鉴权或参数错误不重试
                 if status.as_u16() == 401 || status.as_u16() == 403 || status.as_u16() == 404 {
@@ -351,7 +408,12 @@ async fn call_llm_with_fallback(
                 }
             }
             Err(e) => {
-                println!("[AgentDeck LLM] ⚠️ [{}] Network error on attempt {}: {}", primary.provider_name, attempt + 1, e);
+                println!(
+                    "[AgentDeck LLM] ⚠️ [{}] Network error on attempt {}: {}",
+                    primary.provider_name,
+                    attempt + 1,
+                    e
+                );
                 primary_err_msg = format!("网络错误: {}", e);
                 if attempt == 0 {
                     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -370,11 +432,13 @@ async fn call_llm_with_fallback(
             Ok(res) if res.status().is_success() => {
                 let latency_ms = fb_start.elapsed().as_millis() as u64;
                 if let Ok(data) = res.json::<serde_json::Value>().await {
-                    if let Some(content) = data.get("choices")
+                    if let Some(content) = data
+                        .get("choices")
                         .and_then(|c| c.get(0))
                         .and_then(|c| c.get("message"))
                         .and_then(|m| m.get("content"))
-                        .and_then(|s| s.as_str()) {
+                        .and_then(|s| s.as_str())
+                    {
                         if !content.trim().is_empty() {
                             return Ok(LlmCompletionResult {
                                 success: true,
@@ -382,15 +446,20 @@ async fn call_llm_with_fallback(
                                 provider_used: fb.provider_name,
                                 is_fallback: true,
                                 latency_ms,
-                                error: Some(format!("主力模型失败（{}），已自动故障转移至备用模型", primary_err_msg)),
+                                error: Some(format!(
+                                    "主力模型失败（{}），已自动故障转移至备用模型",
+                                    primary_err_msg
+                                )),
                             });
                         }
                     }
-                    if let Some(reasoning) = data.get("choices")
+                    if let Some(reasoning) = data
+                        .get("choices")
                         .and_then(|c| c.get(0))
                         .and_then(|c| c.get("message"))
                         .and_then(|m| m.get("reasoning_content"))
-                        .and_then(|s| s.as_str()) {
+                        .and_then(|s| s.as_str())
+                    {
                         if !reasoning.trim().is_empty() {
                             return Ok(LlmCompletionResult {
                                 success: true,
@@ -398,7 +467,10 @@ async fn call_llm_with_fallback(
                                 provider_used: fb.provider_name,
                                 is_fallback: true,
                                 latency_ms,
-                                error: Some(format!("主力模型失败（{}），已自动故障转移至备用模型", primary_err_msg)),
+                                error: Some(format!(
+                                    "主力模型失败（{}），已自动故障转移至备用模型",
+                                    primary_err_msg
+                                )),
                             });
                         }
                     }
@@ -409,7 +481,11 @@ async fn call_llm_with_fallback(
                 let err_txt = res.text().await.unwrap_or_default();
                 let mut msg = format!("HTTP {}", status);
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
-                    if let Some(m) = val.get("error").and_then(|e| e.get("message")).and_then(|m| m.as_str()) {
+                    if let Some(m) = val
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                    {
                         msg = m.to_string();
                     }
                 }
@@ -429,7 +505,10 @@ async fn call_llm_with_fallback(
                     provider_used: fb.provider_name,
                     is_fallback: true,
                     latency_ms: fb_start.elapsed().as_millis() as u64,
-                    error: Some(format!("主力失败: {}; 备用网络错误: {}", primary_err_msg, e)),
+                    error: Some(format!(
+                        "主力失败: {}; 备用网络错误: {}",
+                        primary_err_msg, e
+                    )),
                 });
             }
         }
@@ -441,7 +520,10 @@ async fn call_llm_with_fallback(
         provider_used: primary.provider_name,
         is_fallback: false,
         latency_ms: start.elapsed().as_millis() as u64,
-        error: Some(format!("主力模型调用失败（{}），未配置或未启用备用模型", primary_err_msg)),
+        error: Some(format!(
+            "主力模型调用失败（{}），未配置或未启用备用模型",
+            primary_err_msg
+        )),
     })
 }
 
@@ -451,7 +533,7 @@ async fn test_llm_pipeline(
     fallback: Option<LlmEndpointConfig>,
 ) -> Result<PipelineTestResult, String> {
     let p_res = test_llm_connection(primary.base_url, primary.api_key, primary.model).await?;
-    
+
     let mut fb_res = None;
     if let Some(fb) = fallback {
         let r = test_llm_connection(fb.base_url, fb.api_key, fb.model).await?;
@@ -477,14 +559,15 @@ async fn test_llm_pipeline(
 }
 
 #[tauri::command]
-async fn trigger_sync(app_handle: tauri::AppHandle, full: Option<bool>) -> Result<SyncResultInfo, String> {
+async fn trigger_sync(
+    app_handle: tauri::AppHandle,
+    full: Option<bool>,
+) -> Result<SyncResultInfo, String> {
     let is_full = full.unwrap_or(false);
     let _ = app_handle.emit("sync-started", ());
-    let res = tauri::async_runtime::spawn_blocking(move || {
-        execute_sync(is_full)
-    })
-    .await
-    .map_err(|e| format!("同步任务执行失败: {}", e));
+    let res = tauri::async_runtime::spawn_blocking(move || execute_sync(is_full))
+        .await
+        .map_err(|e| format!("同步任务执行失败: {}", e));
 
     let _ = app_handle.emit("sync-completed", ());
     res
@@ -532,7 +615,8 @@ pub fn run() {
             // 启动后台多源智能监听线程（每 30 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
-                let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> = HashMap::new();
+                let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> =
+                    HashMap::new();
                 let mut last_sync_at = std::time::Instant::now()
                     .checked_sub(std::time::Duration::from_secs(60))
                     .unwrap_or_else(std::time::Instant::now);

@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../aicoding-chat-viewer"
+		},
+		{
+			"path": "../../github/agentsview"
+		}
+	],
+	"settings": {}
+}

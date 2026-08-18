@@ -1,21 +1,21 @@
-use serde::{Deserialize, Serialize};
 use rusqlite::{params, Connection, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::Instant;
 
 pub mod antigravity;
-pub mod cursor;
 pub mod claude;
 pub mod codex;
+pub mod cursor;
 pub mod hermes;
 pub mod workbuddy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawMessage {
     pub step_index: i64,
-    pub role: String, // "user" | "assistant" | "system" | "tool"
+    pub role: String,         // "user" | "assistant" | "system" | "tool"
     pub message_type: String, // "text" | "tool_call" | "tool_result"
     pub content: String,
     pub thinking: Option<String>,
@@ -110,7 +110,11 @@ pub fn canonicalize_workspace_path(path_str: &str) -> String {
     let parts: Vec<&str> = root.split('/').filter(|p| !p.is_empty()).collect();
     if parts.first() == Some(&"workspace") {
         if let Some(home) = dirs::home_dir() {
-            return format!("{}/{}", home.to_string_lossy().trim_end_matches('/'), parts.join("/"));
+            return format!(
+                "{}/{}",
+                home.to_string_lossy().trim_end_matches('/'),
+                parts.join("/")
+            );
         }
         return format!("/{}", parts.join("/"));
     }
@@ -131,6 +135,7 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
         msg.thinking.hash(&mut hasher);
         msg.tool_name.hash(&mut hasher);
         msg.tool_args.hash(&mut hasher);
+        msg.created_at.hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
 }
@@ -147,12 +152,17 @@ pub fn needs_sync(conn: &Connection, file_path: &Path, incremental: bool) -> boo
 
     let path_str = file_path.to_string_lossy();
     let mtime_sec = match metadata.modified() {
-        Ok(t) => t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+        Ok(t) => t
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64(),
         Err(_) => 0.0,
     };
     let file_size = metadata.len() as i64;
 
-    let mut stmt = match conn.prepare_cached("SELECT file_mtime, file_size FROM sync_state WHERE source_path = ?") {
+    let mut stmt = match conn
+        .prepare_cached("SELECT file_mtime, file_size FROM sync_state WHERE source_path = ?")
+    {
         Ok(s) => s,
         Err(_) => return true,
     };
@@ -178,7 +188,10 @@ pub fn record_sync_state(conn: &Connection, file_path: &Path, cid: &str, source_
         Err(_) => return,
     };
     let mtime_sec = match metadata.modified() {
-        Ok(t) => t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+        Ok(t) => t
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64(),
         Err(_) => 0.0,
     };
     let file_size = metadata.len() as i64;
@@ -217,7 +230,8 @@ pub fn normalize_to_iso(raw: Option<String>) -> Option<String> {
 
 /// 保存单条会话及其所有消息入库
 pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result<bool> {
-    let source_types_json = serde_json::to_string(&conv.source_types).unwrap_or_else(|_| "[]".to_string());
+    let source_types_json =
+        serde_json::to_string(&conv.source_types).unwrap_or_else(|_| "[]".to_string());
     let user_msg_count = conv.messages.iter().filter(|m| m.role == "user").count() as i64;
     let total_msg_count = conv.messages.len() as i64;
     let content_hash = conversation_content_hash(conv);
@@ -292,7 +306,10 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
     )?;
 
     // 删除并重建消息
-    tx.execute("DELETE FROM messages WHERE conversation_id = ?", params![&conv.id])?;
+    tx.execute(
+        "DELETE FROM messages WHERE conversation_id = ?",
+        params![&conv.id],
+    )?;
 
     {
         let mut msg_stmt = tx.prepare_cached(
@@ -348,7 +365,10 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
 pub struct SyncEngine;
 
 impl SyncEngine {
-    pub fn run_all(conn: &Connection, incremental: bool) -> (u32, u32, u32, u32, Vec<ImporterStats>) {
+    pub fn run_all(
+        conn: &Connection,
+        incremental: bool,
+    ) -> (u32, u32, u32, u32, Vec<ImporterStats>) {
         let start = Instant::now();
         let mut total_new = 0;
         let mut total_updated = 0;
@@ -356,7 +376,10 @@ impl SyncEngine {
         let mut total_errors = 0;
         let mut all_stats = Vec::new();
 
-        println!("[AgentDeck SyncEngine] 🚀 开始纯 Rust 原生全源扫描同步 (incremental: {})...", incremental);
+        println!(
+            "[AgentDeck SyncEngine] 🚀 开始纯 Rust 原生全源扫描同步 (incremental: {})...",
+            incremental
+        );
 
         type ImporterFn = fn(&Connection, bool) -> ImporterStats;
         let importers: [(&str, ImporterFn); 6] = [
@@ -397,6 +420,12 @@ impl SyncEngine {
             total_errors
         );
 
-        (total_new, total_updated, total_skipped, total_errors, all_stats)
+        (
+            total_new,
+            total_updated,
+            total_skipped,
+            total_errors,
+            all_stats,
+        )
     }
 }

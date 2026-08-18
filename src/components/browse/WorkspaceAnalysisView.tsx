@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { WorkspaceDetailStats, WorkspaceFineBlock } from '../../types';
 import { api } from '../../api/tauriBridge';
 import ReactMarkdown from 'react-markdown';
@@ -38,6 +38,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [extracting, setExtracting] = useState(false);
   const [extractMessage, setExtractMessage] = useState<string | null>(null);
   const [progressInfo, setProgressInfo] = useState<PipelineProgress | null>(null);
+  const heatmapScrollRef = useRef<HTMLDivElement>(null);
 
   const fetchDetail = async () => {
     if (!workspacePath) return;
@@ -55,6 +56,12 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   useEffect(() => {
     fetchDetail();
   }, [workspacePath]);
+
+  useLayoutEffect(() => {
+    const el = heatmapScrollRef.current;
+    if (!el) return;
+    el.scrollLeft = el.scrollWidth;
+  }, [detail?.heatmap_cells]);
 
   // 1. 细粒度 Blocks 智能提取
   const handleExtractBlocks = async (force: boolean) => {
@@ -382,8 +389,8 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
               </div>
             </div>
 
-            {/* 52 周日历热力网格 */}
-            <div className="overflow-x-auto pb-2 scrollbar-thin">
+            {/* 52 周日历热力网格：默认滚到最右侧，优先露出最近日期 */}
+            <div ref={heatmapScrollRef} className="overflow-x-auto pb-2 scrollbar-thin">
               <div className="inline-block min-w-full">
                 {/* 月份表头 */}
                 <div className="flex text-[11px] theme-text-muted mb-1.5 pl-7 h-4 relative">
@@ -404,7 +411,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 {/* 网格主体：左侧星期 + 52 周列 */}
                 <div className="flex gap-1.5">
                   {/* 左侧星期标签 */}
-                  <div className="flex flex-col justify-between text-[9px] theme-text-muted pr-1 py-0.5 h-[104px] select-none">
+                  <div className="flex flex-col justify-between text-[9px] theme-text-muted pr-1 py-0.5 h-[104px] select-none sticky left-0 z-10 theme-bg-card">
                     <span>周日</span>
                     <span>周二</span>
                     <span>周四</span>
@@ -436,22 +443,22 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     ))}
                   </div>
                 </div>
+              </div>
+            </div>
 
-                {/* 底部 Legend 与说明 */}
-                <div className="flex items-center justify-between text-[11px] theme-text-muted mt-3 pt-2.5 border-t theme-border-sub">
-                  <span className="text-[11px]">
-                    过去 365 天共活跃 <strong className="theme-text-main font-mono">{detail.active_days || 0}</strong> 天
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <span>少</span>
-                    <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
-                    <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
-                    <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
-                    <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
-                    <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
-                    <span>多</span>
-                  </div>
-                </div>
+            {/* 底部 Legend 放在滚动区外，避免滚到右侧后被裁切 */}
+            <div className="flex items-center justify-between text-[11px] theme-text-muted mt-3 pt-2.5 border-t theme-border-sub">
+              <span className="text-[11px]">
+                过去 365 天共活跃 <strong className="theme-text-main font-mono">{detail.active_days || 0}</strong> 天
+              </span>
+              <div className="flex items-center gap-1.5">
+                <span>少</span>
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
+                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
+                <span>多</span>
               </div>
             </div>
           </div>

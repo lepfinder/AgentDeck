@@ -1,14 +1,14 @@
+use regex::Regex;
 use rusqlite::{params, Connection, OpenFlags};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::OnceLock;
-use regex::Regex;
 use walkdir::WalkDir;
 
 use super::{
-    canonicalize_workspace_path, needs_sync, record_sync_state, save_conversation_tx, ImporterStats,
-    RawConversation, RawMessage,
+    canonicalize_workspace_path, needs_sync, record_sync_state, save_conversation_tx,
+    ImporterStats, RawConversation, RawMessage,
 };
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
@@ -135,7 +135,9 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         let _ = hash_map.set(hash_map_v);
         let _ = slug_map.set(slug_map_v);
 
-        let mut stmt = match cursor_conn.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'") {
+        let mut stmt = match cursor_conn
+            .prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'")
+        {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("[Cursor Importer] 查询 cursorDiskKV 失败: {}", e);
@@ -240,7 +242,10 @@ fn process_cursor_composer(
     };
 
     let data: Value = serde_json::from_str(val_str)?;
-    let headers = match data.get("fullConversationHeadersOnly").and_then(|v| v.as_array()) {
+    let headers = match data
+        .get("fullConversationHeadersOnly")
+        .and_then(|v| v.as_array())
+    {
         Some(h) if !h.is_empty() => h,
         _ => {
             stats.skipped_count += 1;
@@ -285,7 +290,13 @@ fn process_cursor_composer(
         .trim()
         .to_string();
 
-    let messages = extract_messages(cursor_conn, composer_id, headers, updated_at.clone(), &mut title);
+    let messages = extract_messages(
+        cursor_conn,
+        composer_id,
+        headers,
+        updated_at.clone(),
+        &mut title,
+    );
     if messages.is_empty() {
         stats.skipped_count += 1;
         return Ok(());
@@ -404,9 +415,13 @@ fn load_slug_to_folder(projects_dir: &Path) -> HashMap<String, String> {
 }
 
 /// 3. 加载 workspaceStorage 下 state.vscdb 中的 UUID 映射
-fn load_uuid_to_folder(ws_storage_dir: &Path, hash_map: &HashMap<String, String>) -> HashMap<String, String> {
+fn load_uuid_to_folder(
+    ws_storage_dir: &Path,
+    hash_map: &HashMap<String, String>,
+) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let uuid_re = match Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}") {
+    let uuid_re = match Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+    {
         Ok(r) => r,
         Err(_) => return map,
     };
@@ -549,7 +564,10 @@ fn extract_messages(
     let mut step_idx = 0i64;
 
     for header in headers {
-        let bubble_id = header.get("bubbleId").and_then(|v| v.as_str()).unwrap_or("");
+        let bubble_id = header
+            .get("bubbleId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if bubble_id.is_empty() {
             continue;
         }
@@ -565,7 +583,11 @@ fn extract_messages(
             .and_then(|v| v.as_i64())
             .unwrap_or(1);
         let role = if raw_type == 1 { "user" } else { "assistant" };
-        let text = bubble.get("text").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let text = bubble
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         let thinking = bubble
             .get("allThinkingBlocks")
             .and_then(|v| v.as_array())
@@ -598,7 +620,7 @@ fn extract_messages(
             },
             content: text.to_string(),
             thinking,
-            created_at: updated_at.clone(),
+            created_at: bubble_created_at(header, bubble).or_else(|| updated_at.clone()),
             model_name: Some("Cursor".to_string()),
             tool_name: if tool_results.is_some() {
                 Some("tool".to_string())
@@ -613,4 +635,15 @@ fn extract_messages(
     }
 
     messages
+}
+
+fn bubble_created_at(header: &Value, bubble: &Value) -> Option<String> {
+    let raw = header
+        .get("createdAt")
+        .or_else(|| bubble.get("createdAt"))?;
+    if let Some(s) = raw.as_str() {
+        return super::normalize_to_iso(Some(s.to_string()));
+    }
+    let ms = raw.as_i64().or_else(|| raw.as_f64().map(|v| v as i64))?;
+    chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
 }

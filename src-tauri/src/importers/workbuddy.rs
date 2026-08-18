@@ -5,7 +5,9 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use walkdir::WalkDir;
 
-use super::{needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage};
+use super::{
+    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+};
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -46,7 +48,11 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
             continue;
         }
 
-        let session_id = p.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        let session_id = p
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         let cid = format!("workbuddy:{}", session_id);
 
         match parse_workbuddy_file(&cid, p) {
@@ -78,7 +84,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     stats
 }
 
-fn parse_workbuddy_file(cid: &str, path: &Path) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
+fn parse_workbuddy_file(
+    cid: &str,
+    path: &Path,
+) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
@@ -90,7 +99,11 @@ fn parse_workbuddy_file(cid: &str, path: &Path) -> Result<Option<RawConversation
     let mut step_idx = 0i64;
 
     if let Some(parent) = path.parent() {
-        let parent_name = parent.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let parent_name = parent
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
         if parent_name.starts_with("Users-") {
             let slug = format!("/{}", parent_name.replace('-', "/"));
             workspace_path = super::canonicalize_workspace_path(&slug);

@@ -1,9 +1,9 @@
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use rusqlite::{params, Connection, Result};
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
-use chrono::{DateTime, Utc, Timelike};
 
 pub fn to_beijing_iso(raw: Option<String>) -> Option<String> {
     let s = raw?.trim().to_string();
@@ -95,6 +95,24 @@ pub struct PunchcardSlot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourlyBarSlot {
+    pub hour: u32,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyBarSlot {
+    pub date: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DayHourlyBars {
+    pub date: String,
+    pub hours: Vec<HourlyBarSlot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopRankItem {
     pub id: String,
     pub title: String,
@@ -130,6 +148,10 @@ pub struct DashboardStats {
     pub agent_comparison_msgs: Vec<AgentShare>,
     pub punchcard_msgs: Vec<PunchcardSlot>,
     pub punchcard_convs: Vec<PunchcardSlot>,
+    pub last30_hourly_msgs: Vec<DayHourlyBars>,
+    pub last30_hourly_convs: Vec<DayHourlyBars>,
+    pub last30_daily_msgs: Vec<DailyBarSlot>,
+    pub last30_daily_convs: Vec<DailyBarSlot>,
     pub heatmap_cells: Vec<HeatmapCell>,
     pub heatmap_cells_convs: Vec<HeatmapCell>,
     pub heatmap_active_days: i64,
@@ -141,6 +163,7 @@ pub struct DashboardStats {
     pub top_conversations_user: Vec<TopRankItem>,
     pub top_workspaces: Vec<TopWorkspaceItem>,
     pub last_sync_time: Option<String>,
+    pub beijing_today: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,24 +425,60 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
     // 自动兼容性迁移（防止旧表缺少新增字段）
     let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
-    let _ = conn.execute("ALTER TABLE conversations ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE conversations ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+        [],
+    );
 
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''",
+        [],
+    );
 
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN child_fine_ids_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
 
     // 兼容短暂出现过的 file_path 列名（正式库为 source_path）
-    let _ = conn.execute("ALTER TABLE sync_state RENAME COLUMN file_path TO source_path", []);
+    let _ = conn.execute(
+        "ALTER TABLE sync_state RENAME COLUMN file_path TO source_path",
+        [],
+    );
 
     migrate_workspace_aliases(conn);
 
@@ -540,13 +599,84 @@ fn get_short_workspace(path: &str) -> String {
     }
 }
 
+fn collect_timestamp_volume(
+    conn: &Connection,
+    sql: &str,
+    start_30: NaiveDate,
+    today: NaiveDate,
+) -> Result<([[i64; 24]; 30], [i64; 30])> {
+    let mut hourly_by_day = [[0i64; 24]; 30];
+    let mut daily = [0i64; 30];
+    let start = start_30.format("%Y-%m-%d").to_string();
+    let end = (today + chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![start, end], |row| {
+        let date: String = row.get(0)?;
+        let hour: i64 = row.get(1)?;
+        let count: i64 = row.get(2)?;
+        Ok((date, hour, count))
+    })?;
+    for (date_str, hour, count) in rows.flatten() {
+        let Ok(d) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") else {
+            continue;
+        };
+        if d < start_30 || d > today {
+            continue;
+        }
+        let idx = (d - start_30).num_days() as usize;
+        if idx >= 30 {
+            continue;
+        }
+        daily[idx] += count;
+        if (0..24).contains(&hour) {
+            hourly_by_day[idx][hour as usize] += count;
+        }
+    }
+    Ok((hourly_by_day, daily))
+}
+
+fn slots_from_hourly_days(start_30: NaiveDate, counts: &[[i64; 24]; 30]) -> Vec<DayHourlyBars> {
+    (0..30)
+        .map(|i| {
+            let date = start_30 + chrono::Duration::days(i as i64);
+            DayHourlyBars {
+                date: date.format("%Y-%m-%d").to_string(),
+                hours: slots_from_hourly(&counts[i]),
+            }
+        })
+        .collect()
+}
+
+fn slots_from_hourly(counts: &[i64; 24]) -> Vec<HourlyBarSlot> {
+    counts
+        .iter()
+        .enumerate()
+        .map(|(h, &count)| HourlyBarSlot {
+            hour: h as u32,
+            count,
+        })
+        .collect()
+}
+
+fn slots_from_daily(start_30: NaiveDate, counts: &[i64; 30]) -> Vec<DailyBarSlot> {
+    (0..30)
+        .map(|i| {
+            let date = start_30 + chrono::Duration::days(i as i64);
+            DailyBarSlot {
+                date: date.format("%Y-%m-%d").to_string(),
+                count: counts[i],
+            }
+        })
+        .collect()
+}
+
 pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     // 1. KPI 基础统计
-    let total_conversations: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM conversations",
-        [],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let total_conversations: i64 = conn
+        .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))
+        .unwrap_or(0);
 
     let total_messages: i64 = conn.query_row(
         "SELECT COALESCE(SUM(message_count), (SELECT COUNT(*) FROM messages)) FROM conversations",
@@ -554,11 +684,13 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         |r| r.get(0),
     ).unwrap_or(0);
 
-    let total_user_messages: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(user_message_count), 0) FROM conversations",
-        [],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let total_user_messages: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(user_message_count), 0) FROM conversations",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
 
     let total_workspaces: i64 = conn.query_row(
         "SELECT COUNT(DISTINCT workspace_path) FROM conversations WHERE workspace_path IS NOT NULL AND workspace_path != ''",
@@ -566,11 +698,9 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         |r| r.get(0),
     ).unwrap_or(0);
 
-    let starred_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM starred_sessions",
-        [],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let starred_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM starred_sessions", [], |r| r.get(0))
+        .unwrap_or(0);
 
     // 2. Agent 平台分布（按会话数）
     let mut agent_comparison_convs = Vec::new();
@@ -587,7 +717,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             COUNT(*) as cnt
          FROM conversations
          GROUP BY app
-         ORDER BY cnt DESC"
+         ORDER BY cnt DESC",
     )?;
     let conv_rows = stmt.query_map([], |row| {
         let app: String = row.get(0)?;
@@ -626,7 +756,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             SUM(message_count) as cnt
          FROM conversations
          GROUP BY app
-         ORDER BY cnt DESC"
+         ORDER BY cnt DESC",
     )?;
     let msg_rows = stmt.query_map([], |row| {
         let app: String = row.get(0)?;
@@ -677,7 +807,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
     let mut hourly_convs = vec![0i64; 24];
     let mut stmt = conn.prepare(
-        "SELECT updated_at FROM conversations WHERE updated_at IS NOT NULL AND updated_at != ''"
+        "SELECT updated_at FROM conversations WHERE updated_at IS NOT NULL AND updated_at != ''",
     )?;
     let conv_time_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for t in conv_time_rows.flatten() {
@@ -700,28 +830,114 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     }
 
     let max_msg_hour = *hourly_msgs.iter().max().unwrap_or(&1).max(&1) as f64;
-    let punchcard_msgs: Vec<PunchcardSlot> = hourly_msgs.iter().enumerate().map(|(h, &cnt)| {
-        let ratio = cnt as f64 / max_msg_hour;
-        let level = if cnt == 0 { 0 } else if ratio < 0.25 { 1 } else if ratio < 0.55 { 2 } else if ratio < 0.85 { 3 } else { 4 };
-        PunchcardSlot {
-            hour: h as u32,
-            count: cnt,
-            level,
-            percent: (ratio * 100.0).round(),
-        }
-    }).collect();
+    let punchcard_msgs: Vec<PunchcardSlot> = hourly_msgs
+        .iter()
+        .enumerate()
+        .map(|(h, &cnt)| {
+            let ratio = cnt as f64 / max_msg_hour;
+            let level = if cnt == 0 {
+                0
+            } else if ratio < 0.25 {
+                1
+            } else if ratio < 0.55 {
+                2
+            } else if ratio < 0.85 {
+                3
+            } else {
+                4
+            };
+            PunchcardSlot {
+                hour: h as u32,
+                count: cnt,
+                level,
+                percent: (ratio * 100.0).round(),
+            }
+        })
+        .collect();
 
     let max_conv_hour = *hourly_convs.iter().max().unwrap_or(&1).max(&1) as f64;
-    let punchcard_convs: Vec<PunchcardSlot> = hourly_convs.iter().enumerate().map(|(h, &cnt)| {
-        let ratio = cnt as f64 / max_conv_hour;
-        let level = if cnt == 0 { 0 } else if ratio < 0.25 { 1 } else if ratio < 0.55 { 2 } else if ratio < 0.85 { 3 } else { 4 };
-        PunchcardSlot {
-            hour: h as u32,
-            count: cnt,
-            level,
-            percent: (ratio * 100.0).round(),
-        }
-    }).collect();
+    let punchcard_convs: Vec<PunchcardSlot> = hourly_convs
+        .iter()
+        .enumerate()
+        .map(|(h, &cnt)| {
+            let ratio = cnt as f64 / max_conv_hour;
+            let level = if cnt == 0 {
+                0
+            } else if ratio < 0.25 {
+                1
+            } else if ratio < 0.55 {
+                2
+            } else if ratio < 0.85 {
+                3
+            } else {
+                4
+            };
+            PunchcardSlot {
+                hour: h as u32,
+                count: cnt,
+                level,
+                percent: (ratio * 100.0).round(),
+            }
+        })
+        .collect();
+
+    // 4.5 按日 24 小时 + 近 30 天柱状图（统一按北京时间 UTC+8 自然日/小时切分）
+    let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+    let today_bj = Utc::now().with_timezone(&beijing_tz).date_naive();
+    let start_30 = today_bj - chrono::Duration::days(29);
+
+    let (hourly_msg_by_day, last30_msg_counts) = collect_timestamp_volume(
+        conn,
+        r#"
+        SELECT
+            strftime('%Y-%m-%d', datetime(created_at, '+8 hours')),
+            CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER),
+            COUNT(*)
+        FROM messages
+        WHERE created_at IS NOT NULL AND created_at != ''
+          AND datetime(created_at, '+8 hours') >= ?1
+          AND datetime(created_at, '+8 hours') < ?2
+        GROUP BY 1, 2
+        "#,
+        start_30,
+        today_bj,
+    )?;
+    let (hourly_conv_by_day, _) = collect_timestamp_volume(
+        conn,
+        r#"
+        SELECT
+            strftime('%Y-%m-%d', datetime(created_at, '+8 hours')),
+            CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER),
+            COUNT(DISTINCT conversation_id)
+        FROM messages
+        WHERE created_at IS NOT NULL AND created_at != ''
+          AND datetime(created_at, '+8 hours') >= ?1
+          AND datetime(created_at, '+8 hours') < ?2
+        GROUP BY 1, 2
+        "#,
+        start_30,
+        today_bj,
+    )?;
+    let (_, last30_conv_counts) = collect_timestamp_volume(
+        conn,
+        r#"
+        SELECT
+            strftime('%Y-%m-%d', datetime(created_at, '+8 hours')),
+            0,
+            COUNT(DISTINCT conversation_id)
+        FROM messages
+        WHERE created_at IS NOT NULL AND created_at != ''
+          AND datetime(created_at, '+8 hours') >= ?1
+          AND datetime(created_at, '+8 hours') < ?2
+        GROUP BY 1
+        "#,
+        start_30,
+        today_bj,
+    )?;
+    let last30_hourly_msgs = slots_from_hourly_days(start_30, &hourly_msg_by_day);
+    let last30_hourly_convs = slots_from_hourly_days(start_30, &hourly_conv_by_day);
+    let last30_daily_msgs = slots_from_daily(start_30, &last30_msg_counts);
+    let last30_daily_convs = slots_from_daily(start_30, &last30_conv_counts);
 
     // 5. Tool Usage 工具调用分布分析
     let mut total_tool_calls = 0i64;
@@ -729,23 +945,51 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
     // 优先从 messages.tool_name 直接查询
     let mut stmt = conn.prepare(
-        "SELECT tool_name FROM messages WHERE tool_name IS NOT NULL AND tool_name != ''"
+        "SELECT tool_name FROM messages WHERE tool_name IS NOT NULL AND tool_name != ''",
     )?;
     let tool_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     for raw_name in tool_rows.flatten() {
         total_tool_calls += 1;
         let name = raw_name.to_lowercase();
-        if name.contains("read") || name.contains("view") || name.contains("list") || name.contains("cat") {
+        if name.contains("read")
+            || name.contains("view")
+            || name.contains("list")
+            || name.contains("cat")
+        {
             *tool_categories.entry("文件阅读").or_insert(0) += 1;
-        } else if name.contains("edit") || name.contains("write") || name.contains("replace") || name.contains("patch") {
+        } else if name.contains("edit")
+            || name.contains("write")
+            || name.contains("replace")
+            || name.contains("patch")
+        {
             *tool_categories.entry("代码编辑").or_insert(0) += 1;
-        } else if name.contains("bash") || name.contains("cmd") || name.contains("terminal") || name.contains("run") || name.contains("exec") {
+        } else if name.contains("bash")
+            || name.contains("cmd")
+            || name.contains("terminal")
+            || name.contains("run")
+            || name.contains("exec")
+        {
             *tool_categories.entry("终端命令").or_insert(0) += 1;
-        } else if name.contains("search") || name.contains("grep") || name.contains("find") || name.contains("query") {
+        } else if name.contains("search")
+            || name.contains("grep")
+            || name.contains("find")
+            || name.contains("query")
+        {
             *tool_categories.entry("搜索检索").or_insert(0) += 1;
-        } else if name.contains("skill") || name.contains("mcp") || name.contains("plugin") || name.contains("image") || name.contains("schedule") || name.contains("task") {
+        } else if name.contains("skill")
+            || name.contains("mcp")
+            || name.contains("plugin")
+            || name.contains("image")
+            || name.contains("schedule")
+            || name.contains("task")
+        {
             *tool_categories.entry("技能扩展").or_insert(0) += 1;
-        } else if name.contains("browser") || name.contains("web") || name.contains("http") || name.contains("fetch") || name.contains("url") {
+        } else if name.contains("browser")
+            || name.contains("web")
+            || name.contains("http")
+            || name.contains("fetch")
+            || name.contains("url")
+        {
             *tool_categories.entry("网络与浏览器").or_insert(0) += 1;
         } else {
             *tool_categories.entry("其他工具").or_insert(0) += 1;
@@ -812,7 +1056,11 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             let ws_short = get_short_workspace(&workspace_path);
             Ok(TopRankItem {
                 id,
-                title: if title.is_empty() { "未命名会话".to_string() } else { title },
+                title: if title.is_empty() {
+                    "未命名会话".to_string()
+                } else {
+                    title
+                },
                 source_app,
                 source_label: label.to_string(),
                 workspace_path,
@@ -866,18 +1114,18 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_workspaces.push(r);
     }
 
-    // 5.5 全景 365 天日历热力图 (GitHub 风格)
+    // 5.5 全景 365 天日历热力图（按北京时间自然日，与柱状图一致）
     let mut heatmap_cells = Vec::new();
     let mut heatmap_cells_convs = Vec::new();
-    let today = Utc::now().date_naive();
-    let start_date = today - chrono::Duration::days(364);
+    let start_date = today_bj - chrono::Duration::days(364);
 
     let mut day_msg_counts: HashMap<String, i64> = HashMap::new();
     let mut stmt_hm_msg = conn.prepare(
-        "SELECT substr(m.created_at, 1, 10) as d, COUNT(*)
+        "SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as d, COUNT(*)
          FROM messages m
          WHERE m.created_at IS NOT NULL AND m.created_at != ''
-         GROUP BY d"
+           AND datetime(m.created_at, '+8 hours') IS NOT NULL
+         GROUP BY d",
     )?;
     let hm_msg_rows = stmt_hm_msg.query_map([], |r| {
         let d: String = r.get(0)?;
@@ -890,9 +1138,11 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
 
     let mut day_conv_counts: HashMap<String, i64> = HashMap::new();
     let mut stmt_hm_conv = conn.prepare(
-        "SELECT substr(COALESCE(c.created_at, c.updated_at), 1, 10) as d, COUNT(*)
+        "SELECT strftime('%Y-%m-%d', datetime(COALESCE(c.created_at, c.updated_at), '+8 hours')) as d, COUNT(*)
          FROM conversations c
-         WHERE (c.created_at IS NOT NULL AND c.created_at != '') OR (c.updated_at IS NOT NULL AND c.updated_at != '')
+         WHERE COALESCE(c.created_at, c.updated_at) IS NOT NULL
+           AND COALESCE(c.created_at, c.updated_at) != ''
+           AND datetime(COALESCE(c.created_at, c.updated_at), '+8 hours') IS NOT NULL
          GROUP BY d"
     )?;
     let hm_conv_rows = stmt_hm_conv.query_map([], |r| {
@@ -957,11 +1207,13 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         });
     }
 
-    let raw_sync: Option<String> = conn.query_row(
-        "SELECT COALESCE(finished_at, created_at) FROM sync_runs ORDER BY id DESC LIMIT 1",
-        [],
-        |r| r.get(0),
-    ).ok();
+    let raw_sync: Option<String> = conn
+        .query_row(
+            "SELECT COALESCE(finished_at, created_at) FROM sync_runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
     let last_sync_time = to_beijing_iso(raw_sync);
 
     Ok(DashboardStats {
@@ -975,6 +1227,10 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         agent_comparison_msgs,
         punchcard_msgs,
         punchcard_convs,
+        last30_hourly_msgs,
+        last30_hourly_convs,
+        last30_daily_msgs,
+        last30_daily_convs,
         heatmap_cells,
         heatmap_cells_convs,
         heatmap_active_days,
@@ -986,6 +1242,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         top_conversations_user,
         top_workspaces,
         last_sync_time,
+        beijing_today: today_bj.format("%Y-%m-%d").to_string(),
     })
 }
 
@@ -1099,7 +1356,10 @@ pub fn fetch_conversations(
     Ok(list)
 }
 
-pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> Result<Vec<MessageItem>> {
+pub fn fetch_conversation_messages(
+    conn: &Connection,
+    conversation_id: &str,
+) -> Result<Vec<MessageItem>> {
     let mut list = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT id, conversation_id, step_index,
@@ -1143,11 +1403,13 @@ pub fn fetch_conversation_messages(conn: &Connection, conversation_id: &str) -> 
 }
 
 pub fn toggle_star_session(conn: &Connection, conversation_id: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM starred_sessions WHERE conversation_id = ?1",
-        params![conversation_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM starred_sessions WHERE conversation_id = ?1",
+            params![conversation_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
 
     if count > 0 {
         conn.execute(
@@ -1196,27 +1458,32 @@ pub fn search_global_messages(
     "#;
 
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![if is_user { 1 } else { 0 }, query, limit as i64], |row| {
-        let id_val: i64 = row.get(0)?;
-        let raw_created: Option<String> = row.get(7)?;
-        let text: String = row.get(6)?;
-        let snippet = if text.chars().count() > 180 {
-            let s: String = text.chars().take(180).collect();
-            format!("{}...", s)
-        } else {
-            text
-        };
-        Ok(SearchResultItem {
-            message_id: id_val.to_string(),
-            conversation_id: row.get(1)?,
-            conversation_title: row.get::<_, Option<String>>(2)?.unwrap_or_else(|| "未命名会话".to_string()),
-            source_app: row.get(3)?,
-            workspace_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
-            sender: row.get(5)?,
-            snippet,
-            created_at: to_beijing_iso(raw_created),
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![if is_user { 1 } else { 0 }, query, limit as i64],
+        |row| {
+            let id_val: i64 = row.get(0)?;
+            let raw_created: Option<String> = row.get(7)?;
+            let text: String = row.get(6)?;
+            let snippet = if text.chars().count() > 180 {
+                let s: String = text.chars().take(180).collect();
+                format!("{}...", s)
+            } else {
+                text
+            };
+            Ok(SearchResultItem {
+                message_id: id_val.to_string(),
+                conversation_id: row.get(1)?,
+                conversation_title: row
+                    .get::<_, Option<String>>(2)?
+                    .unwrap_or_else(|| "未命名会话".to_string()),
+                source_app: row.get(3)?,
+                workspace_path: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+                sender: row.get(5)?,
+                snippet,
+                created_at: to_beijing_iso(raw_created),
+            })
+        },
+    )?;
 
     for r in rows.flatten() {
         list.push(r);
@@ -1224,7 +1491,10 @@ pub fn search_global_messages(
     Ok(list)
 }
 
-pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> Result<WorkspaceDetailStats> {
+pub fn fetch_workspace_detail_stats(
+    conn: &Connection,
+    workspace_path: &str,
+) -> Result<WorkspaceDetailStats> {
     let ws_short = get_short_workspace(workspace_path);
 
     let (
@@ -1275,12 +1545,24 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
     ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
 
     let mut breakdown_parts = Vec::new();
-    if ag_cnt > 0 { breakdown_parts.push(format!("AG {}", ag_cnt)); }
-    if cursor_cnt > 0 { breakdown_parts.push(format!("Cursor {}", cursor_cnt)); }
-    if claude_cnt > 0 { breakdown_parts.push(format!("Claude {}", claude_cnt)); }
-    if hermes_cnt > 0 { breakdown_parts.push(format!("Hermes {}", hermes_cnt)); }
-    if wb_cnt > 0 { breakdown_parts.push(format!("WorkBuddy {}", wb_cnt)); }
-    if codex_cnt > 0 { breakdown_parts.push(format!("Codex {}", codex_cnt)); }
+    if ag_cnt > 0 {
+        breakdown_parts.push(format!("AG {}", ag_cnt));
+    }
+    if cursor_cnt > 0 {
+        breakdown_parts.push(format!("Cursor {}", cursor_cnt));
+    }
+    if claude_cnt > 0 {
+        breakdown_parts.push(format!("Claude {}", claude_cnt));
+    }
+    if hermes_cnt > 0 {
+        breakdown_parts.push(format!("Hermes {}", hermes_cnt));
+    }
+    if wb_cnt > 0 {
+        breakdown_parts.push(format!("WorkBuddy {}", wb_cnt));
+    }
+    if codex_cnt > 0 {
+        breakdown_parts.push(format!("Codex {}", codex_cnt));
+    }
     let agent_breakdown = if breakdown_parts.is_empty() {
         format!("共 {} 会话", conversation_count)
     } else {
@@ -1296,7 +1578,7 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.workspace_path = ?1 AND m.created_at IS NOT NULL AND length(m.created_at) >= 10
         GROUP BY day
-        "#
+        "#,
     )?;
     let rows = stmt.query_map(params![workspace_path], |r| {
         let day: String = r.get(0)?;
@@ -1324,7 +1606,17 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
         let date_str = d.format("%Y-%m-%d").to_string();
         let cnt = *daily_counts.get(&date_str).unwrap_or(&0);
         let ratio = cnt as f64 / max_count;
-        let level = if cnt == 0 { 0 } else if ratio <= 0.25 { 1 } else if ratio <= 0.5 { 2 } else if ratio <= 0.75 { 3 } else { 4 };
+        let level = if cnt == 0 {
+            0
+        } else if ratio <= 0.25 {
+            1
+        } else if ratio <= 0.5 {
+            2
+        } else if ratio <= 0.75 {
+            3
+        } else {
+            4
+        };
         heatmap_cells.push(HeatmapCell {
             date: date_str,
             count: cnt,
@@ -1429,11 +1721,13 @@ pub fn fetch_workspace_detail_stats(conn: &Connection, workspace_path: &str) -> 
 
     // Markdown 架构报告
     let mut report_md = None;
-    let has_rep_table: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_reports'",
-        [],
-        |r| r.get(0)
-    ).unwrap_or(0);
+    let has_rep_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='workspace_reports'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     if has_rep_table > 0 {
         let res: rusqlite::Result<String> = conn.query_row(
             "SELECT report_md FROM workspace_reports WHERE workspace_path = ?1 LIMIT 1",
@@ -1513,12 +1807,30 @@ pub fn save_workspace_fine_blocks(
     clear_existing: bool,
 ) -> Result<usize> {
     // 确保旧表缺少列时平滑自愈
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN batch_index INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_fine ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''",
+        [],
+    );
 
     if clear_existing {
         conn.execute(
@@ -1569,11 +1881,23 @@ pub fn save_workspace_module_blocks(
     clear_existing: bool,
 ) -> Result<usize> {
     // 确保旧表缺少列时平滑自愈
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN created_at TEXT",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN child_fine_ids_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'", []);
-    let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'", []);
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN keywords_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_blocks_modules ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
 
     if clear_existing {
@@ -1596,7 +1920,8 @@ pub fn save_workspace_module_blocks(
 
     for (idx, m) in modules.iter().enumerate() {
         let kw_json = serde_json::to_string(&m.keywords).unwrap_or_else(|_| "[]".to_string());
-        let child_json = serde_json::to_string(&m.child_fine_ids).unwrap_or_else(|_| "[]".to_string());
+        let child_json =
+            serde_json::to_string(&m.child_fine_ids).unwrap_or_else(|_| "[]".to_string());
         stmt.execute(params![
             workspace_path,
             "",
@@ -1653,4 +1978,3 @@ pub fn clear_workspace_analysis(conn: &Connection, workspace_path: &str) -> Resu
     )?;
     Ok(())
 }
-
