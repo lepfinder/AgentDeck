@@ -112,6 +112,7 @@ interface Props {
   onToggleTheme: () => void;
   totalConversations?: number;
   totalMessages?: number;
+  appVersion?: string;
 }
 
 export const SettingsModal: React.FC<Props> = ({
@@ -121,6 +122,7 @@ export const SettingsModal: React.FC<Props> = ({
   onToggleTheme,
   totalConversations = 0,
   totalMessages = 0,
+  appVersion = '0.2.0',
 }) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'appearance' | 'about'>('ai');
 
@@ -762,7 +764,7 @@ export const SettingsModal: React.FC<Props> = ({
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3 text-xs">
                   <div className="flex justify-between py-1 border-b theme-border-sub">
                     <span className="theme-text-muted">应用版本</span>
-                    <span className="font-mono font-medium theme-text-main">v0.1.0</span>
+                    <span className="font-mono font-medium theme-text-main">v{appVersion}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b theme-border-sub">
                     <span className="theme-text-muted">底层框架</span>

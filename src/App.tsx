@@ -80,7 +80,7 @@ export function App() {
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [appVersion, setAppVersion] = useState<string>('0.1.0');
+  const [appVersion, setAppVersion] = useState<string>('0.2.0');
 
   useEffect(() => {
     api.getAppVersion().then((v) => {
@@ -345,6 +345,7 @@ export function App() {
         onClose={() => setIsSettingsOpen(false)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        appVersion={appVersion}
       />
     </div>
   );
