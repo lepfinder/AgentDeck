@@ -13,8 +13,11 @@ use db::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use sync::{execute_sync, get_agent_source_paths, SyncResultInfo};
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+
+static AUTO_SYNC_INTERVAL_SECS: AtomicU64 = AtomicU64::new(60);
 
 #[tauri::command]
 fn get_workspace_analysis_messages(
@@ -569,8 +572,19 @@ async fn trigger_sync(
         .await
         .map_err(|e| format!("同步任务执行失败: {}", e));
 
-    let _ = app_handle.emit("sync-completed", ());
+    if let Ok(result) = &res {
+        let _ = app_handle.emit("sync-completed", result);
+    }
     res
+}
+
+#[tauri::command]
+fn set_auto_sync_interval(seconds: u64) -> Result<u64, String> {
+    if !(15..=3600).contains(&seconds) {
+        return Err("自动同步频率需在 15 到 3600 秒之间".to_string());
+    }
+    AUTO_SYNC_INTERVAL_SECS.store(seconds, Ordering::Relaxed);
+    Ok(seconds)
 }
 
 #[tauri::command]
@@ -594,6 +608,7 @@ pub fn run() {
             toggle_star,
             search_messages,
             trigger_sync,
+            set_auto_sync_interval,
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
@@ -612,7 +627,7 @@ pub fn run() {
             // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给外部服务无缝调用）
             http_server::start_http_server(8788);
 
-            // 启动后台多源智能监听线程（每 30 秒探测数据源 mtime 变动，实现无感实时同步）
+            // 启动后台多源智能监听线程（每 60 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> =
@@ -630,7 +645,8 @@ pub fn run() {
                 }
 
                 loop {
-                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    let interval_secs = AUTO_SYNC_INTERVAL_SECS.load(Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_secs(interval_secs));
                     let sources = get_agent_source_paths();
                     let mut changed = false;
 
@@ -653,8 +669,8 @@ pub fn run() {
                     if changed && last_sync_at.elapsed() >= std::time::Duration::from_secs(20) {
                         last_sync_at = std::time::Instant::now();
                         let _ = app_handle.emit("sync-started", ());
-                        let _res = execute_sync(false);
-                        let _ = app_handle.emit("sync-completed", ());
+                        let result = execute_sync(false);
+                        let _ = app_handle.emit("sync-completed", result);
                     }
                 }
             });

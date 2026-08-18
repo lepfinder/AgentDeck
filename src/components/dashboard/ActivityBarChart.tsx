@@ -8,6 +8,7 @@ export interface ActivityBarItem {
   muted?: boolean;
   tooltipTitle: string;
   messageCount: number;
+  userMessageCount: number;
   conversationCount: number;
 }
 
@@ -52,6 +53,9 @@ export const ActivityBarChart: React.FC<Props> = ({ items, emptyHint, onBarClick
                 <div className="font-medium">{item.tooltipTitle}</div>
                 <div className="theme-text-muted font-mono mt-0.5">
                   消息 {item.messageCount.toLocaleString()}
+                </div>
+                <div className="theme-text-muted font-mono">
+                  用户 {item.userMessageCount.toLocaleString()}
                 </div>
                 <div className="theme-text-muted font-mono">
                   会话 {item.conversationCount.toLocaleString()}

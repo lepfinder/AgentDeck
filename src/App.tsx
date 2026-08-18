@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import type { DashboardStats } from './types';
+import type { DashboardStats, SyncResultInfo } from './types';
 import { formatBeijingTime } from './utils/date';
 import { BrowseView } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
@@ -17,6 +17,13 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
+const AUTO_SYNC_INTERVAL_KEY = 'agentdeck_auto_sync_interval_sec';
+
+function getInitialAutoSyncIntervalSec(): number {
+  const saved = Number(localStorage.getItem(AUTO_SYNC_INTERVAL_KEY) || '60');
+  return Number.isFinite(saved) && saved >= 15 ? saved : 60;
+}
+
 export function App() {
   const [isStarredView, setIsStarredView] = useState(false);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
@@ -25,6 +32,12 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
+  const [autoSyncIntervalSec, setAutoSyncIntervalSec] = useState<number>(getInitialAutoSyncIntervalSec);
+
+  const showSyncToast = (message: string, durationMs: number) => {
+    setSyncToast(message);
+    setTimeout(() => setSyncToast(null), durationMs);
+  };
 
   // 点击 Logo 返回全景大盘
   const handleLogoClick = () => {
@@ -74,13 +87,20 @@ export function App() {
     }
   }, [theme]);
 
+  useEffect(() => {
+    localStorage.setItem(AUTO_SYNC_INTERVAL_KEY, String(autoSyncIntervalSec));
+    api.setAutoSyncInterval(autoSyncIntervalSec).catch((err) => {
+      console.error('Failed to set auto sync interval:', err);
+    });
+  }, [autoSyncIntervalSec]);
+
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [appVersion, setAppVersion] = useState<string>('0.2.0');
+  const [appVersion, setAppVersion] = useState<string>('0.2.1');
 
   useEffect(() => {
     api.getAppVersion().then((v) => {
@@ -117,11 +137,13 @@ export function App() {
       unlistenStarted = fn;
     });
 
-    listen('sync-completed', () => {
+    listen<SyncResultInfo>('sync-completed', (event) => {
       setIsSyncing(false);
-      loadStats();
-      setSyncToast('数据同步完成');
-      setTimeout(() => setSyncToast(null), 3000);
+      const result = event.payload;
+      if (result && (result.new_count > 0 || result.updated_count > 0)) {
+        loadStats();
+        showSyncToast(result.message, 3000);
+      }
     }).then((fn) => {
       unlistenCompleted = fn;
     });
@@ -140,13 +162,13 @@ export function App() {
       const res = await api.triggerSync(full);
       await loadStats();
       if (res.message) {
-        setSyncToast(res.message);
-        setTimeout(() => setSyncToast(null), 3500);
+        if (res.new_count > 0 || res.updated_count > 0) {
+          showSyncToast(res.message, 3500);
+        }
       }
     } catch (err) {
       console.error('Sync failed:', err);
-      setSyncToast('同步失败，请检查数据源');
-      setTimeout(() => setSyncToast(null), 4000);
+      showSyncToast('同步失败，请检查数据源', 4000);
     } finally {
       setIsSyncing(false);
     }
@@ -345,6 +367,8 @@ export function App() {
         onClose={() => setIsSettingsOpen(false)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        autoSyncIntervalSec={autoSyncIntervalSec}
+        onAutoSyncIntervalChange={setAutoSyncIntervalSec}
         appVersion={appVersion}
       />
     </div>

@@ -150,8 +150,10 @@ pub struct DashboardStats {
     pub punchcard_convs: Vec<PunchcardSlot>,
     pub last30_hourly_msgs: Vec<DayHourlyBars>,
     pub last30_hourly_convs: Vec<DayHourlyBars>,
+    pub last30_hourly_user_msgs: Vec<DayHourlyBars>,
     pub last30_daily_msgs: Vec<DailyBarSlot>,
     pub last30_daily_convs: Vec<DailyBarSlot>,
+    pub last30_daily_user_msgs: Vec<DailyBarSlot>,
     pub heatmap_cells: Vec<HeatmapCell>,
     pub heatmap_cells_convs: Vec<HeatmapCell>,
     pub heatmap_active_days: i64,
@@ -918,6 +920,23 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         start_30,
         today_bj,
     )?;
+    let (hourly_user_msg_by_day, last30_user_msg_counts) = collect_timestamp_volume(
+        conn,
+        r#"
+        SELECT
+            strftime('%Y-%m-%d', datetime(created_at, '+8 hours')),
+            CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER),
+            COUNT(*)
+        FROM messages
+        WHERE created_at IS NOT NULL AND created_at != ''
+          AND (role LIKE '%user%' OR role = 'user')
+          AND datetime(created_at, '+8 hours') >= ?1
+          AND datetime(created_at, '+8 hours') < ?2
+        GROUP BY 1, 2
+        "#,
+        start_30,
+        today_bj,
+    )?;
     let (_, last30_conv_counts) = collect_timestamp_volume(
         conn,
         r#"
@@ -936,8 +955,10 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     )?;
     let last30_hourly_msgs = slots_from_hourly_days(start_30, &hourly_msg_by_day);
     let last30_hourly_convs = slots_from_hourly_days(start_30, &hourly_conv_by_day);
+    let last30_hourly_user_msgs = slots_from_hourly_days(start_30, &hourly_user_msg_by_day);
     let last30_daily_msgs = slots_from_daily(start_30, &last30_msg_counts);
     let last30_daily_convs = slots_from_daily(start_30, &last30_conv_counts);
+    let last30_daily_user_msgs = slots_from_daily(start_30, &last30_user_msg_counts);
 
     // 5. Tool Usage 工具调用分布分析
     let mut total_tool_calls = 0i64;
@@ -1229,8 +1250,10 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         punchcard_convs,
         last30_hourly_msgs,
         last30_hourly_convs,
+        last30_hourly_user_msgs,
         last30_daily_msgs,
         last30_daily_convs,
+        last30_daily_user_msgs,
         heatmap_cells,
         heatmap_cells_convs,
         heatmap_active_days,

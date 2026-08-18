@@ -5,6 +5,7 @@ import type {
   ConversationItem,
   MessageItem,
   SearchResultItem,
+  SyncResultInfo,
   WorkspaceDetailStats,
   WorkspaceFineBlock,
   WorkspaceModuleBlock,
@@ -94,14 +95,21 @@ export const api = {
     return data.items || [];
   },
 
-  async triggerSync(full?: boolean): Promise<{ success: boolean; message: string }> {
+  async triggerSync(full?: boolean): Promise<SyncResultInfo> {
     if (isTauri()) {
-      return await invoke<{ success: boolean; message: string }>('trigger_sync', { full: !!full });
+      return await invoke<SyncResultInfo>('trigger_sync', { full: !!full });
     }
     const res = await fetch(`/api/sync?mode=${full ? 'full' : 'incremental'}`, {
       method: 'POST',
     });
     return await res.json();
+  },
+
+  async setAutoSyncInterval(seconds: number): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('set_auto_sync_interval', { seconds });
+    }
+    return seconds;
   },
 
   async testLlmConnection(
@@ -276,9 +284,9 @@ export const api = {
         const { getVersion } = await import('@tauri-apps/api/app');
         return await getVersion();
       } catch {
-        return '0.2.0';
+        return '0.2.1';
       }
     }
-    return '0.2.0';
+    return '0.2.1';
   },
 };

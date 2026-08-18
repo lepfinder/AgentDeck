@@ -104,7 +104,7 @@ fn handle_connection(mut stream: TcpStream) {
                 "ok": true,
                 "status": "ok",
                 "app": "AgentDeck",
-                "version": "0.2.0",
+                "version": "0.2.1",
                 "cursor_available": true,
                 "ai_available": true,
                 "stats": stats

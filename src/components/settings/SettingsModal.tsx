@@ -110,6 +110,8 @@ interface Props {
   onClose: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
+  autoSyncIntervalSec: number;
+  onAutoSyncIntervalChange: (seconds: number) => void;
   totalConversations?: number;
   totalMessages?: number;
   appVersion?: string;
@@ -120,9 +122,11 @@ export const SettingsModal: React.FC<Props> = ({
   onClose,
   theme,
   onToggleTheme,
+  autoSyncIntervalSec,
+  onAutoSyncIntervalChange,
   totalConversations = 0,
   totalMessages = 0,
-  appVersion = '0.2.0',
+  appVersion = '0.2.1',
 }) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'appearance' | 'about'>('ai');
 
@@ -706,6 +710,31 @@ export const SettingsModal: React.FC<Props> = ({
                         {totalMessages.toLocaleString()}
                       </div>
                     </div>
+                  </div>
+                </div>
+
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div>
+                    <div className="text-xs font-semibold theme-text-main">自动同步频率</div>
+                    <p className="text-[11px] theme-text-muted mt-1">
+                      后台监听检测到源文件变化后，会按这里的频率轮询检查。无变化时不会弹通知。
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <select
+                      value={String(autoSyncIntervalSec)}
+                      onChange={(e) => onAutoSyncIntervalChange(Number(e.target.value))}
+                      className="px-3 py-2 text-xs theme-bg-card border theme-border rounded-lg theme-text-main focus:outline-none cursor-pointer"
+                    >
+                      <option value="30">30 秒</option>
+                      <option value="60">60 秒</option>
+                      <option value="120">120 秒</option>
+                      <option value="300">300 秒</option>
+                    </select>
+                    <span className="text-[11px] theme-text-sub">
+                      默认 60 秒，建议在频繁切换 Agent 时保持 60 秒或更高。
+                    </span>
                   </div>
                 </div>
               </div>

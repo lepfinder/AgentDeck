@@ -82,9 +82,12 @@ export const DashboardView: React.FC<Props> = ({
     (stats.last30_hourly_msgs || []).find((d) => d.date === resolvedHourlyDate)?.hours || [];
   const dayConvHours =
     (stats.last30_hourly_convs || []).find((d) => d.date === resolvedHourlyDate)?.hours || [];
+  const dayUserMsgHours =
+    (stats.last30_hourly_user_msgs || []).find((d) => d.date === resolvedHourlyDate)?.hours || [];
   const dayBarItems = toHourlyBarItems(
     dayMsgHours,
     dayConvHours,
+    dayUserMsgHours,
     hourlyTab,
     viewingToday ? currentHour : -1,
     resolvedHourlyDate,
@@ -92,6 +95,7 @@ export const DashboardView: React.FC<Props> = ({
   const last30BarItems = toLast30BarItems(
     stats.last30_daily_msgs || [],
     stats.last30_daily_convs || [],
+    stats.last30_daily_user_msgs || [],
     last30Tab,
     resolvedHourlyDate,
   );
@@ -815,6 +819,7 @@ function shiftDateStr(dateStr: string, deltaDays: number): string {
 function toHourlyBarItems(
   msgHours: HourlyBarSlot[],
   convHours: HourlyBarSlot[],
+  userMsgHours: HourlyBarSlot[],
   metric: 'msgs' | 'convs',
   currentHour: number,
   dateStr: string,
@@ -823,6 +828,7 @@ function toHourlyBarItems(
   return hours.map((slot, idx) => {
     const messageCount = msgHours[idx]?.count ?? 0;
     const conversationCount = convHours[idx]?.count ?? 0;
+    const userMessageCount = userMsgHours[idx]?.count ?? 0;
     return {
       key: String(slot.hour),
       label: slot.hour % 3 === 0 || slot.hour === currentHour ? String(slot.hour) : '',
@@ -830,6 +836,7 @@ function toHourlyBarItems(
       emphasize: slot.hour === currentHour,
       tooltipTitle: `${dateStr} ${String(slot.hour).padStart(2, '0')}:00`,
       messageCount,
+      userMessageCount,
       conversationCount,
     };
   });
@@ -838,12 +845,14 @@ function toHourlyBarItems(
 function toLast30BarItems(
   msgSlots: DailyBarSlot[],
   convSlots: DailyBarSlot[],
+  userMsgSlots: DailyBarSlot[],
   metric: 'msgs' | 'convs',
   selectedDate: string,
 ): ActivityBarItem[] {
   const slots = metric === 'msgs' ? msgSlots : convSlots;
   const convByDate = new Map(convSlots.map((s) => [s.date, s.count]));
   const msgByDate = new Map(msgSlots.map((s) => [s.date, s.count]));
+  const userMsgByDate = new Map(userMsgSlots.map((s) => [s.date, s.count]));
   return slots.map((slot, idx) => {
     const parts = slot.date.split('-');
     const year = parts.length === 3 ? Number(parts[0]) : 0;
@@ -862,6 +871,7 @@ function toLast30BarItems(
       muted: weekday === 0 || weekday === 6,
       tooltipTitle: slot.date,
       messageCount: msgByDate.get(slot.date) ?? 0,
+      userMessageCount: userMsgByDate.get(slot.date) ?? 0,
       conversationCount: convByDate.get(slot.date) ?? 0,
     };
   });

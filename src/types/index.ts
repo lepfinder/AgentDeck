@@ -120,8 +120,10 @@ export interface DashboardStats {
   punchcard_convs: PunchcardSlot[];
   last30_hourly_msgs: DayHourlyBars[];
   last30_hourly_convs: DayHourlyBars[];
+  last30_hourly_user_msgs: DayHourlyBars[];
   last30_daily_msgs: DailyBarSlot[];
   last30_daily_convs: DailyBarSlot[];
+  last30_daily_user_msgs: DailyBarSlot[];
   heatmap_cells: HeatmapCell[];
   heatmap_cells_convs: HeatmapCell[];
   heatmap_active_days: number;
