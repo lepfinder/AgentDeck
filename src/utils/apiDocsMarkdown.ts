@@ -1,7 +1,7 @@
 export function getApiDocsMarkdown(): string {
   return `# AgentDeck REST API 接口规范与集成文档 (v0.2.4)
 
-> 💡 **鉴权说明 (Authentication)**: 
+> **鉴权说明 (Authentication)**: 
 > 当前版本 API **无需 Token 校验 (No Token Required)**。
 > 服务默认严格监听在本机回环网卡 \`127.0.0.1:8788\`，仅限当前 Mac 本机进程访问（外部网络无法直接连通），方便各类本地脚本、Raycast 扩展、Alfred 插件及 CLI 工具免签调用。
 
