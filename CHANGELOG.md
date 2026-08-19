@@ -9,6 +9,9 @@
 - **数据备份与灾备恢复引擎 (Backup & Restore)**：
   - 基于 SQLite `VACUUM INTO` 热快照与媒体压缩打包（`.tar.gz`），精确保留最近 3 份历史快照
   - 自动探测并支持一键预设 Google Drive（`~/Library/CloudStorage`）、iCloud Drive、本地 Documents 与 NAS 挂载路径
+  - **macOS Cocoa 原生异步目录选择器**：集成 `rfd` 原生文件对话框，秒级响应且永不阻塞
+  - **实时阶段进度条 (Real-time Progress Bar)**：热快照、媒体收集、Gzip 压缩与修剪全流程百分比与状态动态反馈
+  - **`~/.agentdeck/config.json` 独立持久化配置体系**：替代易丢失的浏览器 LocalStorage，并随备份包一键跨端同步迁移
   - 支持每日后台静默自动备份、随时一键立即备份与一键快照回滚还原
 - **设置页自定义极客下拉组件**：替换原生 Select 为半透明毛玻璃高定制下拉菜单（支持旋转箭头、状态高亮与主题拟态）
 - **热力图与图表 Tooltip 玻璃拟态统一**：去除原生 Emoji 图标，全面对齐 Lucide 专业图标体系与微光玻璃质感
