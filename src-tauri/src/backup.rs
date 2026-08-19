@@ -29,6 +29,13 @@ pub struct RestoreInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupProgress {
+    pub stage: String,
+    pub percent: u8,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CloudPreset {
     pub id: String,
     pub name: String,
@@ -130,16 +137,36 @@ pub fn detect_cloud_presets() -> Vec<CloudPreset> {
     presets
 }
 
-/// 执行原子备份：SQLite VACUUM 快照 + media 文件夹打包压缩为单个 .tar.gz
+/// 执行原子备份：SQLite VACUUM 快照 + media 文件夹打包压缩为单个 .tar.gz（带进度通知）
 pub fn create_backup(
     conn: &Connection,
     target_dir_str: &str,
     max_snapshots: usize,
 ) -> Result<BackupInfo, String> {
+    create_backup_with_progress(conn, target_dir_str, max_snapshots, None)
+}
+
+pub fn create_backup_with_progress(
+    conn: &Connection,
+    target_dir_str: &str,
+    max_snapshots: usize,
+    progress_callback: Option<Box<dyn Fn(BackupProgress) + Send + Sync>>,
+) -> Result<BackupInfo, String> {
+    let notify = |stage: &str, percent: u8, message: &str| {
+        if let Some(ref cb) = progress_callback {
+            cb(BackupProgress {
+                stage: stage.to_string(),
+                percent,
+                message: message.to_string(),
+            });
+        }
+    };
+
     if target_dir_str.trim().is_empty() {
         return Err("备份目标路径不能为空".to_string());
     }
 
+    notify("init", 5, "正在初始化备份目录...");
     let target_dir = expand_tilde(target_dir_str);
     std::fs::create_dir_all(&target_dir)
         .map_err(|e| format!("无法创建备份目标目录 {:?}: {}", target_dir, e))?;
@@ -156,6 +183,7 @@ pub fn create_backup(
     let temp_db_path = temp_staging_dir.join("agentdeck.db");
 
     // 1. 使用 SQLite 原生 VACUUM INTO 生成自包含热快照（无锁一致性）
+    notify("snapshot", 20, "正在生成 SQLite 一致性热快照...");
     let vacuum_sql = format!("VACUUM INTO '{}'", temp_db_path.to_string_lossy().replace('\'', "''"));
     if let Err(e) = conn.execute(&vacuum_sql, []) {
         let _ = std::fs::remove_dir_all(&temp_staging_dir);
@@ -172,6 +200,7 @@ pub fn create_backup(
     };
 
     // 2. 打包生成 .tar.gz
+    notify("collecting", 40, "正在收集数据库与媒体图片资产...");
     let tar_file_name = format!("agentdeck_backup_{}.tar.gz", ts_str);
     let target_tar_path = target_dir.join(&tar_file_name);
 
@@ -187,7 +216,14 @@ pub fn create_backup(
         return Err(format!("追加数据库到归档包失败: {}", e));
     }
 
+    // 追加配置文件 ~/.agentdeck/config.json
+    let config_path = crate::config::get_config_path();
+    if config_path.is_file() {
+        let _ = tar_builder.append_path_with_name(&config_path, "config.json");
+    }
+
     // 追加媒体目录 ~/.agentdeck/media
+    notify("compressing", 65, "正在高压缩比打包归档 (.tar.gz)...");
     let mut media_file_count = 0usize;
     if let Some(media_root) = crate::media_archive::get_media_root() {
         if media_root.is_dir() {
@@ -222,6 +258,7 @@ pub fn create_backup(
     let _ = std::fs::remove_dir_all(&temp_staging_dir);
 
     // 3. 修剪旧备份：保留最新的 max_snapshots 份（默认 3 份）
+    notify("pruning", 90, "正在检查并修剪多余旧快照 (保留最新 3 份)...");
     let effective_max = if max_snapshots == 0 { 3 } else { max_snapshots };
     prune_old_backups(&target_dir, effective_max);
 
@@ -229,6 +266,8 @@ pub fn create_backup(
         .metadata()
         .map(|m| m.len())
         .unwrap_or(0);
+
+    notify("done", 100, "备份完成！");
 
     Ok(BackupInfo {
         file_name: tar_file_name,
@@ -380,11 +419,21 @@ pub fn restore_backup(backup_file_str: &str) -> Result<RestoreInfo, String> {
         }
     }
 
+    // 恢复配置文件 config.json
+    let restored_config = temp_restore_dir.join("config.json");
+    if restored_config.is_file() {
+        let target_config = crate::config::get_config_path();
+        if let Some(parent) = target_config.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::copy(&restored_config, &target_config);
+    }
+
     let _ = std::fs::remove_dir_all(&temp_restore_dir);
 
     Ok(RestoreInfo {
         success: true,
-        message: "数据与媒体资产恢复成功！".to_string(),
+        message: "数据、配置与媒体资产恢复成功！".to_string(),
         conversation_count: conv_count,
         media_file_count: media_restored_count,
     })

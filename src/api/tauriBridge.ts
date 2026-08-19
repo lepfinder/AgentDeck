@@ -13,6 +13,7 @@ import type {
   BackupInfo,
   RestoreInfo,
   CloudPreset,
+  AppConfig,
 } from '../types';
 
 export const isTauri = () => {
@@ -326,5 +327,25 @@ export const api = {
       return await invoke<CloudPreset[]>('get_cloud_presets_cmd');
     }
     return [];
+  },
+
+  async selectFolderDialog(): Promise<string | null> {
+    if (isTauri()) {
+      return await invoke<string | null>('select_folder_dialog_cmd');
+    }
+    return null;
+  },
+
+  async getAppConfig(): Promise<AppConfig | null> {
+    if (isTauri()) {
+      return await invoke<AppConfig>('get_app_config_cmd');
+    }
+    return null;
+  },
+
+  async saveAppConfig(config: AppConfig): Promise<void> {
+    if (isTauri()) {
+      await invoke('save_app_config_cmd', { config });
+    }
   },
 };

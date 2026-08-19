@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod config;
 pub mod db;
 pub mod http_server;
 pub mod importers;
@@ -595,13 +596,24 @@ fn get_database_path_info() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn create_backup_cmd(
+async fn create_backup_cmd(
     target_dir: String,
     max_snapshots: Option<usize>,
+    app_handle: tauri::AppHandle,
     state: State<'_, DbState>,
 ) -> Result<backup::BackupInfo, String> {
+    let handle = app_handle.clone();
+    let callback = move |p: backup::BackupProgress| {
+        let _ = handle.emit("backup-progress", p);
+    };
+
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    backup::create_backup(&conn, &target_dir, max_snapshots.unwrap_or(3))
+    backup::create_backup_with_progress(
+        &conn,
+        &target_dir,
+        max_snapshots.unwrap_or(3),
+        Some(Box::new(callback)),
+    )
 }
 
 #[tauri::command]
@@ -617,6 +629,26 @@ fn restore_backup_cmd(backup_file: String) -> Result<backup::RestoreInfo, String
 #[tauri::command]
 fn get_cloud_presets_cmd() -> Result<Vec<backup::CloudPreset>, String> {
     Ok(backup::detect_cloud_presets())
+}
+
+#[tauri::command]
+async fn select_folder_dialog_cmd() -> Result<Option<String>, String> {
+    let folder = rfd::AsyncFileDialog::new()
+        .set_title("选择 AgentDeck 备份存储目录")
+        .pick_folder()
+        .await;
+
+    Ok(folder.map(|f| f.path().to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn get_app_config_cmd() -> Result<config::AppConfig, String> {
+    Ok(config::load_config())
+}
+
+#[tauri::command]
+fn save_app_config_cmd(config: config::AppConfig) -> Result<(), String> {
+    config::save_config(&config)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -648,7 +680,10 @@ pub fn run() {
             create_backup_cmd,
             list_backups_cmd,
             restore_backup_cmd,
-            get_cloud_presets_cmd
+            get_cloud_presets_cmd,
+            select_folder_dialog_cmd,
+            get_app_config_cmd,
+            save_app_config_cmd
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

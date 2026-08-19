@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import { api } from '../../api/tauriBridge';
 import {
   X,
@@ -28,7 +29,7 @@ import {
   Check,
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
-import type { CloudPreset, BackupInfo } from '../../types';
+import type { CloudPreset, BackupInfo, BackupProgress } from '../../types';
 
 export interface AiProviderConfig {
   id: string;
@@ -168,6 +169,7 @@ export const SettingsModal: React.FC<Props> = ({
   const [loadingBackups, setLoadingBackups] = useState<boolean>(false);
   const [isBackingUp, setIsBackingUp] = useState<boolean>(false);
   const [backupFeedback, setBackupFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+  const [backupProgress, setBackupProgress] = useState<BackupProgress | null>(null);
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
   const [confirmRestoreFile, setConfirmRestoreFile] = useState<string | null>(null);
   const [restoreFeedback, setRestoreFeedback] = useState<{ success: boolean; msg: string } | null>(null);
@@ -186,22 +188,74 @@ export const SettingsModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<BackupProgress>('backup-progress', (event) => {
+      setBackupProgress(event.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
+  const persistBackupSettings = async (targetPath: string, autoEnabled: boolean) => {
+    try {
+      localStorage.setItem('agentdeck_backup_target_path', targetPath);
+      localStorage.setItem('agentdeck_auto_backup_enabled', String(autoEnabled));
+      const currentConfig = (await api.getAppConfig()) || {
+        backup: { target_path: targetPath, auto_backup_enabled: autoEnabled, max_snapshots: 3 },
+      };
+      currentConfig.backup = {
+        ...currentConfig.backup,
+        target_path: targetPath,
+        auto_backup_enabled: autoEnabled,
+        max_snapshots: 3,
+      };
+      await api.saveAppConfig(currentConfig);
+    } catch (e) {
+      console.error('保存配置文件失败', e);
+    }
+  };
+
+  useEffect(() => {
     if (isOpen) {
       api.getDatabasePathInfo().then((p) => {
         if (p) setDbPath(p);
       });
-      api.getCloudPresets().then((presets) => {
-        setCloudPresets(presets);
-        const savedPath = localStorage.getItem('agentdeck_backup_target_path');
-        if (!savedPath) {
-          const gdrive = presets.find((p) => p.id === 'gdrive' && p.available);
-          if (gdrive) {
-            setBackupTargetPath(gdrive.path);
-            localStorage.setItem('agentdeck_backup_target_path', gdrive.path);
+
+      api.getAppConfig().then((cfg) => {
+        if (cfg && cfg.backup?.target_path) {
+          setBackupTargetPath(cfg.backup.target_path);
+          if (typeof cfg.backup.auto_backup_enabled === 'boolean') {
+            setAutoBackupEnabled(cfg.backup.auto_backup_enabled);
+          }
+          refreshBackups(cfg.backup.target_path);
+        } else {
+          const savedPath = localStorage.getItem('agentdeck_backup_target_path');
+          if (savedPath) {
+            setBackupTargetPath(savedPath);
+            refreshBackups(savedPath);
           }
         }
       });
-      refreshBackups(backupTargetPath);
+
+      api.getCloudPresets().then((presets) => {
+        setCloudPresets(presets);
+        const currentSaved = localStorage.getItem('agentdeck_backup_target_path');
+        if (!currentSaved) {
+          const gdrive = presets.find((p) => p.id === 'gdrive' && p.available);
+          const defaultPath = gdrive
+            ? gdrive.path
+            : (presets.find((p) => p.id === 'documents')?.path || '~/Documents/AgentDeck_Backups');
+          setBackupTargetPath(defaultPath);
+          persistBackupSettings(defaultPath, true);
+          refreshBackups(defaultPath);
+        }
+      });
     }
   }, [isOpen]);
 
@@ -367,6 +421,8 @@ export const SettingsModal: React.FC<Props> = ({
     }
     setIsBackingUp(true);
     setBackupFeedback(null);
+    setBackupProgress({ stage: 'init', percent: 5, message: '正在准备备份...' });
+
     try {
       const res = await api.createBackup(backupTargetPath.trim(), 3);
       setBackupFeedback({
@@ -382,6 +438,9 @@ export const SettingsModal: React.FC<Props> = ({
       });
     } finally {
       setIsBackingUp(false);
+      setTimeout(() => {
+        setBackupProgress(null);
+      }, 2500);
     }
   };
 
@@ -402,6 +461,19 @@ export const SettingsModal: React.FC<Props> = ({
       });
     } finally {
       setIsRestoring(false);
+    }
+  };
+
+  const handleSelectFolder = async () => {
+    try {
+      const selected = await api.selectFolderDialog();
+      if (selected) {
+        setBackupTargetPath(selected);
+        await persistBackupSettings(selected, autoBackupEnabled);
+        refreshBackups(selected);
+      }
+    } catch (e) {
+      console.error('选择目录失败', e);
     }
   };
 
@@ -866,15 +938,24 @@ export const SettingsModal: React.FC<Props> = ({
                       type="text"
                       value={backupTargetPath}
                       onChange={(e) => {
-                        setBackupTargetPath(e.target.value);
-                        localStorage.setItem('agentdeck_backup_target_path', e.target.value);
+                        const val = e.target.value;
+                        setBackupTargetPath(val);
+                        persistBackupSettings(val, autoBackupEnabled);
                       }}
                       placeholder="~/Documents/AgentDeck_Backups 或云盘挂载路径..."
                       className="flex-1 text-xs font-mono theme-bg-card border theme-border rounded-lg px-3 py-2 theme-text-main focus:outline-none focus:border-blue-500"
                     />
                     <button
+                      onClick={handleSelectFolder}
+                      className="px-3 py-2 text-xs font-medium bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/30 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shrink-0 shadow-xs"
+                      title="打开系统原生文件夹选择器"
+                    >
+                      <Folder className="h-3.5 w-3.5" />
+                      <span>浏览...</span>
+                    </button>
+                    <button
                       onClick={() => refreshBackups(backupTargetPath)}
-                      className="px-3 py-2 text-xs font-medium theme-bg-card hover:theme-bg-sub border theme-border theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1.5"
+                      className="px-3 py-2 text-xs font-medium theme-bg-card hover:theme-bg-sub border theme-border theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
                       title="刷新快照列表"
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${loadingBackups ? 'animate-spin' : ''}`} />
@@ -885,7 +966,7 @@ export const SettingsModal: React.FC<Props> = ({
                   {/* 快捷预设胶囊按钮 */}
                   <div className="pt-1">
                     <div className="text-[11px] theme-text-muted mb-1.5 flex items-center gap-1">
-                      <span>常用云盘与本地预设:</span>
+                      <span>常用预设:</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {cloudPresets.map((preset) => (
@@ -893,7 +974,7 @@ export const SettingsModal: React.FC<Props> = ({
                           key={preset.id}
                           onClick={() => {
                             setBackupTargetPath(preset.path);
-                            localStorage.setItem('agentdeck_backup_target_path', preset.path);
+                            persistBackupSettings(preset.path, autoBackupEnabled);
                             refreshBackups(preset.path);
                           }}
                           className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all cursor-pointer ${
@@ -929,8 +1010,9 @@ export const SettingsModal: React.FC<Props> = ({
                         type="checkbox"
                         checked={autoBackupEnabled}
                         onChange={(e) => {
-                          setAutoBackupEnabled(e.target.checked);
-                          localStorage.setItem('agentdeck_auto_backup_enabled', String(e.target.checked));
+                          const checked = e.target.checked;
+                          setAutoBackupEnabled(checked);
+                          persistBackupSettings(backupTargetPath, checked);
                         }}
                         className="sr-only peer"
                       />
@@ -945,10 +1027,10 @@ export const SettingsModal: React.FC<Props> = ({
                       className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-all cursor-pointer shadow-xs"
                     >
                       {isBackingUp ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
-                      <span>立即执行备份 (Backup Now)</span>
+                      <span>{isBackingUp ? '正在执行备份...' : '立即执行备份 (Backup Now)'}</span>
                     </button>
 
-                    {backupFeedback && (
+                    {backupFeedback && !isBackingUp && (
                       <div
                         className={`text-xs flex items-center gap-1.5 max-w-md ${
                           backupFeedback.success ? 'text-emerald-500 font-medium' : 'text-red-500 font-medium'
@@ -959,6 +1041,25 @@ export const SettingsModal: React.FC<Props> = ({
                       </div>
                     )}
                   </div>
+
+                  {/* 进度条与实时状态展示 */}
+                  {isBackingUp && backupProgress && (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="theme-text-main font-medium flex items-center gap-1.5">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500 shrink-0" />
+                          <span>{backupProgress.message}</span>
+                        </span>
+                        <span className="font-mono font-bold text-blue-500">{backupProgress.percent}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-black/20 dark:bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(59,130,246,0.6)]"
+                          style={{ width: `${backupProgress.percent}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* 历史快照列表 (Top 3) */}

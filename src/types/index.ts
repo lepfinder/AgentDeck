@@ -256,3 +256,22 @@ export interface CloudPreset {
   path: string;
   available: boolean;
 }
+
+export interface BackupProgress {
+  stage: string;
+  percent: number;
+  message: string;
+}
+
+export interface BackupConfig {
+  target_path: string;
+  auto_backup_enabled: boolean;
+  max_snapshots: number;
+}
+
+export interface AppConfig {
+  backup: BackupConfig;
+  auto_sync_interval_mins?: number;
+  theme?: string;
+  ai_config?: Record<string, any>;
+}
