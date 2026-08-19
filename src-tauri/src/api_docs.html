@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentDeck REST API Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(22, 28, 45, 0.75);
+      --border: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(59, 130, 246, 0.4);
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --primary: #3b82f6;
+      --primary-glow: rgba(59, 130, 246, 0.25);
+      --get-badge: #10b981;
+      --post-badge: #6366f1;
+      --tag-bg: rgba(255, 255, 255, 0.04);
+      --code-bg: #0d1322;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: radial-gradient(circle at 50% 0%, #1e293b 0%, var(--bg) 75%);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 40px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 30px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    .title-area h1 {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .version-badge {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      font-weight: 600;
+      -webkit-text-fill-color: initial;
+    }
+
+    .title-area p {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: 6px;
+    }
+
+    .server-status {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 12px 18px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      backdrop-filter: blur(12px);
+    }
+
+    .pulse-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    .status-info { font-size: 12px; }
+    .status-info .label { color: var(--text-muted); font-size: 11px; }
+    .status-info .value { font-family: 'JetBrains Mono', monospace; font-weight: 600; color: #38bdf8; }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #93c5fd;
+      margin: 32px 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .endpoint-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(8px);
+    }
+
+    .endpoint-card:hover {
+      border-color: var(--border-hover);
+      box-shadow: 0 8px 24px var(--primary-glow);
+    }
+
+    .endpoint-header {
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      user-select: none;
+      gap: 16px;
+    }
+
+    .endpoint-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .method-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 6px;
+      letter-spacing: 0.5px;
+    }
+
+    .method-get { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .method-post { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+
+    .endpoint-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e2e8f0;
+    }
+
+    .endpoint-desc {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .endpoint-body {
+      padding: 0 20px 20px;
+      border-top: 1px solid var(--border);
+      margin-top: 10px;
+      padding-top: 16px;
+    }
+
+    .param-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin: 12px 0 16px;
+    }
+
+    .param-table th, .param-table td {
+      padding: 8px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .param-table th { color: var(--text-muted); font-weight: 600; }
+    .param-name { font-family: 'JetBrains Mono', monospace; color: #38bdf8; font-weight: 600; }
+    .param-type { font-family: 'JetBrains Mono', monospace; color: #a78bfa; font-size: 11px; }
+
+    .code-block {
+      background: var(--code-bg);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #cbd5e1;
+      overflow-x: auto;
+      margin-top: 10px;
+      position: relative;
+    }
+
+    .test-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      margin-top: 8px;
+    }
+
+    .test-btn:hover {
+      background: #3b82f6;
+      color: #ffffff;
+      box-shadow: 0 0 12px rgba(59, 130, 246, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-area">
+        <h1>AgentDeck REST API <span class="version-badge">v0.2.4</span></h1>
+        <p>提供给外部脚本、CLI、Raycast、自动化管线与大盘集成的只读/控制服务</p>
+      </div>
+      <div class="server-status">
+        <div class="pulse-dot"></div>
+        <div class="status-info">
+          <div class="label">API 服务运行中</div>
+          <div class="value">http://127.0.0.1:8788</div>
+        </div>
+      </div>
+    </header>
+
+    <div class="section-title">核心概览与指标</div>
+
+    <!-- Health -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/health</span>
+        </div>
+        <span class="endpoint-desc">服务健康与核心可用性探测</span>
+      </div>
+      <div class="endpoint-body">
+        <p class="endpoint-desc">返回应用版本、各多源 AI 助手数据源探测状态与基本大盘总数。</p>
+        <div class="code-block">curl http://127.0.0.1:8788/health</div>
+        <a href="/health" target="_blank" class="test-btn">在新标签页中执行测试 &rarr;</a>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/stats</span>
+        </div>
+        <span class="endpoint-desc">全局会话、消息统计与多智能体分布</span>
+      </div>
+      <div class="endpoint-body">
+        <p class="endpoint-desc">获取全量会话数、用户消息总数、Antigravity / Cursor / Claude / Codex 占比及工作区统计。</p>
+        <div class="code-block">curl http://127.0.0.1:8788/api/stats</div>
+        <a href="/api/stats" target="_blank" class="test-btn">在新标签页中执行测试 &rarr;</a>
+      </div>
+    </div>
+
+    <div class="section-title">工作区与研发深度画像</div>
+
+    <!-- Workspaces -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/workspaces</span>
+        </div>
+        <span class="endpoint-desc">已索引的项目工作区列表</span>
+      </div>
+      <div class="endpoint-body">
+        <table class="param-table">
+          <thead><tr><th>参数名</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="param-name">q</td><td class="param-type">string (可选)</td><td>按项目名称或目录模糊过滤</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block">curl http://127.0.0.1:8788/api/workspaces</div>
+        <a href="/api/workspaces" target="_blank" class="test-btn">在新标签页中执行测试 &rarr;</a>
+      </div>
+    </div>
+
+    <!-- Workspace Detail -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/workspaces/detail</span>
+        </div>
+        <span class="endpoint-desc">指定工作区 365 天研发热力图与打卡明细</span>
+      </div>
+      <div class="endpoint-body">
+        <table class="param-table">
+          <thead><tr><th>参数名</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="param-name">workspace</td><td class="param-type">string (必填)</td><td>工作区绝对路径</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block">curl "http://127.0.0.1:8788/api/workspaces/detail?workspace=/Users/xiyangxie/workspace/personal/AgentDeck"</div>
+      </div>
+    </div>
+
+    <div class="section-title">智能体会话与消息流</div>
+
+    <!-- Conversations -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/conversations</span>
+        </div>
+        <span class="endpoint-desc">会话列表查询（支持过滤与分页）</span>
+      </div>
+      <div class="endpoint-body">
+        <table class="param-table">
+          <thead><tr><th>参数名</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="param-name">workspace</td><td class="param-type">string (可选)</td><td>限定工作区</td></tr>
+            <tr><td class="param-name">source</td><td class="param-type">string (可选)</td><td>限定工具源 (antigravity, cursor, claude, codex)</td></tr>
+            <tr><td class="param-name">limit / offset</td><td class="param-type">number</td><td>分页参数 (默认 limit=50)</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block">curl "http://127.0.0.1:8788/api/conversations?limit=10"</div>
+        <a href="/api/conversations?limit=10" target="_blank" class="test-btn">在新标签页中执行测试 &rarr;</a>
+      </div>
+    </div>
+
+    <!-- Conversation Messages -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/conversations/:id</span>
+        </div>
+        <span class="endpoint-desc">单个会话全量消息流、思考链与附图</span>
+      </div>
+      <div class="endpoint-body">
+        <div class="code-block">curl http://127.0.0.1:8788/api/conversations/{conversation_id}</div>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/api/search</span>
+        </div>
+        <span class="endpoint-desc">全局消息全文检索与代码关键词定位</span>
+      </div>
+      <div class="endpoint-body">
+        <table class="param-table">
+          <thead><tr><th>参数名</th><th>类型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="param-name">q</td><td class="param-type">string (必填)</td><td>搜索关键词</td></tr>
+            <tr><td class="param-name">limit</td><td class="param-type">number</td><td>结果上限 (默认 50)</td></tr>
+          </tbody>
+        </table>
+        <div class="code-block">curl "http://127.0.0.1:8788/api/search?q=backup"</div>
+      </div>
+    </div>
+
+    <div class="section-title">媒体资源与控制接口</div>
+
+    <!-- Media -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-get">GET</span>
+          <span class="endpoint-path">/media/:source/:conv_id/:filename</span>
+        </div>
+        <span class="endpoint-desc">本地分层归档媒体图片静态分发</span>
+      </div>
+      <div class="endpoint-body">
+        <p class="endpoint-desc">安全静态访问本地持久化归档的图片资产（支持 PNG/JPEG/WEBP/GIF）。</p>
+        <div class="code-block">curl -I http://127.0.0.1:8788/media/antigravity/{conv_id}/{image.png}</div>
+      </div>
+    </div>
+
+    <!-- Sync -->
+    <div class="endpoint-card">
+      <div class="endpoint-header">
+        <div class="endpoint-meta">
+          <span class="method-badge method-post">POST</span>
+          <span class="endpoint-path">/api/sync</span>
+        </div>
+        <span class="endpoint-desc">即时触发多源数据增量同步</span>
+      </div>
+      <div class="endpoint-body">
+        <p class="endpoint-desc">通知后端立即扫描全部 AI 助手数据源目录并增量解析落盘。</p>
+        <div class="code-block">curl -X POST http://127.0.0.1:8788/api/sync</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

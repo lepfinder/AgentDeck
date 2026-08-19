@@ -98,13 +98,18 @@ fn handle_connection(mut stream: TcpStream) {
 
     // 路由分发
     match (method, path) {
+        ("GET", "/") | ("GET", "/docs") | ("GET", "/api/docs") => {
+            let html = include_str!("api_docs.html");
+            send_response(&mut stream, 200, "text/html; charset=utf-8", html);
+        }
+
         ("GET", "/health") => {
             let stats = fetch_dashboard_stats(&conn).ok();
             let body = json!({
                 "ok": true,
                 "status": "ok",
                 "app": "AgentDeck",
-                "version": "0.2.3",
+                "version": "0.2.4",
                 "cursor_available": true,
                 "ai_available": true,
                 "stats": stats

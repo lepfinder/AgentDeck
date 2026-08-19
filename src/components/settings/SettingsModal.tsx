@@ -27,6 +27,9 @@ import {
   RotateCcw,
   FileArchive,
   Check,
+  Server,
+  Copy,
+  Terminal,
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
 import type { CloudPreset, BackupInfo, BackupProgress } from '../../types';
@@ -138,7 +141,43 @@ export const SettingsModal: React.FC<Props> = ({
   totalMessages = 0,
   appVersion = '0.2.2',
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'appearance' | 'about'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'api' | 'appearance' | 'about'>('ai');
+
+  // API 服务状态与检测
+  const [apiHealth, setApiHealth] = useState<{ status: string; latencyMs: number; ok: boolean; version?: string } | null>(null);
+  const [checkingApi, setCheckingApi] = useState<boolean>(false);
+  const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
+
+  const checkApiHealth = async () => {
+    setCheckingApi(true);
+    const start = performance.now();
+    try {
+      const res = await fetch('http://127.0.0.1:8788/health');
+      const data = await res.json();
+      const latency = Math.round(performance.now() - start);
+      if (data && data.ok) {
+        setApiHealth({ status: '服务正常运行中 (Active)', latencyMs: latency, ok: true, version: data.version });
+      } else {
+        setApiHealth({ status: '服务响应异常', latencyMs: latency, ok: false });
+      }
+    } catch {
+      setApiHealth({ status: '连接失败 (服务未启动或端口被占用)', latencyMs: 0, ok: false });
+    } finally {
+      setCheckingApi(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen && activeTab === 'api') {
+      checkApiHealth();
+    }
+  }, [isOpen, activeTab]);
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedEndpoint(id);
+    setTimeout(() => setCopiedEndpoint(null), 2000);
+  };
 
   // 主力与备用模型配置
   const [primaryProviderId, setPrimaryProviderId] = useState<string>(() => {
@@ -557,6 +596,17 @@ export const SettingsModal: React.FC<Props> = ({
             >
               <Archive className="h-4 w-4" />
               <span>数据备份与恢复</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('api')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'api'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
+                }`}
+            >
+              <Server className="h-4 w-4" />
+              <span>REST API 服务</span>
             </button>
 
             <button
@@ -1147,6 +1197,140 @@ export const SettingsModal: React.FC<Props> = ({
                       ))}
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'api' && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-sm font-bold theme-text-main">REST API 服务与集成 (API Services & Integration)</h3>
+                  <p className="text-xs theme-text-muted mt-0.5">
+                    嵌入式轻量级 HTTP 服务，提供标准 RESTful 接口用于外部脚本、Raycast、Alfred、CLI 终端与第三方大盘接入。
+                  </p>
+                </div>
+
+                {/* 服务运行状态卡片 */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold theme-text-main">服务运行状态</span>
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                        <span>{apiHealth?.ok ? '服务运行中 (Active)' : '服务已就绪 (127.0.0.1:8788)'}</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                    <div className="flex items-center gap-2">
+                      <div className="px-3 py-1.5 rounded-lg bg-black/20 dark:bg-white/5 border theme-border font-mono text-xs text-blue-400 font-semibold select-all">
+                        http://127.0.0.1:8788
+                      </div>
+                      <button
+                        onClick={() => copyToClipboard('http://127.0.0.1:8788', 'base-url')}
+                        className="px-2.5 py-1.5 text-xs theme-bg-card hover:theme-bg-sub border theme-border theme-text-muted hover:theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1"
+                        title="复制 Base URL"
+                      >
+                        {copiedEndpoint === 'base-url' ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                        <span>{copiedEndpoint === 'base-url' ? '已复制' : '复制'}</span>
+                      </button>
+
+                      <button
+                        onClick={checkApiHealth}
+                        disabled={checkingApi}
+                        className="px-2.5 py-1.5 text-xs theme-bg-card hover:theme-bg-sub border theme-border theme-text-muted hover:theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1"
+                        title="测试接口连通性"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${checkingApi ? 'animate-spin' : ''}`} />
+                        <span>{checkingApi ? '测试中...' : '测试连通性'}</span>
+                      </button>
+
+                      {apiHealth && (
+                        <span className="text-[11px] font-mono text-emerald-400">
+                          ({apiHealth.latencyMs}ms)
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 文档跳转主入口 */}
+                    <button
+                      onClick={() => api.openUrl('http://127.0.0.1:8788/docs')}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all cursor-pointer shadow-xs"
+                      title="在系统默认浏览器中打开交互式 API 文档"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      <span>查看在线 API 文档 (Interactive Docs)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 开放接口清单 */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold theme-text-main">开放接口概览</span>
+                    <span className="text-[11px] theme-text-muted">点击端点或右侧按钮可直接复制 cURL 调用命令</span>
+                  </div>
+
+                  <div className="space-y-2 text-xs">
+                    {[
+                      { method: 'GET', path: '/health', desc: '服务健康度与数据源可用性探测', curl: 'curl http://127.0.0.1:8788/health' },
+                      { method: 'GET', path: '/api/stats', desc: '大盘总览指标、总消息数与多智能体分布', curl: 'curl http://127.0.0.1:8788/api/stats' },
+                      { method: 'GET', path: '/api/workspaces', desc: '项目工作区列表与消息统计 (支持 ?q= 搜索)', curl: 'curl http://127.0.0.1:8788/api/workspaces' },
+                      { method: 'GET', path: '/api/workspaces/detail', desc: '指定工作区 365 天研发热力图与打卡明细', curl: 'curl "http://127.0.0.1:8788/api/workspaces/detail?workspace=YOUR_PATH"' },
+                      { method: 'GET', path: '/api/conversations', desc: '智能体会话历史 (支持 ?source= &limit=20)', curl: 'curl "http://127.0.0.1:8788/api/conversations?limit=20"' },
+                      { method: 'GET', path: '/api/conversations/:id', desc: '指定会话完整消息流、思考链与附图资源', curl: 'curl http://127.0.0.1:8788/api/conversations/CONV_ID' },
+                      { method: 'GET', path: '/api/search?q=...', desc: '全局全文搜索与代码关键词定位', curl: 'curl "http://127.0.0.1:8788/api/search?q=hello"' },
+                      { method: 'POST', path: '/api/sync', desc: '触发全量 AI 智能体数据源增量扫描同步', curl: 'curl -X POST http://127.0.0.1:8788/api/sync' },
+                      { method: 'GET', path: '/media/:source/:id/:file', desc: '本地持久化媒体图片静态分发', curl: 'curl -I http://127.0.0.1:8788/media/antigravity/ID/pic.png' },
+                    ].map((item, idx) => (
+                      <div
+                        key={idx}
+                        className="p-2.5 rounded-lg theme-bg-card border theme-border flex items-center justify-between hover:theme-border-hover transition-all"
+                      >
+                        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-bold shrink-0 ${
+                              item.method === 'GET'
+                                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                                : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                            }`}
+                          >
+                            {item.method}
+                          </span>
+                          <span className="font-mono font-medium theme-text-main text-xs">{item.path}</span>
+                          <span className="text-[11px] theme-text-muted truncate hidden sm:inline">{item.desc}</span>
+                        </div>
+
+                        <button
+                          onClick={() => copyToClipboard(item.curl, `endpoint-${idx}`)}
+                          className="px-2 py-1 text-[11px] theme-bg-sub hover:theme-bg-main border theme-border theme-text-muted hover:theme-text-main rounded-md transition-all cursor-pointer flex items-center gap-1 shrink-0 ml-2"
+                          title="复制 cURL 命令"
+                        >
+                          {copiedEndpoint === `endpoint-${idx}` ? (
+                            <Check className="h-3 w-3 text-emerald-500" />
+                          ) : (
+                            <Copy className="h-3 w-3" />
+                          )}
+                          <span>{copiedEndpoint === `endpoint-${idx}` ? '已复制' : '复制 cURL'}</span>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 快速调用与脚本集成卡片 */}
+                <div className="border border-blue-500/20 bg-blue-500/5 rounded-xl p-4 space-y-2 text-xs">
+                  <div className="flex items-center gap-2 font-semibold theme-text-main">
+                    <Terminal className="h-4 w-4 text-blue-500" />
+                    <span>快速调用示例 (Quick Start)</span>
+                  </div>
+                  <div className="p-2.5 rounded-lg bg-black/40 dark:bg-black/60 font-mono text-[11px] text-blue-300 overflow-x-auto select-all border border-white/5">
+                    curl http://127.0.0.1:8788/api/stats | jq .
+                  </div>
+                  <p className="text-[11px] theme-text-muted">
+                    支持在 Raycast、Alfred、CLI 脚本、自动化管线或局域网 HomeAssistant 等场景中无缝获取会话资产。
+                  </p>
                 </div>
               </div>
             )}
