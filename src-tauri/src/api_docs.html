@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,14 +8,51 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
-    :root {
+    /* 浅色主题 (默认) */
+    :root, html[data-theme="light"] {
+      --bg: #f8fafc;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #e2e8f0 0%, #f8fafc 85%);
+      --card-bg: #ffffff;
+      --card-border: #e2e8f0;
+      --card-border-hover: rgba(37, 99, 235, 0.4);
+      --card-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+      --text: #0f172a;
+      --text-muted: #475569;
+      --text-sub: #64748b;
+      --header-bg: rgba(255, 255, 255, 0.88);
+      --sidebar-bg: rgba(248, 250, 252, 0.75);
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --get: #059669;
+      --get-bg: rgba(16, 185, 129, 0.1);
+      --get-border: rgba(16, 185, 129, 0.25);
+      --post: #4f46e5;
+      --post-bg: rgba(99, 102, 241, 0.1);
+      --post-border: rgba(99, 102, 241, 0.25);
+      --code-bg: #f1f5f9;
+      --code-text: #1e293b;
+      --schema-bg: #f8fafc;
+      --auth-banner-bg: rgba(37, 99, 235, 0.06);
+      --auth-banner-border: rgba(37, 99, 235, 0.2);
+      --menu-item-hover: rgba(0, 0, 0, 0.04);
+      --menu-item-active-bg: rgba(37, 99, 235, 0.1);
+      --menu-item-active-color: #2563eb;
+      --sidebar-w: 260px;
+    }
+
+    /* 深色主题 */
+    html[data-theme="dark"] {
       --bg: #090d16;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #1e293b 0%, #090d16 80%);
       --card-bg: #111827;
       --card-border: rgba(255, 255, 255, 0.08);
       --card-border-hover: rgba(59, 130, 246, 0.35);
+      --card-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
       --text: #f8fafc;
       --text-muted: #94a3b8;
       --text-sub: #64748b;
+      --header-bg: rgba(9, 13, 22, 0.85);
+      --sidebar-bg: rgba(11, 15, 25, 0.5);
       --primary: #3b82f6;
       --primary-hover: #2563eb;
       --get: #10b981;
@@ -25,18 +62,24 @@
       --post-bg: rgba(99, 102, 241, 0.12);
       --post-border: rgba(99, 102, 241, 0.25);
       --code-bg: #060911;
+      --code-text: #cbd5e1;
       --schema-bg: rgba(0, 0, 0, 0.4);
-      --sidebar-w: 260px;
+      --auth-banner-bg: rgba(59, 130, 246, 0.06);
+      --auth-banner-border: rgba(59, 130, 246, 0.2);
+      --menu-item-hover: rgba(255, 255, 255, 0.05);
+      --menu-item-active-bg: rgba(59, 130, 246, 0.15);
+      --menu-item-active-color: #60a5fa;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
     body {
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: radial-gradient(circle at 50% 0%, #1e293b 0%, var(--bg) 80%);
+      background: var(--bg-gradient);
       color: var(--text);
       line-height: 1.6;
       min-height: 100vh;
+      transition: background 0.2s, color 0.2s;
     }
 
     /* 顶部导航 */
@@ -44,7 +87,7 @@
       position: sticky;
       top: 0;
       z-index: 50;
-      background: rgba(9, 13, 22, 0.85);
+      background: var(--header-bg);
       backdrop-filter: blur(16px);
       border-bottom: 1px solid var(--card-border);
       padding: 14px 28px;
@@ -52,6 +95,7 @@
       justify-content: space-between;
       align-items: center;
       gap: 16px;
+      transition: all 0.2s;
     }
 
     .brand h1 {
@@ -61,9 +105,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      color: var(--text);
     }
 
     .version-tag {
@@ -71,17 +113,16 @@
       font-family: 'JetBrains Mono', monospace;
       padding: 2px 8px;
       border-radius: 9999px;
-      background: rgba(59, 130, 246, 0.15);
-      color: #60a5fa;
-      border: 1px solid rgba(59, 130, 246, 0.3);
+      background: rgba(37, 99, 235, 0.12);
+      color: var(--primary);
+      border: 1px solid rgba(37, 99, 235, 0.25);
       font-weight: 700;
-      -webkit-text-fill-color: initial;
     }
 
     .header-actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
 
     .server-badge {
@@ -93,6 +134,7 @@
       align-items: center;
       gap: 8px;
       font-size: 12px;
+      box-shadow: var(--card-shadow);
     }
 
     .pulse {
@@ -109,8 +151,29 @@
       50% { opacity: 0.4; transform: scale(0.8); }
     }
 
+    .theme-toggle-btn {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text-muted);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+      box-shadow: var(--card-shadow);
+    }
+
+    .theme-toggle-btn:hover {
+      color: var(--text);
+      border-color: var(--primary);
+    }
+
     .copy-doc-btn {
-      background: #2563eb;
+      background: var(--primary);
       color: #ffffff;
       border: none;
       padding: 6px 14px;
@@ -125,13 +188,13 @@
     }
 
     .copy-doc-btn:hover {
-      background: #1d4ed8;
-      box-shadow: 0 0 14px rgba(37, 99, 235, 0.4);
+      background: var(--primary-hover);
+      box-shadow: 0 0 14px rgba(37, 99, 235, 0.35);
     }
 
     /* 主体左右两列布局 */
     .layout {
-      max-width: 1300px;
+      max-width: 1320px;
       margin: 0 auto;
       display: flex;
       min-height: calc(100vh - 65px);
@@ -147,7 +210,9 @@
       overflow-y: auto;
       border-right: 1px solid var(--card-border);
       padding: 24px 16px;
-      background: rgba(11, 15, 25, 0.5);
+      background: var(--sidebar-bg);
+      backdrop-filter: blur(12px);
+      transition: all 0.2s;
     }
 
     .search-filter {
@@ -156,7 +221,7 @@
 
     .search-filter input {
       width: 100%;
-      background: var(--code-bg);
+      background: var(--card-bg);
       border: 1px solid var(--card-border);
       color: var(--text);
       font-size: 12px;
@@ -199,13 +264,13 @@
     }
 
     .menu-item:hover {
-      background: rgba(255, 255, 255, 0.05);
+      background: var(--menu-item-hover);
       color: var(--text);
     }
 
     .menu-item.active {
-      background: rgba(59, 130, 246, 0.15);
-      color: #60a5fa;
+      background: var(--menu-item-active-bg);
+      color: var(--menu-item-active-color);
       font-weight: 600;
     }
 
@@ -221,13 +286,13 @@
     main.content {
       flex: 1;
       padding: 32px 40px 80px;
-      max-width: 960px;
+      max-width: 980px;
     }
 
     /* 鉴权说明横幅 */
     .auth-banner {
-      background: rgba(59, 130, 246, 0.06);
-      border: 1px solid rgba(59, 130, 246, 0.2);
+      background: var(--auth-banner-bg);
+      border: 1px solid var(--auth-banner-border);
       border-radius: 14px;
       padding: 16px 20px;
       margin-bottom: 32px;
@@ -237,8 +302,8 @@
     }
 
     .auth-icon {
-      background: rgba(59, 130, 246, 0.2);
-      color: #60a5fa;
+      background: rgba(37, 99, 235, 0.15);
+      color: var(--primary);
       width: 32px;
       height: 32px;
       border-radius: 8px;
@@ -252,7 +317,7 @@
     .auth-content h4 {
       font-size: 13px;
       font-weight: 700;
-      color: #93c5fd;
+      color: var(--text);
       margin-bottom: 2px;
     }
 
@@ -264,17 +329,18 @@
 
     .auth-content code {
       font-family: 'JetBrains Mono', monospace;
-      background: rgba(0, 0, 0, 0.3);
+      background: var(--code-bg);
       padding: 2px 6px;
       border-radius: 4px;
-      color: #38bdf8;
+      color: var(--primary);
+      border: 1px solid var(--card-border);
     }
 
     /* 接口卡片 */
     .section-heading {
-      font-size: 14px;
+      font-size: 13.5px;
       font-weight: 700;
-      color: #60a5fa;
+      color: var(--primary);
       margin: 36px 0 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
@@ -291,6 +357,7 @@
       margin-bottom: 24px;
       overflow: hidden;
       transition: all 0.2s;
+      box-shadow: var(--card-shadow);
       scroll-margin-top: 80px;
     }
 
@@ -329,7 +396,7 @@
       font-family: 'JetBrains Mono', monospace;
       font-size: 14px;
       font-weight: 700;
-      color: #f1f5f9;
+      color: var(--text);
     }
 
     .desc {
@@ -378,13 +445,13 @@
 
     .param-group input:focus {
       border-color: var(--primary);
-      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
     }
 
     /* 返回值示例区域 */
     .example-section {
       background: var(--schema-bg);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--card-border);
       border-radius: 10px;
       padding: 12px 16px;
     }
@@ -392,7 +459,7 @@
     .example-header {
       font-size: 11px;
       font-weight: 700;
-      color: #93c5fd;
+      color: var(--primary);
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -404,7 +471,7 @@
     .example-body {
       font-family: 'JetBrains Mono', monospace;
       font-size: 11.5px;
-      color: #94a3b8;
+      color: var(--text-muted);
       max-height: 180px;
       overflow-y: auto;
       white-space: pre-wrap;
@@ -421,7 +488,7 @@
     }
 
     .send-btn {
-      background: #2563eb;
+      background: var(--primary);
       color: #ffffff;
       border: none;
       padding: 8px 18px;
@@ -436,8 +503,8 @@
     }
 
     .send-btn:hover {
-      background: #1d4ed8;
-      box-shadow: 0 0 12px rgba(37, 99, 235, 0.4);
+      background: var(--primary-hover);
+      box-shadow: 0 0 12px rgba(37, 99, 235, 0.35);
     }
 
     .curl-preview {
@@ -447,7 +514,7 @@
       background: var(--code-bg);
       padding: 6px 12px;
       border-radius: 6px;
-      border: 1px solid rgba(255,255,255,0.04);
+      border: 1px solid var(--card-border);
       flex: 1;
       white-space: nowrap;
       overflow: hidden;
@@ -466,7 +533,7 @@
 
     .response-header {
       padding: 8px 14px;
-      background: rgba(255, 255, 255, 0.03);
+      background: rgba(0, 0, 0, 0.03);
       border-bottom: 1px solid var(--card-border);
       display: flex;
       align-items: center;
@@ -474,15 +541,15 @@
       font-size: 11px;
     }
 
-    .status-ok { color: #34d399; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
-    .status-err { color: #f87171; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .status-ok { color: #059669; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .status-err { color: #dc2626; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
     .latency { font-family: 'JetBrains Mono', monospace; color: var(--text-sub); }
 
     .response-body {
       padding: 14px;
       font-family: 'JetBrains Mono', monospace;
       font-size: 12px;
-      color: #cbd5e1;
+      color: var(--code-text);
       max-height: 280px;
       overflow-y: auto;
       white-space: pre-wrap;
@@ -499,8 +566,15 @@
     <div class="header-actions">
       <div class="server-badge">
         <div class="pulse"></div>
-        <span style="font-family: 'JetBrains Mono'; font-weight: 600; color: #38bdf8;">http://127.0.0.1:8788</span>
+        <span style="font-family: 'JetBrains Mono'; font-weight: 600; color: var(--primary);">http://127.0.0.1:8788</span>
       </div>
+
+      <!-- 主题切换按钮 -->
+      <button class="theme-toggle-btn" onclick="toggleTheme()" id="themeToggleBtn">
+        <span id="themeIcon">☀️</span>
+        <span id="themeLabel">浅色</span>
+      </button>
+
       <button class="copy-doc-btn" onclick="copyMarkdownDoc()" id="copyDocBtn">
         <span>📋 复制 Markdown 文档</span>
       </button>
@@ -878,6 +952,28 @@
   </div>
 
   <script>
+    // 主题初始化与切换
+    function initTheme() {
+      const saved = localStorage.getItem('agentdeck_docs_theme') || 'light';
+      applyTheme(saved);
+    }
+
+    function applyTheme(theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('agentdeck_docs_theme', theme);
+      const isDark = theme === 'dark';
+      document.getElementById('themeIcon').textContent = isDark ? '🌙' : '☀️';
+      document.getElementById('themeLabel').textContent = isDark ? '深色' : '浅色';
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') || 'light';
+      const next = current === 'dark' ? 'light' : 'dark';
+      applyTheme(next);
+    }
+
+    initTheme();
+
     // 滚动监听与侧边栏高亮
     const observer = new IntersectionObserver((entries) => {
       entries.forEach(entry => {
