@@ -6,13 +6,13 @@ import tailwindcss from '@tailwindcss/vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    port: 8788,
+    port: 1420,
     strictPort: true,
     host: true,
     proxy: {
-      '/ag-image': 'http://127.0.0.1:8789',
-      '/cursor-image': 'http://127.0.0.1:8789',
-      '/media': 'http://127.0.0.1:8789',
+      '/ag-image': 'http://127.0.0.1:8788',
+      '/cursor-image': 'http://127.0.0.1:8788',
+      '/media': 'http://127.0.0.1:8788',
     },
   },
 })
