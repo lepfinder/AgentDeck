@@ -10,7 +10,7 @@ export function getApiDocsMarkdown(): string {
 
 ---
 
-## 接口清单
+## 接口清单与返回值示例
 
 ### 1. 服务健康检查 (Health Check)
 - **请求方法**: \`GET /health\`
@@ -19,7 +19,7 @@ export function getApiDocsMarkdown(): string {
   \`\`\`bash
   curl http://127.0.0.1:8788/health
   \`\`\`
-- **响应示例**:
+- **返回值示例 (Response 200 OK)**:
   \`\`\`json
   {
     "ok": true,
@@ -30,7 +30,8 @@ export function getApiDocsMarkdown(): string {
     "ai_available": true,
     "stats": {
       "total_conversations": 42,
-      "total_user_messages": 128
+      "total_user_messages": 128,
+      "total_workspaces": 5
     }
   }
   \`\`\`
@@ -44,6 +45,25 @@ export function getApiDocsMarkdown(): string {
   \`\`\`bash
   curl http://127.0.0.1:8788/api/stats
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "stats": {
+      "total_conversations": 42,
+      "total_user_messages": 128,
+      "total_workspaces": 5,
+      "source_counts": {
+        "antigravity": 25,
+        "cursor": 12,
+        "claude": 5
+      },
+      "recent_active_days": 18
+    },
+    "cursor_available": true,
+    "ai_available": true
+  }
+  \`\`\`
 
 ---
 
@@ -55,6 +75,22 @@ export function getApiDocsMarkdown(): string {
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/workspaces?q=AgentDeck"
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "total": 1,
+    "workspaces": [
+      {
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "cnt": 15,
+        "total_conversations": 15,
+        "total_user_messages": 48,
+        "last_activity_at": "2026-08-19 11:20:00"
+      }
+    ]
+  }
+  \`\`\`
 
 ---
 
@@ -65,6 +101,25 @@ export function getApiDocsMarkdown(): string {
 - **调用示例**:
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/workspaces/detail?workspace=/Users/xiyangxie/workspace/personal/AgentDeck"
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+    "stats": {
+      "total_conversations": 15,
+      "total_user_messages": 48,
+      "source_distribution": {
+        "antigravity": 10,
+        "cursor": 5
+      },
+      "heatmap_365": [
+        { "date": "2026-08-18", "count": 8 },
+        { "date": "2026-08-19", "count": 12 }
+      ]
+    }
+  }
   \`\`\`
 
 ---
@@ -78,7 +133,26 @@ export function getApiDocsMarkdown(): string {
   - \`offset\` (*number, 可选*): 分页偏移量 (默认 0)
 - **调用示例**:
   \`\`\`bash
-  curl "http://127.0.0.1:8788/api/conversations?limit=20"
+  curl "http://127.0.0.1:8788/api/conversations?limit=2"
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "total": 42,
+    "conversations": [
+      {
+        "id": "conv-1787102766025",
+        "title": "重构 REST API 端口与接口文档",
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "source": "antigravity",
+        "model": "gemini-2.5-flash",
+        "user_message_count": 8,
+        "created_at": "2026-08-19 10:30:00",
+        "updated_at": "2026-08-19 11:15:00"
+      }
+    ]
+  }
   \`\`\`
 
 ---
@@ -88,7 +162,33 @@ export function getApiDocsMarkdown(): string {
 - **功能说明**: 返回指定会话的完整问答交互流，包含用户提问、Agent 思考链 (\`thinking\`)、工具调用 (\`tool_args\`) 及本地附图 (\`images\`)。
 - **调用示例**:
   \`\`\`bash
-  curl "http://127.0.0.1:8788/api/conversations/{conversation_id}"
+  curl "http://127.0.0.1:8788/api/conversations/conv-1787102766025"
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "conversation_id": "conv-1787102766025",
+    "messages": [
+      {
+        "id": "msg-1",
+        "role": "user",
+        "content": "现在对外的 API 有 token 校验的要求吗",
+        "created_at": "2026-08-19 11:06:49",
+        "source": "antigravity"
+      },
+      {
+        "id": "msg-2",
+        "role": "assistant",
+        "content": "目前没有 Token 鉴权要求，服务严格监听在 127.0.0.1 回环地址。",
+        "thinking": "用户询问鉴权要求，需要清晰解释本地隔离模型...",
+        "tool_args": null,
+        "images": [],
+        "created_at": "2026-08-19 11:06:55",
+        "source": "antigravity"
+      }
+    ]
+  }
   \`\`\`
 
 ---
@@ -102,6 +202,25 @@ export function getApiDocsMarkdown(): string {
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/search?q=backup"
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "query": "backup",
+    "total": 1,
+    "results": [
+      {
+        "conversation_id": "conv-1787102766025",
+        "message_id": "msg-1",
+        "role": "user",
+        "content": "检查下备份目录是否支持选择",
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "created_at": "2026-08-19 10:15:00",
+        "source": "antigravity"
+      }
+    ]
+  }
+  \`\`\`
 
 ---
 
@@ -112,6 +231,14 @@ export function getApiDocsMarkdown(): string {
   \`\`\`bash
   curl -X POST http://127.0.0.1:8788/api/sync
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "message": "Sync completed successfully",
+    "synced_at": "2026-08-19 11:22:00"
+  }
+  \`\`\`
 
 ---
 
@@ -120,7 +247,15 @@ export function getApiDocsMarkdown(): string {
 - **功能说明**: 访问本地分层归档的附图媒体资产（支持图片缓存与流式二进制返回）。
 - **调用示例**:
   \`\`\`bash
-  curl -I "http://127.0.0.1:8788/media/antigravity/{conversation_id}/{filename.png}"
+  curl -I "http://127.0.0.1:8788/media/antigravity/conv-123/screenshot.png"
+  \`\`\`
+- **响应头示例 (Response Headers)**:
+  \`\`\`http
+  HTTP/1.1 200 OK
+  Content-Type: image/png
+  Content-Length: 128492
+  Cache-Control: public, max-age=86400
+  Access-Control-Allow-Origin: *
   \`\`\`
 
 ---

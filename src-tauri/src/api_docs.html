@@ -25,6 +25,7 @@
       --post-bg: rgba(99, 102, 241, 0.12);
       --post-border: rgba(99, 102, 241, 0.25);
       --code-bg: #090d16;
+      --schema-bg: rgba(0, 0, 0, 0.35);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -200,7 +201,7 @@
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 14px;
-      margin-bottom: 18px;
+      margin-bottom: 20px;
       overflow: hidden;
       transition: all 0.2s;
     }
@@ -250,6 +251,9 @@
 
     .endpoint-content {
       padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
     }
 
     /* 参数输入 */
@@ -257,12 +261,10 @@
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
       gap: 12px;
-      margin-bottom: 16px;
     }
 
     .param-group {
       display: flex;
-      flex-col: column;
       flex-direction: column;
       gap: 6px;
     }
@@ -289,6 +291,36 @@
     .param-group input:focus {
       border-color: var(--primary);
       box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    }
+
+    /* 返回值示例区域 */
+    .example-section {
+      background: var(--schema-bg);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      padding: 12px 16px;
+    }
+
+    .example-header {
+      font-size: 11px;
+      font-weight: 700;
+      color: #93c5fd;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .example-body {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11.5px;
+      color: #94a3b8;
+      max-height: 180px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
     }
 
     /* 动作栏 */
@@ -337,7 +369,6 @@
 
     /* 响应区域 */
     .response-container {
-      margin-top: 14px;
       background: var(--code-bg);
       border: 1px solid var(--card-border);
       border-radius: 10px;
@@ -413,6 +444,21 @@
         <span class="desc">应用服务健康探针与数据源状态</span>
       </div>
       <div class="endpoint-content">
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "status": "ok",
+  "app": "AgentDeck",
+  "version": "0.2.4",
+  "cursor_available": true,
+  "ai_available": true,
+  "stats": {
+    "total_conversations": 42,
+    "total_user_messages": 128
+  }
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="sendReq('GET', '/health', null, 'res-health')">🚀 实时测试 (Send)</button>
           <div class="curl-preview">curl http://127.0.0.1:8788/health</div>
@@ -433,6 +479,24 @@
         <span class="desc">大盘总览指标、总消息数与多智能体分布</span>
       </div>
       <div class="endpoint-content">
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "stats": {
+    "total_conversations": 42,
+    "total_user_messages": 128,
+    "total_workspaces": 5,
+    "source_counts": {
+      "antigravity": 25,
+      "cursor": 12,
+      "claude": 5
+    }
+  },
+  "cursor_available": true,
+  "ai_available": true
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="sendReq('GET', '/api/stats', null, 'res-stats')">🚀 实时测试 (Send)</button>
           <div class="curl-preview">curl http://127.0.0.1:8788/api/stats</div>
@@ -462,6 +526,22 @@
             <input type="text" id="ws-q" placeholder="例如: AgentDeck">
           </div>
         </div>
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "total": 1,
+  "workspaces": [
+    {
+      "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+      "cnt": 15,
+      "total_conversations": 15,
+      "total_user_messages": 48,
+      "last_activity_at": "2026-08-19 11:20:00"
+    }
+  ]
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="testWorkspaces()">🚀 实时测试 (Send)</button>
           <div class="curl-preview" id="curl-ws">curl http://127.0.0.1:8788/api/workspaces</div>
@@ -488,16 +568,34 @@
         <div class="params-grid">
           <div class="param-group">
             <label>limit (返回条数)</label>
-            <input type="number" id="conv-limit" value="5">
+            <input type="number" id="conv-limit" value="2">
           </div>
           <div class="param-group">
             <label>source (工具源)</label>
             <input type="text" id="conv-source" placeholder="antigravity / cursor / claude">
           </div>
         </div>
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "total": 42,
+  "conversations": [
+    {
+      "id": "conv-1787102766025",
+      "title": "重构 REST API 端口与接口文档",
+      "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+      "source": "antigravity",
+      "model": "gemini-2.5-flash",
+      "user_message_count": 8,
+      "created_at": "2026-08-19 10:30:00"
+    }
+  ]
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="testConversations()">🚀 实时测试 (Send)</button>
-          <div class="curl-preview" id="curl-conv">curl "http://127.0.0.1:8788/api/conversations?limit=5"</div>
+          <div class="curl-preview" id="curl-conv">curl "http://127.0.0.1:8788/api/conversations?limit=2"</div>
         </div>
         <div class="response-container" id="res-conversations">
           <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
@@ -520,6 +618,30 @@
             <label>conversation_id (会话 ID)</label>
             <input type="text" id="conv-id" placeholder="输入会话 ID">
           </div>
+        </div>
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "conversation_id": "conv-1787102766025",
+  "messages": [
+    {
+      "id": "msg-1",
+      "role": "user",
+      "content": "现在对外的 API 有 token 校验的要求吗",
+      "created_at": "2026-08-19 11:06:49",
+      "source": "antigravity"
+    },
+    {
+      "id": "msg-2",
+      "role": "assistant",
+      "content": "目前没有 Token 鉴权要求，服务严格监听在 127.0.0.1 回环地址。",
+      "thinking": "用户询问鉴权要求...",
+      "tool_args": null,
+      "images": []
+    }
+  ]
+}</pre>
         </div>
         <div class="action-row">
           <button class="send-btn" onclick="testConvMessages()">🚀 实时测试 (Send)</button>
@@ -554,6 +676,24 @@
             <input type="number" id="search-limit" value="5">
           </div>
         </div>
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "query": "backup",
+  "total": 1,
+  "results": [
+    {
+      "conversation_id": "conv-1787102766025",
+      "message_id": "msg-1",
+      "role": "user",
+      "content": "检查下备份目录是否支持选择",
+      "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+      "created_at": "2026-08-19 10:15:00"
+    }
+  ]
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="testSearch()">🚀 实时测试 (Send)</button>
           <div class="curl-preview" id="curl-search">curl "http://127.0.0.1:8788/api/search?q=backup&limit=5"</div>
@@ -574,6 +714,14 @@
         <span class="desc">触发全量 AI Coding 智能体数据源增量扫描同步</span>
       </div>
       <div class="endpoint-content">
+        <div class="example-section">
+          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+          <pre class="example-body">{
+  "ok": true,
+  "message": "Sync completed successfully",
+  "synced_at": "2026-08-19 11:22:00"
+}</pre>
+        </div>
         <div class="action-row">
           <button class="send-btn" onclick="sendReq('POST', '/api/sync', null, 'res-sync')">🚀 实时执行同步 (Sync)</button>
           <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/sync</div>
@@ -671,7 +819,7 @@
 
 ---
 
-## 接口清单
+## 接口清单与返回值示例
 
 ### 1. 服务健康检查 (Health Check)
 - **请求方法**: \`GET /health\`
@@ -679,6 +827,21 @@
 - **调用示例**:
   \`\`\`bash
   curl http://127.0.0.1:8788/health
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "status": "ok",
+    "app": "AgentDeck",
+    "version": "0.2.4",
+    "cursor_available": true,
+    "ai_available": true,
+    "stats": {
+      "total_conversations": 42,
+      "total_user_messages": 128
+    }
+  }
   \`\`\`
 
 ---
@@ -689,6 +852,24 @@
 - **调用示例**:
   \`\`\`bash
   curl http://127.0.0.1:8788/api/stats
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "stats": {
+      "total_conversations": 42,
+      "total_user_messages": 128,
+      "total_workspaces": 5,
+      "source_counts": {
+        "antigravity": 25,
+        "cursor": 12,
+        "claude": 5
+      }
+    },
+    "cursor_available": true,
+    "ai_available": true
+  }
   \`\`\`
 
 ---
@@ -701,21 +882,26 @@
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/workspaces?q=AgentDeck"
   \`\`\`
-
----
-
-### 4. 工作区深度画像与热力图 (Workspace Detail)
-- **请求方法**: \`GET /api/workspaces/detail\`
-- **查询参数**:
-  - \`workspace\` (*string, 必填*): 工作区绝对路径
-- **调用示例**:
-  \`\`\`bash
-  curl "http://127.0.0.1:8788/api/workspaces/detail?workspace=/Users/xiyangxie/workspace/personal/AgentDeck"
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "total": 1,
+    "workspaces": [
+      {
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "cnt": 15,
+        "total_conversations": 15,
+        "total_user_messages": 48,
+        "last_activity_at": "2026-08-19 11:20:00"
+      }
+    ]
+  }
   \`\`\`
 
 ---
 
-### 5. 智能体会话流列表 (Conversations)
+### 4. 智能体会话流列表 (Conversations)
 - **请求方法**: \`GET /api/conversations\`
 - **查询参数**:
   - \`workspace\` (*string, 可选*): 限定工作区路径
@@ -724,22 +910,64 @@
   - \`offset\` (*number, 可选*): 分页偏移量 (默认 0)
 - **调用示例**:
   \`\`\`bash
-  curl "http://127.0.0.1:8788/api/conversations?limit=20"
+  curl "http://127.0.0.1:8788/api/conversations?limit=2"
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "total": 42,
+    "conversations": [
+      {
+        "id": "conv-1787102766025",
+        "title": "重构 REST API 端口与接口文档",
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "source": "antigravity",
+        "model": "gemini-2.5-flash",
+        "user_message_count": 8,
+        "created_at": "2026-08-19 10:30:00"
+      }
+    ]
+  }
   \`\`\`
 
 ---
 
-### 6. 单个会话全量消息流 (Conversation Messages)
+### 5. 单个会话全量消息流 (Conversation Messages)
 - **请求方法**: \`GET /api/conversations/:id\`
 - **功能说明**: 返回指定会话的完整问答交互流，包含用户提问、Agent 思考链 (\`thinking\`)、工具调用 (\`tool_args\`) 及本地附图 (\`images\`)。
 - **调用示例**:
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/conversations/{conversation_id}"
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "conversation_id": "conv-1787102766025",
+    "messages": [
+      {
+        "id": "msg-1",
+        "role": "user",
+        "content": "现在对外的 API 有 token 校验的要求吗",
+        "created_at": "2026-08-19 11:06:49",
+        "source": "antigravity"
+      },
+      {
+        "id": "msg-2",
+        "role": "assistant",
+        "content": "目前没有 Token 鉴权要求，服务严格监听在 127.0.0.1 回环地址。",
+        "thinking": "用户询问鉴权要求...",
+        "tool_args": null,
+        "images": []
+      }
+    ]
+  }
+  \`\`\`
 
 ---
 
-### 7. 全局消息全文检索 (Search)
+### 6. 全局消息全文检索 (Search)
 - **请求方法**: \`GET /api/search\`
 - **查询参数**:
   - \`q\` (*string, 必填*): 检索关键词
@@ -748,15 +976,41 @@
   \`\`\`bash
   curl "http://127.0.0.1:8788/api/search?q=backup"
   \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "query": "backup",
+    "total": 1,
+    "results": [
+      {
+        "conversation_id": "conv-1787102766025",
+        "message_id": "msg-1",
+        "role": "user",
+        "content": "检查下备份目录是否支持选择",
+        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+        "created_at": "2026-08-19 10:15:00"
+      }
+    ]
+  }
+  \`\`\`
 
 ---
 
-### 8. 触发多源增量扫描与同步 (Sync)
+### 7. 触发多源增量扫描与同步 (Sync)
 - **请求方法**: \`POST /api/sync\`
 - **功能说明**: 立即触发后端对全部 AI Coding 智能体目录进行增量变更扫描与 SQLite 落盘。
 - **调用示例**:
   \`\`\`bash
   curl -X POST http://127.0.0.1:8788/api/sync
+  \`\`\`
+- **返回值示例 (Response 200 OK)**:
+  \`\`\`json
+  {
+    "ok": true,
+    "message": "Sync completed successfully",
+    "synced_at": "2026-08-19 11:22:00"
+  }
   \`\`\`
 `;
       navigator.clipboard.writeText(md).then(() => {
