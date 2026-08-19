@@ -1257,11 +1257,10 @@ export const SettingsModal: React.FC<Props> = ({
                   {/* 唯一主入口按钮：打开精美交互式文档网页 */}
                   <button
                     onClick={() => api.openUrl('http://127.0.0.1:8788/docs')}
-                    className="w-full py-3.5 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-semibold text-sm rounded-xl transition-all duration-150 cursor-pointer shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2.5 group"
+                    className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-xl transition-all duration-150 cursor-pointer shadow-xs flex items-center justify-center gap-2"
                   >
-                    <Globe className="h-4 w-4 group-hover:scale-110 transition-transform" />
-                    <span>在浏览器中打开交互式 API 文档与在线调试器 (Docs)</span>
-                    <ExternalLink className="h-4 w-4 opacity-80" />
+                    <span>查看 API 文档</span>
+                    <ExternalLink className="h-4 w-4 opacity-90" />
                   </button>
                 </div>
               </div>

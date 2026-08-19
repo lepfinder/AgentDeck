@@ -651,6 +651,23 @@ fn save_app_config_cmd(config: config::AppConfig) -> Result<(), String> {
     config::save_config(&config)
 }
 
+#[tauri::command]
+fn open_url_cmd(url: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_state = DbState::new().expect("Failed to initialize SQLite database");
@@ -683,7 +700,8 @@ pub fn run() {
             get_cloud_presets_cmd,
             select_folder_dialog_cmd,
             get_app_config_cmd,
-            save_app_config_cmd
+            save_app_config_cmd,
+            open_url_cmd
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

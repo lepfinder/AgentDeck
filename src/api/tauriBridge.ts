@@ -350,11 +350,14 @@ export const api = {
   },
 
   async openUrl(url: string): Promise<void> {
-    try {
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(url);
-    } catch {
-      window.open(url, '_blank');
+    if (isTauri()) {
+      try {
+        await invoke('open_url_cmd', { url });
+        return;
+      } catch (e) {
+        console.error('Failed to open url via Rust command:', e);
+      }
     }
+    window.open(url, '_blank');
   },
 };
