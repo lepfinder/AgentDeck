@@ -11,8 +11,8 @@ use super::{
     ImporterStats, RawConversation, RawMessage,
 };
 
-/// 解析格式版本：变更后即使 Cursor 主库未改动，也强制重写已入库会话的消息时间戳
-const CURSOR_PARSER_REV: &str = "cursor-images-v2";
+/// 解析格式版本：变更后强制重新扫描并归档图片
+const CURSOR_PARSER_REV: &str = "cursor-media-v3";
 const CURSOR_PARSER_REV_KEY: &str = "agentdeck:cursor_parser_rev";
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
@@ -606,7 +606,7 @@ fn extract_messages(
             .filter(|s| !s.is_empty());
 
         let tool_results = bubble.get("toolResults").map(|v| v.to_string());
-        let images_json = extract_cursor_bubble_images(bubble);
+        let images_json = extract_cursor_bubble_images(bubble, composer_id);
 
         if text.is_empty() && thinking.is_none() && tool_results.is_none() && images_json.is_none() {
             continue;
@@ -644,7 +644,33 @@ fn extract_messages(
     messages
 }
 
-fn extract_cursor_bubble_images(bubble: &Value) -> Option<String> {
+fn find_cursor_image_path(image_uuid: &str) -> Option<std::path::PathBuf> {
+    if image_uuid.is_empty() {
+        return None;
+    }
+    let home = dirs::home_dir()?;
+    let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+    if !ws_storage.exists() {
+        return None;
+    }
+    let clean_uuid = image_uuid.trim().to_lowercase();
+    for entry in walkdir::WalkDir::new(&ws_storage).max_depth(3) {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(fname) = path.file_name() {
+                    let name = fname.to_string_lossy().to_lowercase();
+                    if name.contains(&clean_uuid) {
+                        return Some(path.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn extract_cursor_bubble_images(bubble: &Value, composer_id: &str) -> Option<String> {
     let images_arr = bubble.get("images")?.as_array()?;
     let mut list = Vec::new();
     for img in images_arr {
@@ -653,8 +679,17 @@ fn extract_cursor_bubble_images(bubble: &Value) -> Option<String> {
         let h = dim.and_then(|d| d.get("height")).and_then(|v| v.as_i64());
         let uuid = img.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
         if !uuid.is_empty() {
+            let orig_path = find_cursor_image_path(uuid);
+            let src_uri = if let Some(ref p) = orig_path {
+                crate::media_archive::archive_image_file(p, "cursor", composer_id)
+                    .unwrap_or_else(|| format!("/cursor-image/{}", uuid))
+            } else {
+                format!("/cursor-image/{}", uuid)
+            };
             list.push(serde_json::json!({
-                "src": format!("/cursor-image/{}", uuid),
+                "src": src_uri,
+                "original_uuid": uuid,
+                "original_path": orig_path.map(|p| p.to_string_lossy().to_string()),
                 "width": w,
                 "height": h
             }));

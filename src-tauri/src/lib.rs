@@ -1,6 +1,8 @@
+pub mod backup;
 pub mod db;
 pub mod http_server;
 pub mod importers;
+pub mod media_archive;
 pub mod sync;
 
 use db::{
@@ -592,6 +594,31 @@ fn get_database_path_info() -> Result<String, String> {
     Ok(db::get_database_path().to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn create_backup_cmd(
+    target_dir: String,
+    max_snapshots: Option<usize>,
+    state: State<'_, DbState>,
+) -> Result<backup::BackupInfo, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    backup::create_backup(&conn, &target_dir, max_snapshots.unwrap_or(3))
+}
+
+#[tauri::command]
+fn list_backups_cmd(target_dir: String) -> Result<Vec<backup::BackupInfo>, String> {
+    backup::list_backups(&target_dir)
+}
+
+#[tauri::command]
+fn restore_backup_cmd(backup_file: String) -> Result<backup::RestoreInfo, String> {
+    backup::restore_backup(&backup_file)
+}
+
+#[tauri::command]
+fn get_cloud_presets_cmd() -> Result<Vec<backup::CloudPreset>, String> {
+    Ok(backup::detect_cloud_presets())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_state = DbState::new().expect("Failed to initialize SQLite database");
@@ -617,7 +644,11 @@ pub fn run() {
             save_workspace_fine_blocks_cmd,
             save_workspace_module_blocks_cmd,
             save_workspace_report_cmd,
-            clear_workspace_analysis_cmd
+            clear_workspace_analysis_cmd,
+            create_backup_cmd,
+            list_backups_cmd,
+            restore_backup_cmd,
+            get_cloud_presets_cmd
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

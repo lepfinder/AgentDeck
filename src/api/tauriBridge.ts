@@ -10,6 +10,9 @@ import type {
   WorkspaceFineBlock,
   WorkspaceModuleBlock,
   AnalysisUserMessage,
+  BackupInfo,
+  RestoreInfo,
+  CloudPreset,
 } from '../types';
 
 export const isTauri = () => {
@@ -288,5 +291,40 @@ export const api = {
       }
     }
     return '0.2.2';
+  },
+
+  async createBackup(targetDir: string, maxSnapshots = 3): Promise<BackupInfo> {
+    if (isTauri()) {
+      return await invoke<BackupInfo>('create_backup_cmd', {
+        targetDir,
+        maxSnapshots,
+      });
+    }
+    throw new Error('仅在客户端环境下支持本地数据备份');
+  },
+
+  async listBackups(targetDir: string): Promise<BackupInfo[]> {
+    if (isTauri()) {
+      return await invoke<BackupInfo[]>('list_backups_cmd', {
+        targetDir,
+      });
+    }
+    return [];
+  },
+
+  async restoreBackup(backupFile: string): Promise<RestoreInfo> {
+    if (isTauri()) {
+      return await invoke<RestoreInfo>('restore_backup_cmd', {
+        backupFile,
+      });
+    }
+    throw new Error('仅在客户端环境下支持本地数据还原');
+  },
+
+  async getCloudPresets(): Promise<CloudPreset[]> {
+    if (isTauri()) {
+      return await invoke<CloudPreset[]>('get_cloud_presets_cmd');
+    }
+    return [];
   },
 };

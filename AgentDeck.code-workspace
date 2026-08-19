@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../../github/agentsview"
+		},
+		{
+			"path": "../../../.agentdeck"
 		}
 	],
 	"settings": {}

@@ -9,7 +9,7 @@ use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
 };
 
-const AG_PARSER_REV: &str = "ag-images-v2";
+const AG_PARSER_REV: &str = "ag-media-v3";
 const AG_PARSER_REV_KEY: &str = "agentdeck:ag_parser_rev";
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
@@ -321,9 +321,14 @@ fn parse_antigravity_session(
                 for p in img_paths {
                     let path_obj = Path::new(&p);
                     if path_obj.is_file() {
-                        let encoded = urlencoding::encode(&p);
+                        let src_uri = crate::media_archive::archive_image_file(&path_obj, "antigravity", cid)
+                            .unwrap_or_else(|| {
+                                let encoded = urlencoding::encode(&p);
+                                format!("/ag-image?path={}", encoded)
+                            });
                         image_entries.push(serde_json::json!({
-                            "src": format!("/ag-image?path={}", encoded),
+                            "src": src_uri,
+                            "original_path": p,
                             "width": null,
                             "height": null
                         }));

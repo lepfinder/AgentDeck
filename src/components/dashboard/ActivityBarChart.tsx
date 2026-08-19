@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Crown, Bot } from 'lucide-react';
 
 export interface ActivityBarItem {
   key: string;
@@ -22,6 +23,33 @@ interface Props {
 const BAR_GAP = 3;
 const LINE_LIFT = 16;
 const LINE_BAR_SCALE = 0.72;
+const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+function parseTitleContext(title: string) {
+  const match = title.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const dateStr = match[0];
+    const parts = dateStr.split('-').map(Number);
+    const d = new Date(parts[0], parts[1] - 1, parts[2]);
+    const weekday = WEEKDAYS[d.getDay()] || '';
+    if (title.includes(':')) {
+      const timePart = title.split(' ')[1] || '';
+      const hour = timePart.split(':')[0];
+      return {
+        main: `${dateStr} ${hour}:00 - ${hour}:59`,
+        sub: weekday ? `· ${weekday}` : '',
+      };
+    }
+    return {
+      main: dateStr,
+      sub: weekday ? `· ${weekday}` : '',
+    };
+  }
+  return {
+    main: title,
+    sub: '',
+  };
+}
 
 export const ActivityBarChart: React.FC<Props> = ({
   items,
@@ -29,11 +57,25 @@ export const ActivityBarChart: React.FC<Props> = ({
   onBarClick,
   showLine = false,
 }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const [plotSize, setPlotSize] = useState({ width: 0, height: 0 });
+  const [hovered, setHovered] = useState<{
+    item: ActivityBarItem;
+    x: number;
+    y: number;
+    containerWidth: number;
+    isPeak: boolean;
+  } | null>(null);
+
   const max = Math.max(1, ...items.map((item) => item.count));
   const total = items.reduce((sum, item) => sum + item.count, 0);
   const barScale = showLine ? LINE_BAR_SCALE : 1;
+
+  const peakItem = useMemo(() => {
+    if (items.length === 0) return null;
+    return items.reduce((best, item) => (item.count > best.count ? item : best));
+  }, [items]);
 
   useEffect(() => {
     if (!showLine) return;
@@ -74,8 +116,27 @@ export const ActivityBarChart: React.FC<Props> = ({
     );
   }
 
+  const handleMouseEnter = (item: ActivityBarItem, e: React.MouseEvent<HTMLDivElement>) => {
+    if (!containerRef.current) return;
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const cellRect = e.currentTarget.getBoundingClientRect();
+    const x = cellRect.left - containerRect.left + cellRect.width / 2;
+    const y = cellRect.top - containerRect.top;
+    setHovered({
+      item,
+      x,
+      y,
+      containerWidth: containerRect.width,
+      isPeak: Boolean(peakItem && peakItem.count > 0 && peakItem.key === item.key),
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setHovered(null);
+  };
+
   return (
-    <div className="relative">
+    <div ref={containerRef} onMouseLeave={handleMouseLeave} className="relative">
       <div className="absolute left-0 top-0 text-[10px] theme-text-muted font-mono tabular-nums">
         {max.toLocaleString()}
       </div>
@@ -84,37 +145,24 @@ export const ActivityBarChart: React.FC<Props> = ({
           <div className="flex items-end h-full" style={{ gap: `${BAR_GAP}px` }}>
             {items.map((item) => {
               const barPct = item.count > 0 ? Math.max(6, (item.count / max) * 100 * barScale) : 0;
+              const isHovered = hovered?.item.key === item.key;
               return (
                 <div
                   key={item.key}
-                  className={`flex-1 min-w-0 h-full flex flex-col items-center justify-end group relative ${
+                  className={`flex-1 min-w-0 h-full flex flex-col items-center justify-end relative ${
                     onBarClick ? 'cursor-pointer' : ''
                   }`}
+                  onMouseEnter={(e) => handleMouseEnter(item, e)}
                   onClick={onBarClick ? () => onBarClick(item.key) : undefined}
                 >
                   <div
-                    className="pointer-events-none absolute left-1/2 z-20 mb-1.5 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1.5 text-[10px] leading-4 theme-bg-card theme-text-main border theme-border opacity-0 group-hover:opacity-100 transition-opacity shadow-md"
-                    style={{ bottom: `${Math.max(barPct, 12)}%` }}
-                  >
-                    <div className="font-medium">{item.tooltipTitle}</div>
-                    <div className="theme-text-muted font-mono mt-0.5">
-                      消息 {item.messageCount.toLocaleString()}
-                    </div>
-                    <div className="theme-text-muted font-mono">
-                      用户 {item.userMessageCount.toLocaleString()}
-                    </div>
-                    <div className="theme-text-muted font-mono">
-                      会话 {item.conversationCount.toLocaleString()}
-                    </div>
-                  </div>
-                  <div
-                    className={`w-full max-w-6 rounded-t-[3px] transition-all duration-300 ${
+                    className={`w-full max-w-6 rounded-t-[3px] transition-all duration-200 ${
                       item.emphasize
                         ? 'bg-blue-500/80 shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'
                         : item.muted
-                          ? 'bg-slate-400/40 hover:bg-slate-400/65'
-                          : 'bg-blue-500/55 hover:bg-blue-500/80'
-                    }`}
+                          ? 'bg-slate-400/40 hover:bg-slate-400/70'
+                          : 'bg-blue-500/55 hover:bg-blue-500/85'
+                    } ${isHovered ? 'ring-2 ring-blue-500/80 shadow-md scale-y-105 origin-bottom' : ''}`}
                     style={{ height: `${barPct}%` }}
                   />
                 </div>
@@ -168,6 +216,153 @@ export const ActivityBarChart: React.FC<Props> = ({
             </span>
           </div>
         ))}
+      </div>
+
+      {/* 精致悬浮 Tooltip（对齐 ContributionHeatmap 视觉体系） */}
+      {hovered && (
+        <ActivityBarTooltip
+          item={hovered.item}
+          x={hovered.x}
+          y={hovered.y}
+          containerWidth={hovered.containerWidth}
+          isPeak={hovered.isPeak}
+        />
+      )}
+    </div>
+  );
+};
+
+interface TooltipProps {
+  item: ActivityBarItem;
+  x: number;
+  y: number;
+  containerWidth: number;
+  isPeak: boolean;
+}
+
+const ActivityBarTooltip: React.FC<TooltipProps> = ({
+  item,
+  x,
+  y,
+  containerWidth,
+  isPeak,
+}) => {
+  const { main, sub } = parseTitleContext(item.tooltipTitle);
+  const userCount = item.userMessageCount;
+  const totalMsgs = item.messageCount;
+  const convCount = item.conversationCount;
+  const hasActivity = totalMsgs > 0 || userCount > 0 || convCount > 0 || item.count > 0;
+
+  const multiplier =
+    userCount > 0 && totalMsgs >= userCount
+      ? (totalMsgs / userCount).toFixed(1)
+      : null;
+
+  let tooltipLeft = x;
+  let transform = 'translate(-50%, -100%) translateY(-10px)';
+
+  if (x < 130) {
+    tooltipLeft = Math.max(10, x - 10);
+    transform = 'translate(0, -100%) translateY(-10px)';
+  } else if (containerWidth - x < 130) {
+    tooltipLeft = Math.min(containerWidth - 10, x + 10);
+    transform = 'translate(-100%, -100%) translateY(-10px)';
+  }
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: `${tooltipLeft}px`,
+        top: `${y}px`,
+        transform,
+      }}
+      className="z-50 pointer-events-none transition-all duration-75 ease-out"
+    >
+      <div className="bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-100 backdrop-blur-xl backdrop-saturate-150 border border-white/20 shadow-[0_8px_32px_0_rgba(0,0,0,0.4),inset_0_1px_1px_0_rgba(255,255,255,0.15)] rounded-xl p-3 min-w-[210px] text-xs">
+        {/* Header: 日期/时间 + 星期 + 状态 Badge */}
+        <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
+          <div className="font-semibold text-white flex items-center gap-1.5 font-mono">
+            <span>{main}</span>
+            {sub && (
+              <span className="text-[11px] text-neutral-400 font-normal">
+                {sub}
+              </span>
+            )}
+          </div>
+          {isPeak ? (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+              <Crown className="h-3 w-3 text-amber-400" />
+              <span>峰值</span>
+            </span>
+          ) : !hasActivity ? (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
+              休息
+            </span>
+          ) : item.emphasize ? (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-300 border border-blue-500/30">
+              当前/选中
+            </span>
+          ) : null}
+        </div>
+
+        {/* 内容指标 */}
+        {hasActivity ? (
+          <div className="space-y-1.5">
+            {/* 用户提问 */}
+            <div className="flex items-center justify-between text-neutral-300">
+              <span className="flex items-center gap-1.5 text-neutral-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                用户提问
+              </span>
+              <span className="font-mono font-semibold text-cyan-300">
+                {userCount.toLocaleString()}{' '}
+                <span className="text-[10px] font-normal text-neutral-400">条</span>
+              </span>
+            </div>
+
+            {/* 全部消息 */}
+            <div className="flex items-center justify-between text-neutral-300">
+              <span className="flex items-center gap-1.5 text-neutral-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                全部消息
+              </span>
+              <span className="font-mono font-semibold text-emerald-300">
+                {totalMsgs.toLocaleString()}{' '}
+                <span className="text-[10px] font-normal text-neutral-400">条</span>
+              </span>
+            </div>
+
+            {/* 会话数 */}
+            <div className="flex items-center justify-between text-neutral-300">
+              <span className="flex items-center gap-1.5 text-neutral-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                会话批次
+              </span>
+              <span className="font-mono font-semibold text-blue-300">
+                {convCount.toLocaleString()}{' '}
+                <span className="text-[10px] font-normal text-neutral-400">个</span>
+              </span>
+            </div>
+
+            {/* 交互倍率 */}
+            {multiplier && parseFloat(multiplier) > 1 && (
+              <div className="pt-1.5 mt-1.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
+                <span className="flex items-center gap-1 text-neutral-300">
+                  <Bot className="h-3.5 w-3.5 text-purple-400" />
+                  <span>交互杠杆:</span>
+                </span>
+                <span className="font-mono text-purple-300 font-medium">
+                  1 : {multiplier} 轮
+                </span>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="py-1 text-center text-neutral-400 text-[11px]">
+            暂无交互记录
+          </div>
+        )}
       </div>
     </div>
   );

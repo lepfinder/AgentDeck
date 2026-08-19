@@ -19,7 +19,16 @@ import {
   RefreshCw,
   Sun,
   Moon,
+  Archive,
+  Cloud,
+  CloudRain,
+  Folder,
+  RotateCcw,
+  FileArchive,
+  Check,
 } from 'lucide-react';
+import { CustomSelect } from '../common/CustomSelect';
+import type { CloudPreset, BackupInfo } from '../../types';
 
 export interface AiProviderConfig {
   id: string;
@@ -128,7 +137,7 @@ export const SettingsModal: React.FC<Props> = ({
   totalMessages = 0,
   appVersion = '0.2.2',
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'appearance' | 'about'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'appearance' | 'about'>('ai');
 
   // 主力与备用模型配置
   const [primaryProviderId, setPrimaryProviderId] = useState<string>(() => {
@@ -147,11 +156,52 @@ export const SettingsModal: React.FC<Props> = ({
 
   const [dbPath, setDbPath] = useState<string>('~/.agentdeck/agentdeck.db');
 
+  // 备份相关状态
+  const [backupTargetPath, setBackupTargetPath] = useState<string>(() => {
+    return localStorage.getItem('agentdeck_backup_target_path') || '~/Documents/AgentDeck_Backups';
+  });
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState<boolean>(() => {
+    return localStorage.getItem('agentdeck_auto_backup_enabled') !== 'false';
+  });
+  const [cloudPresets, setCloudPresets] = useState<CloudPreset[]>([]);
+  const [backupList, setBackupList] = useState<BackupInfo[]>([]);
+  const [loadingBackups, setLoadingBackups] = useState<boolean>(false);
+  const [isBackingUp, setIsBackingUp] = useState<boolean>(false);
+  const [backupFeedback, setBackupFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+  const [isRestoring, setIsRestoring] = useState<boolean>(false);
+  const [confirmRestoreFile, setConfirmRestoreFile] = useState<string | null>(null);
+  const [restoreFeedback, setRestoreFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+
+  const refreshBackups = async (targetPath: string) => {
+    if (!targetPath) return;
+    setLoadingBackups(true);
+    try {
+      const list = await api.listBackups(targetPath);
+      setBackupList(list);
+    } catch {
+      setBackupList([]);
+    } finally {
+      setLoadingBackups(false);
+    }
+  };
+
   useEffect(() => {
     if (isOpen) {
       api.getDatabasePathInfo().then((p) => {
         if (p) setDbPath(p);
       });
+      api.getCloudPresets().then((presets) => {
+        setCloudPresets(presets);
+        const savedPath = localStorage.getItem('agentdeck_backup_target_path');
+        if (!savedPath) {
+          const gdrive = presets.find((p) => p.id === 'gdrive' && p.available);
+          if (gdrive) {
+            setBackupTargetPath(gdrive.path);
+            localStorage.setItem('agentdeck_backup_target_path', gdrive.path);
+          }
+        }
+      });
+      refreshBackups(backupTargetPath);
     }
   }, [isOpen]);
 
@@ -310,6 +360,51 @@ export const SettingsModal: React.FC<Props> = ({
     }
   };
 
+  const handleCreateBackup = async () => {
+    if (!backupTargetPath.trim()) {
+      setBackupFeedback({ success: false, msg: '请先填写或选择有效的备份存储路径' });
+      return;
+    }
+    setIsBackingUp(true);
+    setBackupFeedback(null);
+    try {
+      const res = await api.createBackup(backupTargetPath.trim(), 3);
+      setBackupFeedback({
+        success: true,
+        msg: `备份成功！生成快照 ${res.file_name} (${res.file_size_formatted})，已保留最近 3 份。`,
+      });
+      localStorage.setItem('agentdeck_backup_target_path', backupTargetPath.trim());
+      await refreshBackups(backupTargetPath.trim());
+    } catch (err: any) {
+      setBackupFeedback({
+        success: false,
+        msg: `备份失败: ${err?.message || err || '未知错误'}`,
+      });
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  const handleRestoreBackup = async (filePath: string) => {
+    setIsRestoring(true);
+    setRestoreFeedback(null);
+    try {
+      const res = await api.restoreBackup(filePath);
+      setRestoreFeedback({
+        success: true,
+        msg: `${res.message} (已恢复 ${res.conversation_count} 个会话, ${res.media_file_count} 个媒体文件)`,
+      });
+      setConfirmRestoreFile(null);
+    } catch (err: any) {
+      setRestoreFeedback({
+        success: false,
+        msg: `还原失败: ${err?.message || err || '未知错误'}`,
+      });
+    } finally {
+      setIsRestoring(false);
+    }
+  };
+
   const renderProviderIcon = (iconName: string) => {
     switch (iconName) {
       case 'Flame':
@@ -379,6 +474,17 @@ export const SettingsModal: React.FC<Props> = ({
             >
               <Database className="h-4 w-4" />
               <span>数据存储与源</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('backup')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'backup'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
+                }`}
+            >
+              <Archive className="h-4 w-4" />
+              <span>数据备份与恢复</span>
             </button>
 
             <button
@@ -631,20 +737,18 @@ export const SettingsModal: React.FC<Props> = ({
                         className="flex-1 px-3 py-2 text-xs theme-bg-card border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 font-mono"
                       />
                       {activeProvider.models.length > 0 && (
-                        <select
+                        <CustomSelect<string>
                           value={activeProvider.models.includes(currentModel) ? currentModel : ''}
-                          onChange={(e) => {
-                            if (e.target.value) handleModelChange(e.target.value);
+                          onChange={(val) => {
+                            if (val) handleModelChange(val);
                           }}
-                          className="px-2 py-1.5 text-xs theme-bg-card border theme-border rounded-lg theme-text-main focus:outline-none cursor-pointer"
-                        >
-                          <option value="">常用预设...</option>
-                          {activeProvider.models.map((m) => (
-                            <option key={m} value={m}>
-                              {m}
-                            </option>
-                          ))}
-                        </select>
+                          placeholder="常用预设..."
+                          options={activeProvider.models.map((m) => ({
+                            value: m,
+                            label: m,
+                          }))}
+                          className="min-w-[140px]"
+                        />
                       )}
                     </div>
                   </div>
@@ -722,20 +826,226 @@ export const SettingsModal: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center gap-3">
-                    <select
-                      value={String(autoSyncIntervalSec)}
-                      onChange={(e) => onAutoSyncIntervalChange(Number(e.target.value))}
-                      className="px-3 py-2 text-xs theme-bg-card border theme-border rounded-lg theme-text-main focus:outline-none cursor-pointer"
-                    >
-                      <option value="30">30 秒</option>
-                      <option value="60">60 秒</option>
-                      <option value="120">120 秒</option>
-                      <option value="300">300 秒</option>
-                    </select>
+                    <CustomSelect<number>
+                      value={autoSyncIntervalSec}
+                      onChange={(val) => onAutoSyncIntervalChange(val)}
+                      options={[
+                        { value: 30, label: '30 秒', subLabel: '高频探测' },
+                        { value: 60, label: '60 秒', subLabel: '推荐默认' },
+                        { value: 120, label: '120 秒', subLabel: '省电模式' },
+                        { value: 300, label: '300 秒', subLabel: '低频模式' },
+                      ]}
+                      className="min-w-[130px]"
+                    />
                     <span className="text-[11px] theme-text-sub">
                       默认 60 秒，建议在频繁切换 Agent 时保持 60 秒或更高。
                     </span>
                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'backup' && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-sm font-bold theme-text-main">数据备份与灾备恢复 (Backup & Disaster Recovery)</h3>
+                  <p className="text-xs theme-text-muted mt-0.5">
+                    自动将 SQLite 会话库（热快照）与图片媒体资产打包为压缩包（.tar.gz），支持定期自动备份与跨端迁移。
+                  </p>
+                </div>
+
+                {/* 备份存储目录配置 */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold theme-text-main">备份存储目标路径</span>
+                    <span className="text-[11px] theme-text-muted">支持本地、Google Drive、iCloud 或 NAS 挂载路径</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={backupTargetPath}
+                      onChange={(e) => {
+                        setBackupTargetPath(e.target.value);
+                        localStorage.setItem('agentdeck_backup_target_path', e.target.value);
+                      }}
+                      placeholder="~/Documents/AgentDeck_Backups 或云盘挂载路径..."
+                      className="flex-1 text-xs font-mono theme-bg-card border theme-border rounded-lg px-3 py-2 theme-text-main focus:outline-none focus:border-blue-500"
+                    />
+                    <button
+                      onClick={() => refreshBackups(backupTargetPath)}
+                      className="px-3 py-2 text-xs font-medium theme-bg-card hover:theme-bg-sub border theme-border theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1.5"
+                      title="刷新快照列表"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${loadingBackups ? 'animate-spin' : ''}`} />
+                      <span>刷新</span>
+                    </button>
+                  </div>
+
+                  {/* 快捷预设胶囊按钮 */}
+                  <div className="pt-1">
+                    <div className="text-[11px] theme-text-muted mb-1.5 flex items-center gap-1">
+                      <span>常用云盘与本地预设:</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {cloudPresets.map((preset) => (
+                        <button
+                          key={preset.id}
+                          onClick={() => {
+                            setBackupTargetPath(preset.path);
+                            localStorage.setItem('agentdeck_backup_target_path', preset.path);
+                            refreshBackups(preset.path);
+                          }}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all cursor-pointer ${
+                            backupTargetPath === preset.path
+                              ? 'bg-blue-600/15 border-blue-500 text-blue-500 font-medium'
+                              : 'theme-bg-card border-theme-border theme-text-muted hover:theme-text-main hover:border-blue-500/50'
+                          }`}
+                        >
+                          {preset.id === 'gdrive' && <Cloud className="h-3.5 w-3.5 text-blue-400" />}
+                          {preset.id === 'icloud' && <CloudRain className="h-3.5 w-3.5 text-indigo-400" />}
+                          {preset.id === 'documents' && <Folder className="h-3.5 w-3.5 text-amber-400" />}
+                          <span>{preset.name}</span>
+                          {preset.available && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="已检测到该应用" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 备份策略与操作区 */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold theme-text-main">每日自动备份</div>
+                      <p className="text-[11px] theme-text-muted mt-0.5">
+                        在后台静默执行热快照并压缩归档，自动保留最新的 3 份历史备份（超期旧备份自动修剪）。
+                      </p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={autoBackupEnabled}
+                        onChange={(e) => {
+                          setAutoBackupEnabled(e.target.checked);
+                          localStorage.setItem('agentdeck_auto_backup_enabled', String(e.target.checked));
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-9 h-5 bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-neutral-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                  </div>
+
+                  <div className="pt-3 border-t theme-border-sub flex items-center justify-between">
+                    <button
+                      onClick={handleCreateBackup}
+                      disabled={isBackingUp || !backupTargetPath}
+                      className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-all cursor-pointer shadow-xs"
+                    >
+                      {isBackingUp ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
+                      <span>立即执行备份 (Backup Now)</span>
+                    </button>
+
+                    {backupFeedback && (
+                      <div
+                        className={`text-xs flex items-center gap-1.5 max-w-md ${
+                          backupFeedback.success ? 'text-emerald-500 font-medium' : 'text-red-500 font-medium'
+                        }`}
+                      >
+                        {backupFeedback.success ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+                        <span className="truncate">{backupFeedback.msg}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* 历史快照列表 (Top 3) */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold theme-text-main flex items-center gap-1.5">
+                      <FileArchive className="h-4 w-4 text-blue-500" />
+                      <span>现有快照备份 (最近 {backupList.length} / 3 份)</span>
+                    </span>
+                    <span className="text-[11px] theme-text-muted">单文件自包含归档包</span>
+                  </div>
+
+                  {restoreFeedback && (
+                    <div
+                      className={`p-3 rounded-lg text-xs flex items-center gap-2 border ${
+                        restoreFeedback.success
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500'
+                          : 'bg-red-500/10 border-red-500/30 text-red-500'
+                      }`}
+                    >
+                      {restoreFeedback.success ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <AlertCircle className="h-4 w-4 shrink-0" />}
+                      <span>{restoreFeedback.msg}</span>
+                    </div>
+                  )}
+
+                  {backupList.length === 0 ? (
+                    <div className="text-center py-6 text-xs theme-text-muted border border-dashed theme-border rounded-lg">
+                      暂无备份文件，点击上方「立即执行备份」生成首份快照。
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {backupList.map((item, index) => (
+                        <div
+                          key={item.file_name}
+                          className="p-3 rounded-lg theme-bg-card border theme-border flex items-center justify-between hover:theme-border-hover transition-all"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                                快照 #{index + 1}
+                              </span>
+                              <span className="text-xs font-mono font-medium theme-text-main">{item.file_name}</span>
+                            </div>
+                            <div className="text-[11px] theme-text-muted flex items-center gap-3">
+                              <span>大小: {item.file_size_formatted}</span>
+                              <span>时间: {item.created_at ? new Date(item.created_at).toLocaleString() : '未知'}</span>
+                            </div>
+                          </div>
+
+                          <div>
+                            {confirmRestoreFile === item.file_path ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] text-amber-400 font-medium">确认还原覆盖当前库?</span>
+                                <button
+                                  onClick={() => handleRestoreBackup(item.file_path)}
+                                  disabled={isRestoring}
+                                  className="px-2.5 py-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded-md cursor-pointer flex items-center gap-1"
+                                >
+                                  {isRestoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                                  <span>确认</span>
+                                </button>
+                                <button
+                                  onClick={() => setConfirmRestoreFile(null)}
+                                  disabled={isRestoring}
+                                  className="px-2 py-1 text-xs theme-bg-sub theme-text-muted hover:theme-text-main rounded-md cursor-pointer"
+                                >
+                                  取消
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setConfirmRestoreFile(item.file_path);
+                                  setRestoreFeedback(null);
+                                }}
+                                disabled={isRestoring}
+                                className="px-3 py-1.5 text-xs font-medium theme-bg-sub hover:bg-blue-600 hover:text-white border theme-border hover:border-blue-600 rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                <span>从此快照还原</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

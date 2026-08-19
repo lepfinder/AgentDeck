@@ -1,6 +1,6 @@
 [package]
 name = "agentdeck"
-version = "0.2.3"
+version = "0.2.4"
 description = "AgentDeck - AI Coding Cockpit"
 authors = ["AgentDeck Team"]
 license = "MIT"
@@ -31,4 +31,6 @@ log = "0.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 url = "2.5"
 urlencoding = "2.1"
+flate2 = "1.0"
+tar = "0.4"
 

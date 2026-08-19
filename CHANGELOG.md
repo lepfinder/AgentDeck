@@ -2,6 +2,17 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.2.4] - 2026-08-19
+
+### 新增
+- **图片媒体资产本地分层持久化归档**：按 `<工具源>/<会话ID>/` 两级目录自动镜像归档 Antigravity 与 Cursor 历史图片到 `~/.agentdeck/media/`，支持完全离线查看与独立数据迁移
+- **数据备份与灾备恢复引擎 (Backup & Restore)**：
+  - 基于 SQLite `VACUUM INTO` 热快照与媒体压缩打包（`.tar.gz`），精确保留最近 3 份历史快照
+  - 自动探测并支持一键预设 Google Drive（`~/Library/CloudStorage`）、iCloud Drive、本地 Documents 与 NAS 挂载路径
+  - 支持每日后台静默自动备份、随时一键立即备份与一键快照回滚还原
+- **设置页自定义极客下拉组件**：替换原生 Select 为半透明毛玻璃高定制下拉菜单（支持旋转箭头、状态高亮与主题拟态）
+- **热力图与图表 Tooltip 玻璃拟态统一**：去除原生 Emoji 图标，全面对齐 Lucide 专业图标体系与微光玻璃质感
+
 ## [0.2.3] - 2026-08-19
 
 ### 新增

@@ -231,3 +231,28 @@ export interface SyncResultInfo {
   updated_count: number;
   message: string;
 }
+
+export interface BackupInfo {
+  file_name: string;
+  file_path: string;
+  file_size_bytes: number;
+  file_size_formatted: string;
+  created_at: string;
+  conversation_count?: number;
+  media_file_count?: number;
+}
+
+export interface RestoreInfo {
+  success: boolean;
+  message: string;
+  conversation_count: number;
+  media_file_count: number;
+}
+
+export interface CloudPreset {
+  id: string;
+  name: string;
+  icon: string;
+  path: string;
+  available: boolean;
+}

@@ -516,6 +516,28 @@ fn handle_connection(mut stream: TcpStream) {
             );
         }
 
+        ("GET", p) if p.starts_with("/media/") => {
+            let rel_path = &p["/media/".len()..];
+            if !rel_path.contains("..") {
+                if let Some(media_root) = crate::media_archive::get_media_root() {
+                    let target = media_root.join(rel_path);
+                    if target.is_file() {
+                        if let Ok(bytes) = std::fs::read(&target) {
+                            let mime = get_mime_from_path(&target);
+                            send_binary_response(&mut stream, 200, mime, &bytes);
+                            return;
+                        }
+                    }
+                }
+            }
+            send_response(
+                &mut stream,
+                404,
+                "application/json",
+                &json!({"ok": false, "error": "Media asset not found"}).to_string(),
+            );
+        }
+
         ("POST", "/sync") => {
             let res = execute_sync(false);
             let body = json!({

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import type { HeatmapCell } from '../../types';
+import { Crown, Bot } from 'lucide-react';
 
 interface ContributionHeatmapProps {
   title?: React.ReactNode;
@@ -401,7 +402,7 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
       }}
       className="z-50 pointer-events-none transition-all duration-75 ease-out"
     >
-      <div className="bg-neutral-900/95 dark:bg-neutral-900/95 text-neutral-100 backdrop-blur-md border border-white/15 shadow-2xl rounded-lg p-3 min-w-[210px] text-xs">
+      <div className="bg-neutral-900/80 dark:bg-neutral-950/80 text-neutral-100 backdrop-blur-xl backdrop-saturate-150 border border-white/20 shadow-[0_8px_32px_0_rgba(0,0,0,0.4),inset_0_1px_1px_0_rgba(255,255,255,0.15)] rounded-xl p-3 min-w-[210px] text-xs">
         {/* Header: 日期 + 星期 + 状态 Badge */}
         <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-white/10">
           <div className="font-semibold text-white flex items-center gap-1.5">
@@ -411,8 +412,9 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             </span>
           </div>
           {isPeak ? (
-            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
-              👑 峰值
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+              <Crown className="h-3 w-3 text-amber-400" />
+              <span>峰值</span>
             </span>
           ) : !hasActivity ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
@@ -464,7 +466,10 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             {/* 交互倍率 */}
             {multiplier && parseFloat(multiplier) > 1 && (
               <div className="pt-1.5 mt-1.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
-                <span>🤖 交互杠杆:</span>
+                <span className="flex items-center gap-1 text-neutral-300">
+                  <Bot className="h-3.5 w-3.5 text-purple-400" />
+                  <span>交互杠杆:</span>
+                </span>
                 <span className="font-mono text-purple-300 font-medium">
                   1 : {multiplier} 轮
                 </span>

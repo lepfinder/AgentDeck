@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       '/ag-image': 'http://127.0.0.1:8789',
       '/cursor-image': 'http://127.0.0.1:8789',
+      '/media': 'http://127.0.0.1:8789',
     },
   },
 })
