@@ -12,7 +12,7 @@ use super::{
 };
 
 /// 解析格式版本：变更后即使 Cursor 主库未改动，也强制重写已入库会话的消息时间戳
-const CURSOR_PARSER_REV: &str = "bubble-created-at-v1";
+const CURSOR_PARSER_REV: &str = "cursor-images-v2";
 const CURSOR_PARSER_REV_KEY: &str = "agentdeck:cursor_parser_rev";
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
@@ -606,8 +606,9 @@ fn extract_messages(
             .filter(|s| !s.is_empty());
 
         let tool_results = bubble.get("toolResults").map(|v| v.to_string());
+        let images_json = extract_cursor_bubble_images(bubble);
 
-        if text.is_empty() && thinking.is_none() && tool_results.is_none() {
+        if text.is_empty() && thinking.is_none() && tool_results.is_none() && images_json.is_none() {
             continue;
         }
 
@@ -635,11 +636,35 @@ fn extract_messages(
             tool_args: tool_results,
             duration_ms: None,
             token_count: None,
+            images: images_json,
         });
         step_idx += 1;
     }
 
     messages
+}
+
+fn extract_cursor_bubble_images(bubble: &Value) -> Option<String> {
+    let images_arr = bubble.get("images")?.as_array()?;
+    let mut list = Vec::new();
+    for img in images_arr {
+        let dim = img.get("dimension");
+        let w = dim.and_then(|d| d.get("width")).and_then(|v| v.as_i64());
+        let h = dim.and_then(|d| d.get("height")).and_then(|v| v.as_i64());
+        let uuid = img.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
+        if !uuid.is_empty() {
+            list.push(serde_json::json!({
+                "src": format!("/cursor-image/{}", uuid),
+                "width": w,
+                "height": h
+            }));
+        }
+    }
+    if !list.is_empty() {
+        Some(serde_json::to_string(&list).unwrap_or_default())
+    } else {
+        None
+    }
 }
 
 fn bubble_created_at(header: &Value, bubble: &Value) -> Option<String> {

@@ -185,6 +185,7 @@ fn parse_workbuddy_file(
                     tool_args: None,
                     duration_ms: None,
                     token_count: None,
+                    images: None,
                 });
                 step_idx += 1;
             }
@@ -229,6 +230,7 @@ fn parse_workbuddy_file(
             tool_args: None,
             duration_ms: None,
             token_count: None,
+            images: None,
         });
         step_idx += 1;
     }

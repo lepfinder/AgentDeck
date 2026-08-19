@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -156,6 +156,7 @@ pub struct DashboardStats {
     pub last30_daily_user_msgs: Vec<DailyBarSlot>,
     pub heatmap_cells: Vec<HeatmapCell>,
     pub heatmap_cells_convs: Vec<HeatmapCell>,
+    pub heatmap_cells_user: Vec<HeatmapCell>,
     pub heatmap_active_days: i64,
     pub heatmap_longest_streak: i64,
     pub heatmap_peak_day: Option<String>,
@@ -209,6 +210,18 @@ pub struct WorkspaceModuleBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StarredSessionItem {
+    pub conversation_id: String,
+    pub workspace_path: String,
+    pub source_app: String,
+    pub starred_at: String,
+    pub message_count: i64,
+    pub conversation_title: String,
+    pub created_at: Option<String>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisUserMessage {
     pub id: Option<String>,
     pub conversation_id: String,
@@ -222,6 +235,12 @@ pub struct HeatmapCell {
     pub date: String,
     pub count: i64,
     pub level: u32,
+    #[serde(default)]
+    pub user_count: i64,
+    #[serde(default)]
+    pub total_messages: i64,
+    #[serde(default)]
+    pub conv_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -417,7 +436,11 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, step_index);
+        CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_role_created ON messages(role, created_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_tool_name ON messages(tool_name) WHERE tool_name IS NOT NULL AND tool_name != '';
         CREATE INDEX IF NOT EXISTS idx_blocks_fine_ws ON workspace_blocks_fine(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_blocks_modules_ws ON workspace_blocks_modules(workspace_path);
         "#
@@ -782,52 +805,42 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         });
     }
 
-    // 4. 24 小时活跃时段（按消息数 & 按会话数，统一以北京时间 UTC+8 统计）
+    // 4. 24 小时活跃时段（按消息数 & 按会话数，统一以北京时间 UTC+8 统计，利用 SQLite 内核毫秒级聚合）
     let mut hourly_msgs = vec![0i64; 24];
     let mut stmt = conn.prepare(
-        "SELECT created_at FROM messages WHERE created_at IS NOT NULL AND created_at != '' LIMIT 50000"
+        "SELECT CAST(strftime('%H', datetime(created_at, '+8 hours')) AS INTEGER) as h, COUNT(*)
+         FROM messages
+         WHERE created_at IS NOT NULL AND created_at != '' AND datetime(created_at, '+8 hours') IS NOT NULL
+         GROUP BY h",
     )?;
-    let time_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    for t in time_rows.flatten() {
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&t) {
-            if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
-                let hour = dt.with_timezone(&beijing_tz).hour() as usize;
-                if hour < 24 {
-                    hourly_msgs[hour] += 1;
-                }
-            }
-        } else if t.len() >= 13 && t.contains(' ') {
-            if let Some(h_str) = t.split(' ').nth(1).and_then(|s| s.split(':').next()) {
-                if let Ok(h) = h_str.parse::<usize>() {
-                    if h < 24 {
-                        hourly_msgs[h] += 1;
-                    }
-                }
-            }
+    let msg_time_rows = stmt.query_map([], |row| {
+        let h: i64 = row.get(0)?;
+        let cnt: i64 = row.get(1)?;
+        Ok((h as usize, cnt))
+    })?;
+    for r in msg_time_rows.flatten() {
+        if r.0 < 24 {
+            hourly_msgs[r.0] = r.1;
         }
     }
 
     let mut hourly_convs = vec![0i64; 24];
     let mut stmt = conn.prepare(
-        "SELECT updated_at FROM conversations WHERE updated_at IS NOT NULL AND updated_at != ''",
+        "SELECT CAST(strftime('%H', datetime(COALESCE(created_at, updated_at), '+8 hours')) AS INTEGER) as h, COUNT(*)
+         FROM conversations
+         WHERE COALESCE(created_at, updated_at) IS NOT NULL 
+           AND COALESCE(created_at, updated_at) != ''
+           AND datetime(COALESCE(created_at, updated_at), '+8 hours') IS NOT NULL
+         GROUP BY h",
     )?;
-    let conv_time_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    for t in conv_time_rows.flatten() {
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&t) {
-            if let Some(beijing_tz) = chrono::FixedOffset::east_opt(8 * 3600) {
-                let hour = dt.with_timezone(&beijing_tz).hour() as usize;
-                if hour < 24 {
-                    hourly_convs[hour] += 1;
-                }
-            }
-        } else if t.len() >= 13 && t.contains(' ') {
-            if let Some(h_str) = t.split(' ').nth(1).and_then(|s| s.split(':').next()) {
-                if let Ok(h) = h_str.parse::<usize>() {
-                    if h < 24 {
-                        hourly_convs[h] += 1;
-                    }
-                }
-            }
+    let conv_time_rows = stmt.query_map([], |row| {
+        let h: i64 = row.get(0)?;
+        let cnt: i64 = row.get(1)?;
+        Ok((h as usize, cnt))
+    })?;
+    for r in conv_time_rows.flatten() {
+        if r.0 < 24 {
+            hourly_convs[r.0] = r.1;
         }
     }
 
@@ -960,61 +973,36 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     let last30_daily_convs = slots_from_daily(start_30, &last30_conv_counts);
     let last30_daily_user_msgs = slots_from_daily(start_30, &last30_user_msg_counts);
 
-    // 5. Tool Usage 工具调用分布分析
+    // 5. Tool Usage 工具调用分布分析 (SQL 快速聚合)
     let mut total_tool_calls = 0i64;
-    let mut tool_categories: HashMap<&'static str, i64> = HashMap::new();
+    let mut tool_categories: HashMap<String, i64> = HashMap::new();
 
-    // 优先从 messages.tool_name 直接查询
     let mut stmt = conn.prepare(
-        "SELECT tool_name FROM messages WHERE tool_name IS NOT NULL AND tool_name != ''",
+        r#"
+        SELECT 
+            CASE 
+                WHEN LOWER(tool_name) LIKE '%read%' OR LOWER(tool_name) LIKE '%view%' OR LOWER(tool_name) LIKE '%list%' OR LOWER(tool_name) LIKE '%cat%' THEN '文件阅读'
+                WHEN LOWER(tool_name) LIKE '%edit%' OR LOWER(tool_name) LIKE '%write%' OR LOWER(tool_name) LIKE '%replace%' OR LOWER(tool_name) LIKE '%patch%' THEN '代码编辑'
+                WHEN LOWER(tool_name) LIKE '%bash%' OR LOWER(tool_name) LIKE '%cmd%' OR LOWER(tool_name) LIKE '%terminal%' OR LOWER(tool_name) LIKE '%run%' OR LOWER(tool_name) LIKE '%exec%' THEN '终端命令'
+                WHEN LOWER(tool_name) LIKE '%search%' OR LOWER(tool_name) LIKE '%grep%' OR LOWER(tool_name) LIKE '%find%' OR LOWER(tool_name) LIKE '%query%' THEN '搜索检索'
+                WHEN LOWER(tool_name) LIKE '%skill%' OR LOWER(tool_name) LIKE '%mcp%' OR LOWER(tool_name) LIKE '%plugin%' OR LOWER(tool_name) LIKE '%image%' OR LOWER(tool_name) LIKE '%schedule%' OR LOWER(tool_name) LIKE '%task%' THEN '技能扩展'
+                WHEN LOWER(tool_name) LIKE '%browser%' OR LOWER(tool_name) LIKE '%web%' OR LOWER(tool_name) LIKE '%http%' OR LOWER(tool_name) LIKE '%fetch%' OR LOWER(tool_name) LIKE '%url%' THEN '网络与浏览器'
+                ELSE '其他工具'
+            END as cat,
+            COUNT(*) as cnt
+        FROM messages
+        WHERE tool_name IS NOT NULL AND tool_name != ''
+        GROUP BY cat
+        "#,
     )?;
-    let tool_rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-    for raw_name in tool_rows.flatten() {
-        total_tool_calls += 1;
-        let name = raw_name.to_lowercase();
-        if name.contains("read")
-            || name.contains("view")
-            || name.contains("list")
-            || name.contains("cat")
-        {
-            *tool_categories.entry("文件阅读").or_insert(0) += 1;
-        } else if name.contains("edit")
-            || name.contains("write")
-            || name.contains("replace")
-            || name.contains("patch")
-        {
-            *tool_categories.entry("代码编辑").or_insert(0) += 1;
-        } else if name.contains("bash")
-            || name.contains("cmd")
-            || name.contains("terminal")
-            || name.contains("run")
-            || name.contains("exec")
-        {
-            *tool_categories.entry("终端命令").or_insert(0) += 1;
-        } else if name.contains("search")
-            || name.contains("grep")
-            || name.contains("find")
-            || name.contains("query")
-        {
-            *tool_categories.entry("搜索检索").or_insert(0) += 1;
-        } else if name.contains("skill")
-            || name.contains("mcp")
-            || name.contains("plugin")
-            || name.contains("image")
-            || name.contains("schedule")
-            || name.contains("task")
-        {
-            *tool_categories.entry("技能扩展").or_insert(0) += 1;
-        } else if name.contains("browser")
-            || name.contains("web")
-            || name.contains("http")
-            || name.contains("fetch")
-            || name.contains("url")
-        {
-            *tool_categories.entry("网络与浏览器").or_insert(0) += 1;
-        } else {
-            *tool_categories.entry("其他工具").or_insert(0) += 1;
-        }
+    let tool_rows = stmt.query_map([], |row| {
+        let cat: String = row.get(0)?;
+        let cnt: i64 = row.get(1)?;
+        Ok((cat, cnt))
+    })?;
+    for r in tool_rows.flatten() {
+        total_tool_calls += r.1;
+        tool_categories.insert(r.0, r.1);
     }
 
     let mut tool_usage = Vec::new();
@@ -1138,11 +1126,15 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     // 5.5 全景 365 天日历热力图（按北京时间自然日，与柱状图一致）
     let mut heatmap_cells = Vec::new();
     let mut heatmap_cells_convs = Vec::new();
+    let mut heatmap_cells_user = Vec::new();
     let start_date = today_bj - chrono::Duration::days(364);
 
     let mut day_msg_counts: HashMap<String, i64> = HashMap::new();
+    let mut day_user_msg_counts: HashMap<String, i64> = HashMap::new();
     let mut stmt_hm_msg = conn.prepare(
-        "SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as d, COUNT(*)
+        "SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as d,
+                COUNT(*),
+                COUNT(CASE WHEN m.role = 'user' THEN 1 END)
          FROM messages m
          WHERE m.created_at IS NOT NULL AND m.created_at != ''
            AND datetime(m.created_at, '+8 hours') IS NOT NULL
@@ -1150,11 +1142,13 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     )?;
     let hm_msg_rows = stmt_hm_msg.query_map([], |r| {
         let d: String = r.get(0)?;
-        let c: i64 = r.get(1)?;
-        Ok((d, c))
+        let total_c: i64 = r.get(1)?;
+        let user_c: i64 = r.get(2)?;
+        Ok((d, total_c, user_c))
     })?;
     for r in hm_msg_rows.flatten() {
-        day_msg_counts.insert(r.0, r.1);
+        day_msg_counts.insert(r.0.clone(), r.1);
+        day_user_msg_counts.insert(r.0, r.2);
     }
 
     let mut day_conv_counts: HashMap<String, i64> = HashMap::new();
@@ -1185,6 +1179,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         let curr = start_date + chrono::Duration::days(i);
         let date_str = curr.format("%Y-%m-%d").to_string();
         let msg_cnt = *day_msg_counts.get(&date_str).unwrap_or(&0);
+        let user_msg_cnt = *day_user_msg_counts.get(&date_str).unwrap_or(&0);
         let conv_cnt = *day_conv_counts.get(&date_str).unwrap_or(&0);
 
         if msg_cnt > 0 {
@@ -1208,6 +1203,13 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             41..=100 => 3,
             _ => 4,
         };
+        let level_user_msg = match user_msg_cnt {
+            0 => 0,
+            1..=3 => 1,
+            4..=10 => 2,
+            11..=25 => 3,
+            _ => 4,
+        };
         let level_conv = match conv_cnt {
             0 => 0,
             1..=2 => 1,
@@ -1220,11 +1222,25 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             date: date_str.clone(),
             count: msg_cnt,
             level: level_msg,
+            user_count: user_msg_cnt,
+            total_messages: msg_cnt,
+            conv_count: conv_cnt,
+        });
+        heatmap_cells_user.push(HeatmapCell {
+            date: date_str.clone(),
+            count: user_msg_cnt,
+            level: level_user_msg,
+            user_count: user_msg_cnt,
+            total_messages: msg_cnt,
+            conv_count: conv_cnt,
         });
         heatmap_cells_convs.push(HeatmapCell {
             date: date_str,
             count: conv_cnt,
             level: level_conv,
+            user_count: user_msg_cnt,
+            total_messages: msg_cnt,
+            conv_count: conv_cnt,
         });
     }
 
@@ -1256,6 +1272,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
         last30_daily_user_msgs,
         heatmap_cells,
         heatmap_cells_convs,
+        heatmap_cells_user,
         heatmap_active_days,
         heatmap_longest_streak,
         heatmap_peak_day,
@@ -1593,10 +1610,18 @@ pub fn fetch_workspace_detail_stats(
     };
 
     // 每日活跃消息统计（按北京时间自然日切分）
-    let mut daily_counts: HashMap<String, i64> = HashMap::new();
+    struct DayStat {
+        total_msgs: i64,
+        user_msgs: i64,
+        convs: i64,
+    }
+    let mut daily_stats: HashMap<String, DayStat> = HashMap::new();
     let mut stmt = conn.prepare(
         r#"
-        SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as day, COUNT(*)
+        SELECT strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) as day, 
+               COUNT(*) as total_msgs,
+               COUNT(CASE WHEN m.role = 'user' THEN 1 END) as user_msgs,
+               COUNT(DISTINCT c.id) as conv_cnt
         FROM messages m
         JOIN conversations c ON c.id = m.conversation_id
         WHERE c.workspace_path = ?1 AND m.created_at IS NOT NULL AND length(m.created_at) >= 10
@@ -1605,17 +1630,19 @@ pub fn fetch_workspace_detail_stats(
     )?;
     let rows = stmt.query_map(params![workspace_path], |r| {
         let day: String = r.get(0)?;
-        let count: i64 = r.get(1)?;
-        Ok((day, count))
+        let total_msgs: i64 = r.get(1)?;
+        let user_msgs: i64 = r.get(2)?;
+        let convs: i64 = r.get(3)?;
+        Ok((day, DayStat { total_msgs, user_msgs, convs }))
     })?;
     for item in rows.flatten() {
-        daily_counts.insert(item.0, item.1);
+        daily_stats.insert(item.0, item.1);
     }
 
-    let active_days = daily_counts.len() as i64;
-    let peak_item = daily_counts.iter().max_by_key(|(_, &cnt)| cnt);
+    let active_days = daily_stats.len() as i64;
+    let peak_item = daily_stats.iter().max_by_key(|(_, stat)| stat.total_msgs);
     let (peak_day, peak_count) = match peak_item {
-        Some((d, &cnt)) => (Some(d.clone()), cnt),
+        Some((d, stat)) => (Some(d.clone()), stat.total_msgs),
         None => (None, 0),
     };
 
@@ -1623,11 +1650,14 @@ pub fn fetch_workspace_detail_stats(
     let mut heatmap_cells = Vec::new();
     let beijing_tz = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
     let today = Utc::now().with_timezone(&beijing_tz).date_naive();
-    let max_count = *daily_counts.values().max().unwrap_or(&1).max(&1) as f64;
+    let max_count = daily_stats.values().map(|s| s.total_msgs).max().unwrap_or(1).max(1) as f64;
     for i in (0..364).rev() {
         let d = today - chrono::Duration::days(i);
         let date_str = d.format("%Y-%m-%d").to_string();
-        let cnt = *daily_counts.get(&date_str).unwrap_or(&0);
+        let stat = daily_stats.get(&date_str);
+        let cnt = stat.map(|s| s.total_msgs).unwrap_or(0);
+        let user_cnt = stat.map(|s| s.user_msgs).unwrap_or(0);
+        let conv_cnt = stat.map(|s| s.convs).unwrap_or(0);
         let ratio = cnt as f64 / max_count;
         let level = if cnt == 0 {
             0
@@ -1644,6 +1674,9 @@ pub fn fetch_workspace_detail_stats(
             date: date_str,
             count: cnt,
             level,
+            user_count: user_cnt,
+            total_messages: cnt,
+            conv_count: conv_cnt,
         });
     }
 

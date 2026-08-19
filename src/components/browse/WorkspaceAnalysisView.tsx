@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { WorkspaceDetailStats, WorkspaceFineBlock } from '../../types';
 import { api } from '../../api/tauriBridge';
 import ReactMarkdown from 'react-markdown';
@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   AlertTriangle,
 } from 'lucide-react';
+import { ContributionHeatmap } from '../common/ContributionHeatmap';
 
 interface Props {
   workspacePath: string;
@@ -38,7 +39,6 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [extracting, setExtracting] = useState(false);
   const [extractMessage, setExtractMessage] = useState<string | null>(null);
   const [progressInfo, setProgressInfo] = useState<PipelineProgress | null>(null);
-  const heatmapScrollRef = useRef<HTMLDivElement>(null);
 
   const fetchDetail = async () => {
     if (!workspacePath) return;
@@ -56,12 +56,6 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   useEffect(() => {
     fetchDetail();
   }, [workspacePath]);
-
-  useLayoutEffect(() => {
-    const el = heatmapScrollRef.current;
-    if (!el) return;
-    el.scrollLeft = el.scrollWidth;
-  }, [detail?.heatmap_cells]);
 
   // 1. 细粒度 Blocks 智能提取
   const handleExtractBlocks = async (force: boolean) => {
@@ -332,138 +326,17 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
       </div>
 
       {/* 研发日历贡献热力图 (GitHub 风格) */}
-      {(() => {
-        const heatmapData = detail.heatmap_cells || [];
-        const weeks: Array<Array<{ date: string; count: number; level: number } | null>> = [];
-        if (heatmapData.length > 0) {
-          let currentWeek: Array<{ date: string; count: number; level: number } | null> = [];
-          const firstDate = new Date(heatmapData[0].date);
-          const startDayOfWeek = firstDate.getDay();
-
-          for (let i = 0; i < startDayOfWeek; i++) {
-            currentWeek.push(null);
-          }
-
-          for (const cell of heatmapData) {
-            currentWeek.push(cell);
-            if (currentWeek.length === 7) {
-              weeks.push(currentWeek);
-              currentWeek = [];
-            }
-          }
-          if (currentWeek.length > 0) {
-            while (currentWeek.length < 7) {
-              currentWeek.push(null);
-            }
-            weeks.push(currentWeek);
-          }
-        }
-
-        const monthLabels: { month: string; colIndex: number }[] = [];
-        let lastMonth = -1;
-        weeks.forEach((week, colIdx) => {
-          const validDay = week.find((d) => d !== null);
-          if (validDay) {
-            const m = new Date(validDay.date).getMonth();
-            if (m !== lastMonth) {
-              monthLabels.push({
-                month: `${m + 1}月`,
-                colIndex: colIdx,
-              });
-              lastMonth = m;
-            }
-          }
-        });
-
-        return (
-          <div className="theme-bg-card border theme-border rounded-xl p-5 shadow-xs">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-emerald-500" />
-                  研发日历 (52-Week Activity Heatmap)
-                </h2>
-                <p className="text-xs theme-text-muted mt-0.5">
-                  过去 365 天研发交互轨迹，颜色越深表示当天研发活跃度越高
-                </p>
-              </div>
-            </div>
-
-            {/* 52 周日历热力网格：默认滚到最右侧，优先露出最近日期 */}
-            <div ref={heatmapScrollRef} className="overflow-x-auto pb-2 scrollbar-thin">
-              <div className="inline-block min-w-full">
-                {/* 月份表头 */}
-                <div className="flex text-[11px] theme-text-muted mb-1.5 pl-7 h-4 relative">
-                  {monthLabels.map((lbl, idx) => (
-                    <span
-                      key={idx}
-                      style={{
-                        position: 'absolute',
-                        left: `${lbl.colIndex * 15 + 28}px`,
-                      }}
-                      className="font-medium"
-                    >
-                      {lbl.month}
-                    </span>
-                  ))}
-                </div>
-
-                {/* 网格主体：左侧星期 + 52 周列 */}
-                <div className="flex gap-1.5">
-                  {/* 左侧星期标签 */}
-                  <div className="flex flex-col justify-between text-[9px] theme-text-muted pr-1 py-0.5 h-[104px] select-none sticky left-0 z-10 theme-bg-card">
-                    <span>周日</span>
-                    <span>周二</span>
-                    <span>周四</span>
-                    <span>周六</span>
-                  </div>
-
-                  {/* 52 周列 */}
-                  <div className="flex gap-[3px]">
-                    {weeks.map((week, wIdx) => (
-                      <div key={wIdx} className="flex flex-col gap-[3px]">
-                        {week.map((cell, dIdx) => {
-                          if (!cell) {
-                            return (
-                              <div
-                                key={dIdx}
-                                className="w-3 h-3 rounded-[2.5px] opacity-0 pointer-events-none"
-                              />
-                            );
-                          }
-                          return (
-                            <div
-                              key={dIdx}
-                              title={`${cell.date}: ${cell.count.toLocaleString()} 条消息`}
-                              className={`w-3 h-3 rounded-[2.5px] gh-heatmap-cell lvl-${cell.level} border border-black/5 dark:border-white/5 cursor-pointer`}
-                            />
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 底部 Legend 放在滚动区外，避免滚到右侧后被裁切 */}
-            <div className="flex items-center justify-between text-[11px] theme-text-muted mt-3 pt-2.5 border-t theme-border-sub">
-              <span className="text-[11px]">
-                过去 365 天共活跃 <strong className="theme-text-main font-mono">{detail.active_days || 0}</strong> 天
-              </span>
-              <div className="flex items-center gap-1.5">
-                <span>少</span>
-                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
-                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
-                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
-                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
-                <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
-                <span>多</span>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      <ContributionHeatmap
+        title="研发日历 (52-Week Activity Heatmap)"
+        subtitle="过去 365 天研发交互轨迹，颜色越深表示当天研发活跃度越高"
+        icon={<Calendar className="h-4 w-4 text-emerald-500" />}
+        cellsAllMsgs={detail.heatmap_cells || []}
+        activeDays={detail.active_days || 0}
+        peakDay={detail.peak_day || undefined}
+        peakCount={detail.peak_count}
+        showTabs={false}
+        autoScrollToEnd={true}
+      />
 
       {/* 研发分析三级颗粒度 */}
       <div className="theme-bg-card border theme-border rounded-xl p-5 shadow-xs space-y-4">

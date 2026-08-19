@@ -25,6 +25,7 @@ pub struct RawMessage {
     pub tool_args: Option<String>,
     pub duration_ms: Option<i64>,
     pub token_count: Option<i64>,
+    pub images: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,10 +79,10 @@ pub fn project_root_from_path(path_str: &str) -> String {
             }
             let prefix = format!("/{}", parts[..i].join("/"));
             if i + 2 < parts.len() {
-                return format!("{}/{}", prefix, parts[i..i + 3].join("/"));
+                return format!("{}/{}", prefix, parts[i..=i + 2].join("/"));
             }
             if i + 1 < parts.len() {
-                return format!("{}/{}", prefix, parts[i..i + 2].join("/"));
+                return format!("{}/{}", prefix, parts[i..=i + 1].join("/"));
             }
             return format!("{}/workspace", prefix);
         }
@@ -136,6 +137,7 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
         msg.tool_name.hash(&mut hasher);
         msg.tool_args.hash(&mut hasher);
         msg.created_at.hash(&mut hasher);
+        msg.images.hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
 }
@@ -149,7 +151,6 @@ pub fn needs_sync(conn: &Connection, file_path: &Path, incremental: bool) -> boo
         Ok(m) => m,
         Err(_) => return false,
     };
-
     let path_str = file_path.to_string_lossy();
     let mtime_sec = match metadata.modified() {
         Ok(t) => t
@@ -318,7 +319,7 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                 conversation_id, step_index, role, message_type, content, thinking,
                 tool_name, tool_args, created_at, source, is_truncated, images
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, NULL)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11)
             "#,
         )?;
 
@@ -334,6 +335,7 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                 &msg.tool_args,
                 &msg.created_at,
                 &conv.source_app,
+                &msg.images,
             ])?;
         }
     }

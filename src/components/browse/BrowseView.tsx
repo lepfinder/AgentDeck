@@ -73,11 +73,11 @@ export const BrowseView: React.FC<Props> = ({
     return list
       .map((item: any) => {
         if (typeof item === 'string') {
-          const src = item.startsWith('/') ? `http://127.0.0.1:8788${item}` : item;
+          const src = item.startsWith('/') ? `http://127.0.0.1:8789${item}` : item;
           return { src };
         }
         if (item && typeof item.src === 'string') {
-          const src = item.src.startsWith('/') ? `http://127.0.0.1:8788${item.src}` : item.src;
+          const src = item.src.startsWith('/') ? `http://127.0.0.1:8789${item.src}` : item.src;
           return { ...item, src };
         }
         return null;

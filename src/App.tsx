@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -108,8 +108,12 @@ export function App() {
     });
   }, []);
 
-  // 加载大盘数据
+  const loadingStatsRef = useRef(false);
+
+  // 加载大盘数据（带并发锁保护）
   const loadStats = async () => {
+    if (loadingStatsRef.current) return;
+    loadingStatsRef.current = true;
     setLoadingStats(true);
     try {
       const data = await api.getDashboardStats();
@@ -117,6 +121,7 @@ export function App() {
     } catch (e) {
       console.error('Failed to load dashboard stats:', e);
     } finally {
+      loadingStatsRef.current = false;
       setLoadingStats(false);
     }
   };
@@ -140,9 +145,11 @@ export function App() {
     listen<SyncResultInfo>('sync-completed', (event) => {
       setIsSyncing(false);
       const result = event.payload;
-      if (result && (result.new_count > 0 || result.updated_count > 0)) {
+      if (result) {
         loadStats();
-        showSyncToast(result.message, 3000);
+        if (result.new_count > 0 || result.updated_count > 0) {
+          showSyncToast(result.message, 3000);
+        }
       }
     }).then((fn) => {
       unlistenCompleted = fn;
@@ -160,11 +167,8 @@ export function App() {
     setIsSyncing(true);
     try {
       const res = await api.triggerSync(full);
-      await loadStats();
-      if (res.message) {
-        if (res.new_count > 0 || res.updated_count > 0) {
-          showSyncToast(res.message, 3500);
-        }
+      if (res && res.message && (res.new_count > 0 || res.updated_count > 0)) {
+        showSyncToast(res.message, 3500);
       }
     } catch (err) {
       console.error('Sync failed:', err);

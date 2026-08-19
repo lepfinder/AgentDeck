@@ -184,6 +184,7 @@ fn parse_codex_file(
                         tool_args: None,
                         duration_ms: None,
                         token_count: None,
+                        images: None,
                     });
                     step_idx += 1;
                 } else if p_type == "function_call" {
@@ -207,6 +208,7 @@ fn parse_codex_file(
                         tool_args: Some(fn_args),
                         duration_ms: None,
                         token_count: None,
+                        images: None,
                     });
                     step_idx += 1;
                 }
@@ -246,6 +248,7 @@ fn parse_codex_file(
                 tool_args: None,
                 duration_ms: None,
                 token_count: None,
+                images: None,
             });
             step_idx += 1;
         }

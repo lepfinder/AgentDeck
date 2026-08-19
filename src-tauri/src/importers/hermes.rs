@@ -226,6 +226,7 @@ fn sync_hermes_state_db(
                 tool_args: tool_calls,
                 duration_ms: None,
                 token_count: None,
+                images: None,
             });
             step_idx += 1;
         }
@@ -338,6 +339,7 @@ fn parse_hermes_jsonl(
             tool_args: None,
             duration_ms: None,
             token_count: None,
+            images: None,
         });
         step_idx += 1;
     }

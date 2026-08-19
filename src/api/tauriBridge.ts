@@ -287,6 +287,6 @@ export const api = {
         return '0.2.2';
       }
     }
-    return '0.2.1';
+    return '0.2.2';
   },
 };

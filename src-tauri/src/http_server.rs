@@ -104,7 +104,7 @@ fn handle_connection(mut stream: TcpStream) {
                 "ok": true,
                 "status": "ok",
                 "app": "AgentDeck",
-                "version": "0.2.1",
+                "version": "0.2.3",
                 "cursor_available": true,
                 "ai_available": true,
                 "stats": stats
@@ -555,17 +555,22 @@ fn get_mime_from_path(p: &std::path::Path) -> &'static str {
 }
 
 fn get_ag_image_path(raw: &str) -> Option<std::path::PathBuf> {
-    if raw.is_empty() {
+    let unescaped = urlencoding::decode(raw).unwrap_or_else(|_| std::borrow::Cow::Borrowed(raw));
+    let clean = unescaped
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_start_matches("file://");
+    if clean.is_empty() {
         return None;
     }
-    let path = std::path::PathBuf::from(raw);
+    let path = std::path::PathBuf::from(clean);
     if path.is_file() {
         return Some(path);
     }
     if let Some(home) = dirs::home_dir() {
-        if raw.starts_with('~') {
-            let clean = raw.trim_start_matches('~').trim_start_matches('/');
-            let p = home.join(clean);
+        if clean.starts_with('~') {
+            let p = home.join(clean.trim_start_matches('~').trim_start_matches('/'));
             if p.is_file() {
                 return Some(p);
             }

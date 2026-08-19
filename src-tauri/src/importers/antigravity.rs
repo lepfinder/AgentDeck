@@ -9,6 +9,9 @@ use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
 };
 
+const AG_PARSER_REV: &str = "ag-images-v2";
+const AG_PARSER_REV_KEY: &str = "agentdeck:ag_parser_rev";
+
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
         app: "Antigravity".to_string(),
@@ -33,6 +36,8 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         Err(_) => return stats,
     };
 
+    let force_reparse = ag_parser_rev_stale(conn);
+
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -49,7 +54,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
             continue;
         }
 
-        if incremental && !needs_sync(conn, &transcript_path, true) {
+        if incremental && !force_reparse && !needs_sync(conn, &transcript_path, true) {
             stats.skipped_count += 1;
             continue;
         }
@@ -79,7 +84,80 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
+    mark_ag_synced(conn);
+
     stats
+}
+
+fn ag_parser_rev_stale(conn: &Connection) -> bool {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM sync_state WHERE source_path = ?",
+            rusqlite::params![AG_PARSER_REV_KEY],
+            |r| r.get(0),
+        )
+        .ok();
+    stored.as_deref() != Some(AG_PARSER_REV)
+}
+
+fn mark_ag_synced(conn: &Connection) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        VALUES (?1, ?2, 'ag_parser', 0, 0, ?3)
+        ON CONFLICT(source_path) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            synced_at = excluded.synced_at
+        "#,
+        rusqlite::params![AG_PARSER_REV_KEY, AG_PARSER_REV, now],
+    );
+}
+
+fn load_antigravity_db_media(cid: &str, home: &Path) -> std::collections::HashMap<i64, Vec<String>> {
+    let mut mapping = std::collections::HashMap::new();
+    let db_path = home.join(".gemini/antigravity-ide/conversations").join(format!("{}.db", cid));
+    if !db_path.is_file() {
+        return mapping;
+    }
+
+    let conn = match Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(c) => c,
+        Err(_) => return mapping,
+    };
+
+    let Ok(media_re) = Regex::new(r#"(/Users[^\x00-\x1f\s"'`<>]*?\.(?:png|jpe?g|webp|gif|svg))"#) else {
+        return mapping;
+    };
+
+    if let Ok(mut stmt) = conn.prepare("SELECT idx, step_payload FROM steps WHERE step_payload IS NOT NULL ORDER BY idx") {
+        if let Ok(rows) = stmt.query_map([], |row| {
+            let idx: i64 = row.get(0)?;
+            let payload: Vec<u8> = row.get(1)?;
+            Ok((idx, payload))
+        }) {
+            for r in rows.flatten() {
+                let text = String::from_utf8_lossy(&r.1);
+                let mut list = Vec::new();
+                for caps in media_re.captures_iter(&text) {
+                    if let Some(m) = caps.get(1) {
+                        let p = m.as_str().to_string();
+                        if !list.contains(&p) {
+                            list.push(p);
+                        }
+                    }
+                }
+                if !list.is_empty() {
+                    mapping.insert(r.0, list);
+                }
+            }
+        }
+    }
+
+    mapping
 }
 
 fn parse_antigravity_session(
@@ -90,9 +168,16 @@ fn parse_antigravity_session(
     let file = File::open(transcript_path)?;
     let reader = BufReader::new(file);
 
+    let home = dirs::home_dir().unwrap_or_default();
+    let db_media = load_antigravity_db_media(cid, &home);
+
     let user_req_re = Regex::new(r"(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>")?;
     let workspace_re = Regex::new(r"(/[^\s\n\r]+)\s*->")?;
     let active_doc_re = Regex::new(r"Active Document:\s*([^\s(]+)")?;
+    let at_img_re = Regex::new(r"@\[?(/[^\s\]\)]+\.(?:png|jpe?g|gif|webp|svg))\]?")?;
+    let file_uri_img_re = Regex::new(r#"file://(/[^\s"'\n\r\(\)]+\.(?:png|jpe?g|gif|webp|svg))"#)?;
+    let media_re = Regex::new(r#"(/Users[^\x00-\x1f\s"'`<>]*?media[_\-\w]*\.(?:png|jpe?g|webp|gif|svg))"#)?;
+    let user_uploaded_re = Regex::new(r#"(/Users[^\x00-\x1f\s"'`<>]*?/\.user_uploaded/[^\s"'`<>]+)"#)?;
 
     let mut messages = Vec::new();
     let mut title = String::new();
@@ -128,6 +213,7 @@ fn parse_antigravity_session(
         };
 
         let step_type = json_val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let raw_step_index = json_val.get("step_index").and_then(|v| v.as_i64()).unwrap_or(-1);
         let raw_content = json_val
             .get("content")
             .and_then(|v| v.as_str())
@@ -185,6 +271,71 @@ fn parse_antigravity_session(
                     title = user_text.chars().take(80).collect();
                 }
 
+                // 提取附图 (结合文本正则与 conversations db step_payload)
+                let mut img_paths = Vec::new();
+
+                // 1. 从 conversations/{cid}.db 中关联此 step_index 的图片
+                if let Some(db_imgs) = db_media.get(&raw_step_index) {
+                    for p in db_imgs {
+                        if !img_paths.contains(p) {
+                            img_paths.push(p.clone());
+                        }
+                    }
+                }
+
+                // 2. 从 raw_content 文本中正则匹配
+                for caps in at_img_re.captures_iter(raw_content) {
+                    if let Some(m) = caps.get(1) {
+                        let p = m.as_str().to_string();
+                        if !img_paths.contains(&p) {
+                            img_paths.push(p);
+                        }
+                    }
+                }
+                for caps in file_uri_img_re.captures_iter(raw_content) {
+                    if let Some(m) = caps.get(1) {
+                        let p = m.as_str().to_string();
+                        if !img_paths.contains(&p) {
+                            img_paths.push(p);
+                        }
+                    }
+                }
+                for caps in media_re.captures_iter(raw_content) {
+                    if let Some(m) = caps.get(1) {
+                        let p = m.as_str().to_string();
+                        if !img_paths.contains(&p) {
+                            img_paths.push(p);
+                        }
+                    }
+                }
+                for caps in user_uploaded_re.captures_iter(raw_content) {
+                    if let Some(m) = caps.get(1) {
+                        let p = m.as_str().to_string();
+                        if !img_paths.contains(&p) {
+                            img_paths.push(p);
+                        }
+                    }
+                }
+
+                let mut image_entries = Vec::new();
+                for p in img_paths {
+                    let path_obj = Path::new(&p);
+                    if path_obj.is_file() {
+                        let encoded = urlencoding::encode(&p);
+                        image_entries.push(serde_json::json!({
+                            "src": format!("/ag-image?path={}", encoded),
+                            "width": null,
+                            "height": null
+                        }));
+                    }
+                }
+
+                let images_json = if !image_entries.is_empty() {
+                    Some(serde_json::to_string(&image_entries).unwrap_or_default())
+                } else {
+                    None
+                };
+
                 messages.push(RawMessage {
                     step_index: step_idx,
                     role: "user".to_string(),
@@ -197,6 +348,7 @@ fn parse_antigravity_session(
                     tool_args: None,
                     duration_ms: None,
                     token_count: None,
+                    images: images_json,
                 });
                 step_idx += 1;
             }
@@ -223,6 +375,7 @@ fn parse_antigravity_session(
                     tool_args: tool_calls_json,
                     duration_ms: None,
                     token_count: None,
+                    images: None,
                 });
                 step_idx += 1;
             }

@@ -126,6 +126,7 @@ export interface DashboardStats {
   last30_daily_user_msgs: DailyBarSlot[];
   heatmap_cells: HeatmapCell[];
   heatmap_cells_convs: HeatmapCell[];
+  heatmap_cells_user: HeatmapCell[];
   heatmap_active_days: number;
   heatmap_longest_streak: number;
   heatmap_peak_day?: string;
@@ -195,6 +196,9 @@ export interface HeatmapCell {
   date: string;
   count: number;
   level: number;
+  user_count?: number;
+  total_messages?: number;
+  conv_count?: number;
 }
 
 export interface WorkspaceDetailStats {

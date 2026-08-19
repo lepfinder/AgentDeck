@@ -624,8 +624,8 @@ pub fn run() {
                 let _ = window.set_title("AgentDeck - AI Coding Cockpit");
             }
 
-            // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给外部服务无缝调用）
-            http_server::start_http_server(8788);
+            // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8789，供给前端图片与外部服务无缝调用）
+            http_server::start_http_server(8789);
 
             // 启动后台多源智能监听线程（每 60 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();
