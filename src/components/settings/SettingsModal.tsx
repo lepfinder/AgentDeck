@@ -30,8 +30,11 @@ import {
   Server,
   Copy,
   Terminal,
+  FileText,
+  Lock,
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
+import { getApiDocsMarkdown } from '../../utils/apiDocsMarkdown';
 import type { CloudPreset, BackupInfo, BackupProgress } from '../../types';
 
 export interface AiProviderConfig {
@@ -147,6 +150,8 @@ export const SettingsModal: React.FC<Props> = ({
   const [apiHealth, setApiHealth] = useState<{ status: string; latencyMs: number; ok: boolean; version?: string } | null>(null);
   const [checkingApi, setCheckingApi] = useState<boolean>(false);
   const [copiedEndpoint, setCopiedEndpoint] = useState<string | null>(null);
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState<boolean>(false);
+  const [copiedFullDoc, setCopiedFullDoc] = useState<boolean>(false);
 
   const checkApiHealth = async () => {
     setCheckingApi(true);
@@ -165,6 +170,13 @@ export const SettingsModal: React.FC<Props> = ({
     } finally {
       setCheckingApi(false);
     }
+  };
+
+  const handleCopyMarkdownDoc = () => {
+    const md = getApiDocsMarkdown();
+    navigator.clipboard.writeText(md);
+    setCopiedFullDoc(true);
+    setTimeout(() => setCopiedFullDoc(false), 2200);
   };
 
   useEffect(() => {
@@ -1210,6 +1222,21 @@ export const SettingsModal: React.FC<Props> = ({
                   </p>
                 </div>
 
+                {/* 鉴权与网络安全提示横幅 */}
+                <div className="border border-blue-500/30 bg-blue-500/10 rounded-xl p-3.5 flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <div className="p-1 rounded-md bg-blue-500/20 text-blue-400 mt-0.5">
+                      <Lock className="h-4 w-4" />
+                    </div>
+                    <div className="text-xs space-y-0.5">
+                      <div className="font-bold text-blue-400">免 Token 鉴权说明 (No Token Required)</div>
+                      <p className="theme-text-muted text-[11px] leading-relaxed">
+                        当前 API 严格监听在当前 Mac 本机回环网卡 <code className="font-mono text-blue-300">127.0.0.1:8788</code>，仅供本机进程、脚本或插件直接调用，外部网络无法直连。因此无需在请求头传递 Authorization Token。
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 {/* 服务运行状态卡片 */}
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1223,7 +1250,7 @@ export const SettingsModal: React.FC<Props> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <div className="px-3 py-1.5 rounded-lg bg-black/20 dark:bg-white/5 border theme-border font-mono text-xs text-blue-400 font-semibold select-all">
                         http://127.0.0.1:8788
                       </div>
@@ -1253,16 +1280,59 @@ export const SettingsModal: React.FC<Props> = ({
                       )}
                     </div>
 
-                    {/* 文档跳转主入口 */}
-                    <button
-                      onClick={() => api.openUrl('http://127.0.0.1:8788/docs')}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all cursor-pointer shadow-xs"
-                      title="在系统默认浏览器中打开交互式 API 文档"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      <span>查看在线 API 文档 (Interactive Docs)</span>
-                    </button>
+                    {/* 文档操作按钮组 */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        onClick={handleCopyMarkdownDoc}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium theme-bg-card hover:theme-bg-sub border theme-border theme-text-main rounded-lg transition-all cursor-pointer shadow-xs"
+                        title="一键复制完整 Markdown 格式 API 规范文档"
+                      >
+                        {copiedFullDoc ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <FileText className="h-3.5 w-3.5 text-blue-400" />}
+                        <span>{copiedFullDoc ? '已复制 Markdown！' : '复制 Markdown 文档'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => setShowMarkdownPreview(!showMarkdownPreview)}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all cursor-pointer shadow-xs ${
+                          showMarkdownPreview
+                            ? 'bg-blue-600/20 border-blue-500 text-blue-400'
+                            : 'theme-bg-card hover:theme-bg-sub border-theme-border theme-text-muted hover:theme-text-main'
+                        }`}
+                        title="在当前弹窗中直接展开预览 Markdown 文档"
+                      >
+                        <Terminal className="h-3.5 w-3.5" />
+                        <span>{showMarkdownPreview ? '收起预览' : '预览 Markdown'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => api.openUrl('http://127.0.0.1:8788/docs')}
+                        className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all cursor-pointer shadow-xs"
+                        title="在系统默认浏览器中打开交互式 API 文档"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        <span>在线文档 (Docs)</span>
+                      </button>
+                    </div>
                   </div>
+
+                  {/* 展开 Markdown 预览区 */}
+                  {showMarkdownPreview && (
+                    <div className="pt-3 border-t theme-border-sub space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-semibold theme-text-main">Markdown 文档内容预览</span>
+                        <button
+                          onClick={handleCopyMarkdownDoc}
+                          className="text-[11px] text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Copy className="h-3 w-3" />
+                          <span>一键全选复制</span>
+                        </button>
+                      </div>
+                      <pre className="p-3 rounded-lg bg-black/40 dark:bg-black/70 border theme-border font-mono text-[11px] text-neutral-300 max-h-60 overflow-y-auto whitespace-pre-wrap select-all">
+                        {getApiDocsMarkdown()}
+                      </pre>
+                    </div>
+                  )}
                 </div>
 
                 {/* 开放接口清单 */}
