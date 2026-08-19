@@ -1,5 +1,5 @@
 export function getApiDocsMarkdown(): string {
-  return `# AgentDeck REST API 接口规范与集成文档 (v0.2.4)
+  return `# AgentDeck REST API 接口规范与集成文档 (v0.2.5)
 
 > **鉴权说明 (Authentication)**: 
 > 当前版本 API **无需 Token 校验 (No Token Required)**。
