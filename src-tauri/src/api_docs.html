@@ -9,8 +9,8 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #0b0f19;
-      --card-bg: #131b2e;
+      --bg: #090d16;
+      --card-bg: #111827;
       --card-border: rgba(255, 255, 255, 0.08);
       --card-border-hover: rgba(59, 130, 246, 0.35);
       --text: #f8fafc;
@@ -24,44 +24,43 @@
       --post: #6366f1;
       --post-bg: rgba(99, 102, 241, 0.12);
       --post-border: rgba(99, 102, 241, 0.25);
-      --code-bg: #090d16;
-      --schema-bg: rgba(0, 0, 0, 0.35);
+      --code-bg: #060911;
+      --schema-bg: rgba(0, 0, 0, 0.4);
+      --sidebar-w: 260px;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
     body {
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: radial-gradient(circle at 50% 0%, #1e293b 0%, var(--bg) 80%);
       color: var(--text);
       line-height: 1.6;
       min-height: 100vh;
-      padding: 40px 20px 80px;
     }
 
-    .container {
-      max-width: 1080px;
-      margin: 0 auto;
-    }
-
-    /* 顶部导航与状态 */
+    /* 顶部导航 */
     header {
-      margin-bottom: 36px;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(9, 13, 22, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--card-border);
+      padding: 14px 28px;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      flex-wrap: wrap;
-      gap: 20px;
-      padding-bottom: 24px;
-      border-bottom: 1px solid var(--card-border);
+      gap: 16px;
     }
 
     .brand h1 {
-      font-size: 26px;
+      font-size: 20px;
       font-weight: 800;
       letter-spacing: -0.5px;
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
       background: linear-gradient(135deg, #ffffff 40%, #94a3b8 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -70,7 +69,7 @@
     .version-tag {
       font-size: 11px;
       font-family: 'JetBrains Mono', monospace;
-      padding: 3px 10px;
+      padding: 2px 8px;
       border-radius: 9999px;
       background: rgba(59, 130, 246, 0.15);
       color: #60a5fa;
@@ -79,27 +78,20 @@
       -webkit-text-fill-color: initial;
     }
 
-    .brand p {
-      color: var(--text-muted);
-      font-size: 13px;
-      margin-top: 4px;
-    }
-
     .header-actions {
       display: flex;
       align-items: center;
       gap: 12px;
-      flex-wrap: wrap;
     }
 
     .server-badge {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
-      padding: 8px 14px;
-      border-radius: 10px;
+      padding: 6px 12px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       font-size: 12px;
     }
 
@@ -118,11 +110,11 @@
     }
 
     .copy-doc-btn {
-      background: rgba(59, 130, 246, 0.15);
-      color: #93c5fd;
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      padding: 8px 16px;
-      border-radius: 10px;
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
@@ -133,9 +125,103 @@
     }
 
     .copy-doc-btn:hover {
-      background: #3b82f6;
-      color: #ffffff;
-      box-shadow: 0 0 16px rgba(59, 130, 246, 0.4);
+      background: #1d4ed8;
+      box-shadow: 0 0 14px rgba(37, 99, 235, 0.4);
+    }
+
+    /* 主体左右两列布局 */
+    .layout {
+      max-width: 1300px;
+      margin: 0 auto;
+      display: flex;
+      min-height: calc(100vh - 65px);
+    }
+
+    /* 左侧目录侧边栏 */
+    aside.sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      position: sticky;
+      top: 65px;
+      height: calc(100vh - 65px);
+      overflow-y: auto;
+      border-right: 1px solid var(--card-border);
+      padding: 24px 16px;
+      background: rgba(11, 15, 25, 0.5);
+    }
+
+    .search-filter {
+      margin-bottom: 20px;
+    }
+
+    .search-filter input {
+      width: 100%;
+      background: var(--code-bg);
+      border: 1px solid var(--card-border);
+      color: var(--text);
+      font-size: 12px;
+      padding: 8px 12px;
+      border-radius: 8px;
+      outline: none;
+      transition: all 0.15s;
+    }
+
+    .search-filter input:focus {
+      border-color: var(--primary);
+    }
+
+    .menu-group {
+      margin-bottom: 20px;
+    }
+
+    .menu-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 8px;
+      padding-left: 8px;
+    }
+
+    .menu-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: 8px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s;
+      margin-bottom: 2px;
+    }
+
+    .menu-item:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+    }
+
+    .menu-item.active {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      font-weight: 600;
+    }
+
+    .badge-mini {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 9.5px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+
+    /* 右侧主内容区域 */
+    main.content {
+      flex: 1;
+      padding: 32px 40px 80px;
+      max-width: 960px;
     }
 
     /* 鉴权说明横幅 */
@@ -144,7 +230,7 @@
       border: 1px solid rgba(59, 130, 246, 0.2);
       border-radius: 14px;
       padding: 16px 20px;
-      margin-bottom: 30px;
+      margin-bottom: 32px;
       display: flex;
       align-items: flex-start;
       gap: 14px;
@@ -185,25 +271,27 @@
     }
 
     /* 接口卡片 */
-    .section-title {
+    .section-heading {
       font-size: 14px;
       font-weight: 700;
       color: #60a5fa;
-      margin: 32px 0 16px;
+      margin: 36px 0 16px;
       text-transform: uppercase;
       letter-spacing: 0.06em;
       display: flex;
       align-items: center;
       gap: 8px;
+      padding-top: 10px;
     }
 
     .endpoint-card {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
       border-radius: 14px;
-      margin-bottom: 20px;
+      margin-bottom: 24px;
       overflow: hidden;
       transition: all 0.2s;
+      scroll-margin-top: 80px;
     }
 
     .endpoint-card:hover {
@@ -403,50 +491,104 @@
   </style>
 </head>
 <body>
-  <div class="container">
-    <header>
-      <div class="brand">
-        <h1>AgentDeck REST API <span class="version-tag">v0.2.4</span></h1>
-        <p>嵌入式本地数据服务，提供只读资产与控制接口</p>
-      </div>
-      <div class="header-actions">
-        <div class="server-badge">
-          <div class="pulse"></div>
-          <span style="font-family: 'JetBrains Mono'; font-weight: 600; color: #38bdf8;">127.0.0.1:8788</span>
-        </div>
-        <button class="copy-doc-btn" onclick="copyMarkdownDoc()" id="copyDocBtn">
-          <span>📋 复制 Markdown 文档</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- 鉴权与安全提示 -->
-    <div class="auth-banner">
-      <div class="auth-icon">🔒</div>
-      <div class="auth-content">
-        <h4>免 Token 鉴权说明 (No Token Required)</h4>
-        <p>
-          本服务严格监听在当前 Mac 本机回环网卡 <code>127.0.0.1:8788</code>，外部网络设备无法直连访问。
-          因此无需在请求头附加 Authorization Token 鉴权，直接发起 HTTP 请求即可。
-        </p>
-      </div>
+  <!-- 顶部导航 -->
+  <header>
+    <div class="brand">
+      <h1>AgentDeck REST API <span class="version-tag">v0.2.4</span></h1>
     </div>
-
-    <!-- 1. 健康与概览 -->
-    <div class="section-title">系统与全局大盘</div>
-
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/health</span>
-        </div>
-        <span class="desc">应用服务健康探针与数据源状态</span>
+    <div class="header-actions">
+      <div class="server-badge">
+        <div class="pulse"></div>
+        <span style="font-family: 'JetBrains Mono'; font-weight: 600; color: #38bdf8;">http://127.0.0.1:8788</span>
       </div>
-      <div class="endpoint-content">
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+      <button class="copy-doc-btn" onclick="copyMarkdownDoc()" id="copyDocBtn">
+        <span>📋 复制 Markdown 文档</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 两列主体布局 -->
+  <div class="layout">
+    <!-- 左侧目录菜单导航 -->
+    <aside class="sidebar">
+      <div class="search-filter">
+        <input type="text" id="menuFilter" placeholder="搜索接口路径..." oninput="filterMenuItems()">
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">系统与大盘</div>
+        <a href="#endpoint-health" class="menu-item active" data-path="/health">
+          <span class="badge-mini method-get">GET</span>
+          <span>/health</span>
+        </a>
+        <a href="#endpoint-stats" class="menu-item" data-path="/api/stats">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/stats</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">工作区与画像</div>
+        <a href="#endpoint-workspaces" class="menu-item" data-path="/api/workspaces">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/workspaces</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">智能体会话流</div>
+        <a href="#endpoint-conversations" class="menu-item" data-path="/api/conversations">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/conversations</span>
+        </a>
+        <a href="#endpoint-conv-detail" class="menu-item" data-path="/api/conversations/:id">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/conversations/:id</span>
+        </a>
+      </div>
+
+      <div class="menu-group">
+        <div class="menu-title">搜索与控制</div>
+        <a href="#endpoint-search" class="menu-item" data-path="/api/search">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/search</span>
+        </a>
+        <a href="#endpoint-sync" class="menu-item" data-path="/api/sync">
+          <span class="badge-mini method-post">POST</span>
+          <span>/api/sync</span>
+        </a>
+      </div>
+    </aside>
+
+    <!-- 右侧内容区域 -->
+    <main class="content">
+      <!-- 鉴权与安全提示 -->
+      <div class="auth-banner">
+        <div class="auth-icon">🔒</div>
+        <div class="auth-content">
+          <h4>免 Token 鉴权说明 (No Token Required)</h4>
+          <p>
+            本服务严格监听在当前 Mac 本机回环网卡 <code>127.0.0.1:8788</code>，外部网络设备无法直连访问。
+            因此无需在请求头附加 Authorization Token 鉴权，直接发起 HTTP 请求即可。
+          </p>
+        </div>
+      </div>
+
+      <!-- 1. 健康与概览 -->
+      <div class="section-heading">系统与全局大盘</div>
+
+      <div class="endpoint-card" id="endpoint-health">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/health</span>
+          </div>
+          <span class="desc">应用服务健康探针与数据源状态</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "status": "ok",
   "app": "AgentDeck",
@@ -458,30 +600,30 @@
     "total_user_messages": 128
   }
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="sendReq('GET', '/health', null, 'res-health')">🚀 实时测试 (Send)</button>
-          <div class="curl-preview">curl http://127.0.0.1:8788/health</div>
-        </div>
-        <div class="response-container" id="res-health">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('GET', '/health', null, 'res-health')">🚀 实时测试 (Send)</button>
+            <div class="curl-preview">curl http://127.0.0.1:8788/health</div>
+          </div>
+          <div class="response-container" id="res-health">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/api/stats</span>
+      <div class="endpoint-card" id="endpoint-stats">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/stats</span>
+          </div>
+          <span class="desc">大盘总览指标、总消息数与多智能体分布</span>
         </div>
-        <span class="desc">大盘总览指标、总消息数与多智能体分布</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "stats": {
     "total_conversations": 42,
@@ -496,39 +638,39 @@
   "cursor_available": true,
   "ai_available": true
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="sendReq('GET', '/api/stats', null, 'res-stats')">🚀 实时测试 (Send)</button>
-          <div class="curl-preview">curl http://127.0.0.1:8788/api/stats</div>
-        </div>
-        <div class="response-container" id="res-stats">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- 2. 工作区与研发画像 -->
-    <div class="section-title">项目工作区与热力图</div>
-
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/api/workspaces</span>
-        </div>
-        <span class="desc">已索引的项目工作区列表（支持关键词过滤）</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="params-grid">
-          <div class="param-group">
-            <label>q (模糊过滤)</label>
-            <input type="text" id="ws-q" placeholder="例如: AgentDeck">
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('GET', '/api/stats', null, 'res-stats')">🚀 实时测试 (Send)</button>
+            <div class="curl-preview">curl http://127.0.0.1:8788/api/stats</div>
+          </div>
+          <div class="response-container" id="res-stats">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
           </div>
         </div>
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+      </div>
+
+      <!-- 2. 工作区与研发画像 -->
+      <div class="section-heading">项目工作区与热力图</div>
+
+      <div class="endpoint-card" id="endpoint-workspaces">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/workspaces</span>
+          </div>
+          <span class="desc">已索引的项目工作区列表（支持关键词过滤）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group">
+              <label>q (模糊过滤)</label>
+              <input type="text" id="ws-q" placeholder="例如: AgentDeck">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "total": 1,
   "workspaces": [
@@ -541,43 +683,43 @@
     }
   ]
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="testWorkspaces()">🚀 实时测试 (Send)</button>
-          <div class="curl-preview" id="curl-ws">curl http://127.0.0.1:8788/api/workspaces</div>
-        </div>
-        <div class="response-container" id="res-workspaces">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- 3. 智能体会话流 -->
-    <div class="section-title">智能体会话流与消息</div>
-
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/api/conversations</span>
-        </div>
-        <span class="desc">智能体会话历史列表（支持多维筛选与分页）</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="params-grid">
-          <div class="param-group">
-            <label>limit (返回条数)</label>
-            <input type="number" id="conv-limit" value="2">
           </div>
-          <div class="param-group">
-            <label>source (工具源)</label>
-            <input type="text" id="conv-source" placeholder="antigravity / cursor / claude">
+          <div class="action-row">
+            <button class="send-btn" onclick="testWorkspaces()">🚀 实时测试 (Send)</button>
+            <div class="curl-preview" id="curl-ws">curl http://127.0.0.1:8788/api/workspaces</div>
+          </div>
+          <div class="response-container" id="res-workspaces">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
           </div>
         </div>
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+      </div>
+
+      <!-- 3. 智能体会话流 -->
+      <div class="section-heading">智能体会话流与消息</div>
+
+      <div class="endpoint-card" id="endpoint-conversations">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/conversations</span>
+          </div>
+          <span class="desc">智能体会话历史列表（支持多维筛选与分页）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group">
+              <label>limit (返回条数)</label>
+              <input type="number" id="conv-limit" value="2">
+            </div>
+            <div class="param-group">
+              <label>source (工具源)</label>
+              <input type="text" id="conv-source" placeholder="antigravity / cursor / claude">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "total": 42,
   "conversations": [
@@ -592,36 +734,36 @@
     }
   ]
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="testConversations()">🚀 实时测试 (Send)</button>
-          <div class="curl-preview" id="curl-conv">curl "http://127.0.0.1:8788/api/conversations?limit=2"</div>
-        </div>
-        <div class="response-container" id="res-conversations">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
-        </div>
-      </div>
-    </div>
-
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/api/conversations/:id</span>
-        </div>
-        <span class="desc">指定会话全量消息流、思考链与附图</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="params-grid">
-          <div class="param-group" style="grid-column: 1 / -1;">
-            <label>conversation_id (会话 ID)</label>
-            <input type="text" id="conv-id" placeholder="输入会话 ID">
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testConversations()">🚀 实时测试 (Send)</button>
+            <div class="curl-preview" id="curl-conv">curl "http://127.0.0.1:8788/api/conversations?limit=2"</div>
+          </div>
+          <div class="response-container" id="res-conversations">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
           </div>
         </div>
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+      </div>
+
+      <div class="endpoint-card" id="endpoint-conv-detail">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/conversations/:id</span>
+          </div>
+          <span class="desc">指定会话全量消息流、思考链与附图</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group" style="grid-column: 1 / -1;">
+              <label>conversation_id (会话 ID)</label>
+              <input type="text" id="conv-id" placeholder="输入会话 ID">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "conversation_id": "conv-1787102766025",
   "messages": [
@@ -642,43 +784,43 @@
     }
   ]
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="testConvMessages()">🚀 实时测试 (Send)</button>
-          <div class="curl-preview" id="curl-conv-msg">curl http://127.0.0.1:8788/api/conversations/{id}</div>
-        </div>
-        <div class="response-container" id="res-conv-msg">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- 4. 全局搜索与增量同步 -->
-    <div class="section-title">搜索与增量控制</div>
-
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-get">GET</span>
-          <span class="path">/api/search</span>
-        </div>
-        <span class="desc">全局消息全文检索与关键词定位</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="params-grid">
-          <div class="param-group">
-            <label>q (检索关键词)</label>
-            <input type="text" id="search-q" value="backup" placeholder="输入搜索词">
           </div>
-          <div class="param-group">
-            <label>limit (上限)</label>
-            <input type="number" id="search-limit" value="5">
+          <div class="action-row">
+            <button class="send-btn" onclick="testConvMessages()">🚀 实时测试 (Send)</button>
+            <div class="curl-preview" id="curl-conv-msg">curl http://127.0.0.1:8788/api/conversations/{id}</div>
+          </div>
+          <div class="response-container" id="res-conv-msg">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
           </div>
         </div>
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+      </div>
+
+      <!-- 4. 全局搜索与增量同步 -->
+      <div class="section-heading">搜索与增量控制</div>
+
+      <div class="endpoint-card" id="endpoint-search">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/search</span>
+          </div>
+          <span class="desc">全局消息全文检索与关键词定位</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group">
+              <label>q (检索关键词)</label>
+              <input type="text" id="search-q" value="backup" placeholder="输入搜索词">
+            </div>
+            <div class="param-group">
+              <label>limit (上限)</label>
+              <input type="number" id="search-limit" value="5">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "query": "backup",
   "total": 1,
@@ -693,48 +835,81 @@
     }
   ]
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="testSearch()">🚀 实时测试 (Send)</button>
-          <div class="curl-preview" id="curl-search">curl "http://127.0.0.1:8788/api/search?q=backup&limit=5"</div>
-        </div>
-        <div class="response-container" id="res-search">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testSearch()">🚀 实时测试 (Send)</button>
+            <div class="curl-preview" id="curl-search">curl "http://127.0.0.1:8788/api/search?q=backup&limit=5"</div>
+          </div>
+          <div class="response-container" id="res-search">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
         </div>
       </div>
-    </div>
 
-    <div class="endpoint-card">
-      <div class="endpoint-summary">
-        <div class="endpoint-route">
-          <span class="method method-post">POST</span>
-          <span class="path">/api/sync</span>
+      <div class="endpoint-card" id="endpoint-sync">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/sync</span>
+          </div>
+          <span class="desc">触发全量 AI Coding 智能体数据源增量扫描同步</span>
         </div>
-        <span class="desc">触发全量 AI Coding 智能体数据源增量扫描同步</span>
-      </div>
-      <div class="endpoint-content">
-        <div class="example-section">
-          <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-          <pre class="example-body">{
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
   "ok": true,
   "message": "Sync completed successfully",
   "synced_at": "2026-08-19 11:22:00"
 }</pre>
-        </div>
-        <div class="action-row">
-          <button class="send-btn" onclick="sendReq('POST', '/api/sync', null, 'res-sync')">🚀 实时执行同步 (Sync)</button>
-          <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/sync</div>
-        </div>
-        <div class="response-container" id="res-sync">
-          <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
-          <pre class="response-body"></pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('POST', '/api/sync', null, 'res-sync')">🚀 实时执行同步 (Sync)</button>
+            <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/sync</div>
+          </div>
+          <div class="response-container" id="res-sync">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
 
   <script>
+    // 滚动监听与侧边栏高亮
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const id = entry.target.id;
+          document.querySelectorAll('.menu-item').forEach(item => {
+            if (item.getAttribute('href') === '#' + id) {
+              item.classList.add('active');
+            } else {
+              item.classList.remove('active');
+            }
+          });
+        }
+      });
+    }, { rootMargin: '-20% 0px -70% 0px' });
+
+    document.querySelectorAll('.endpoint-card').forEach(card => observer.observe(card));
+
+    // 目录搜索过滤
+    function filterMenuItems() {
+      const q = document.getElementById('menuFilter').value.trim().toLowerCase();
+      document.querySelectorAll('.menu-item').forEach(item => {
+        const path = (item.getAttribute('data-path') || '').toLowerCase();
+        const text = item.textContent.toLowerCase();
+        if (path.includes(q) || text.includes(q)) {
+          item.style.display = 'flex';
+        } else {
+          item.style.display = 'none';
+        }
+      });
+    }
+
     async function sendReq(method, path, body, resContainerId) {
       const el = document.getElementById(resContainerId);
       el.style.display = 'block';
@@ -784,7 +959,7 @@
     }
 
     function testConversations() {
-      const limit = document.getElementById('conv-limit').value || '5';
+      const limit = document.getElementById('conv-limit').value || '2';
       const source = document.getElementById('conv-source').value.trim();
       let path = `/api/conversations?limit=${limit}`;
       if (source) path += `&source=${encodeURIComponent(source)}`;
