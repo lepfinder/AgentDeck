@@ -232,6 +232,44 @@ export interface SyncResultInfo {
   message: string;
 }
 
+export type PromptCategory =
+  | 'coding'
+  | 'research'
+  | 'writing'
+  | 'product'
+  | 'agent'
+  | 'image'
+  | 'video'
+  | 'persona'
+  | 'meta';
+
+export interface PromptItem {
+  id: number;
+  title: string;
+  content: string;
+  category: PromptCategory | string;
+  tags: string[];
+  source_url?: string;
+  source_note?: string;
+  notes?: string;
+  is_starred: boolean;
+  use_count: number;
+  created_at: string;
+  updated_at: string;
+  last_used_at?: string;
+}
+
+export interface PromptInput {
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  source_url?: string;
+  source_note?: string;
+  notes?: string;
+  is_starred: boolean;
+}
+
 export interface BackupInfo {
   file_name: string;
   file_path: string;

@@ -4,11 +4,13 @@ import { api, isTauri } from '../../api/tauriBridge';
 import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import { DashboardView } from '../dashboard/DashboardView';
+import { PromptLibraryView } from '../prompts/PromptLibraryView';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   LayoutDashboard,
   Star,
+  BookMarked,
   Search,
   MessageSquare,
   Wrench,
@@ -25,10 +27,14 @@ interface Props {
   selectedWorkspace: string;
   selectedConversationId: string;
   isStarredView: boolean;
+  isPromptLibraryView: boolean;
+  promptLibraryCount: number;
   onSelectWorkspace: (ws: string) => void;
   onSelectConversation: (id: string) => void;
   onSwitchToDashboard: () => void;
   onSwitchToStarred: () => void;
+  onSwitchToPromptLibrary: () => void;
+  onPromptLibraryCountChange: (count: number) => void;
   stats: DashboardStats | null;
   loadingStats: boolean;
   onRefreshStats: () => void;
@@ -38,10 +44,14 @@ export const BrowseView: React.FC<Props> = ({
   selectedWorkspace,
   selectedConversationId,
   isStarredView,
+  isPromptLibraryView,
+  promptLibraryCount,
   onSelectWorkspace,
   onSelectConversation,
   onSwitchToDashboard,
   onSwitchToStarred,
+  onSwitchToPromptLibrary,
+  onPromptLibraryCountChange,
   stats,
   loadingStats,
   onRefreshStats,
@@ -319,7 +329,7 @@ export const BrowseView: React.FC<Props> = ({
           <button
             onClick={onSwitchToDashboard}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-              !selectedWorkspace && !isStarredView
+              !selectedWorkspace && !isStarredView && !isPromptLibraryView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
                 : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
             }`}
@@ -329,6 +339,25 @@ export const BrowseView: React.FC<Props> = ({
               <span>全景数据大盘</span>
             </div>
             <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">大盘</span>
+          </button>
+
+          <button
+            onClick={onSwitchToPromptLibrary}
+            className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              isPromptLibraryView
+                ? 'bg-violet-600/15 text-violet-500 border border-violet-500/30 shadow-xs font-semibold'
+                : 'theme-text-muted hover:text-violet-500 hover:theme-bg-card'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <BookMarked className="h-4 w-4" />
+              <span>提示词库</span>
+            </div>
+            {promptLibraryCount > 0 && (
+              <span className="px-1.5 py-0.5 text-[10px] bg-violet-500/15 text-violet-500 rounded font-mono">
+                {promptLibraryCount}
+              </span>
+            )}
           </button>
 
           <button
@@ -357,7 +386,7 @@ export const BrowseView: React.FC<Props> = ({
             const shortName = ws.workspace_path
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : '未分类';
-            const isActive = !isStarredView && ws.workspace_path === selectedWorkspace;
+            const isActive = !isStarredView && !isPromptLibraryView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
@@ -430,7 +459,11 @@ export const BrowseView: React.FC<Props> = ({
       </aside>
 
       {/* 右侧主内容区域 */}
-      {!selectedWorkspace && !isStarredView ? (
+      {isPromptLibraryView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <PromptLibraryView onPromptCountChange={onPromptLibraryCountChange} />
+        </main>
+      ) : !selectedWorkspace && !isStarredView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <DashboardView
             stats={stats}

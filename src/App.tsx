@@ -26,6 +26,8 @@ function getInitialAutoSyncIntervalSec(): number {
 
 export function App() {
   const [isStarredView, setIsStarredView] = useState(false);
+  const [isPromptLibraryView, setIsPromptLibraryView] = useState(false);
+  const [promptLibraryCount, setPromptLibraryCount] = useState(0);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
@@ -44,6 +46,7 @@ export function App() {
     setSelectedWorkspace('');
     setSelectedConversationId('');
     setIsStarredView(false);
+    setIsPromptLibraryView(false);
   };
 
   // 顶栏拖拽支持
@@ -100,7 +103,7 @@ export function App() {
 
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
-  const [appVersion, setAppVersion] = useState<string>('0.2.2');
+  const [appVersion, setAppVersion] = useState<string>('unknown');
 
   useEffect(() => {
     api.getAppVersion().then((v) => {
@@ -128,6 +131,7 @@ export function App() {
 
   useEffect(() => {
     loadStats();
+    api.listPrompts().then((list) => setPromptLibraryCount(list.length)).catch(() => {});
   }, []);
 
   // 监听 Tauri 后台文件自动变动与同步状态事件 (Auto Realtime Watcher)
@@ -201,6 +205,7 @@ export function App() {
     setSelectedWorkspace(wsPath);
     setSelectedConversationId(convId);
     setIsStarredView(false);
+    setIsPromptLibraryView(false);
   };
 
   return (
@@ -303,21 +308,33 @@ export function App() {
           selectedWorkspace={selectedWorkspace}
           selectedConversationId={selectedConversationId}
           isStarredView={isStarredView}
+          isPromptLibraryView={isPromptLibraryView}
+          promptLibraryCount={promptLibraryCount}
           onSelectWorkspace={(ws) => {
             setSelectedWorkspace(ws);
             setIsStarredView(false);
+            setIsPromptLibraryView(false);
           }}
           onSelectConversation={setSelectedConversationId}
           onSwitchToDashboard={() => {
             setSelectedWorkspace('');
             setSelectedConversationId('');
             setIsStarredView(false);
+            setIsPromptLibraryView(false);
           }}
           onSwitchToStarred={() => {
             setSelectedWorkspace('');
             setSelectedConversationId('');
             setIsStarredView(true);
+            setIsPromptLibraryView(false);
           }}
+          onSwitchToPromptLibrary={() => {
+            setSelectedWorkspace('');
+            setSelectedConversationId('');
+            setIsStarredView(false);
+            setIsPromptLibraryView(true);
+          }}
+          onPromptLibraryCountChange={setPromptLibraryCount}
           stats={stats}
           loadingStats={loadingStats}
           onRefreshStats={loadStats}

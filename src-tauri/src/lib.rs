@@ -7,12 +7,14 @@ pub mod media_archive;
 pub mod sync;
 
 use db::{
-    clear_workspace_analysis, fetch_conversation_messages, fetch_conversations,
-    fetch_dashboard_stats, fetch_workspace_analysis_messages, fetch_workspace_detail_stats,
-    fetch_workspaces, save_workspace_fine_blocks, save_workspace_module_blocks,
-    save_workspace_report, search_global_messages, toggle_star_session, AnalysisUserMessage,
-    ConversationItem, DashboardStats, DbState, MessageItem, SearchResultItem, WorkspaceDetailStats,
-    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat,
+    clear_workspace_analysis, create_prompt, delete_prompt, fetch_conversation_messages,
+    fetch_conversations, fetch_dashboard_stats, fetch_workspace_analysis_messages,
+    fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, record_prompt_use,
+    save_workspace_fine_blocks, save_workspace_module_blocks, save_workspace_report,
+    search_global_messages, toggle_prompt_star, toggle_star_session, update_prompt,
+    AnalysisUserMessage, ConversationItem, DashboardStats, DbState, MessageItem, PromptInput,
+    PromptItem, SearchResultItem, WorkspaceDetailStats, WorkspaceFineBlock, WorkspaceModuleBlock,
+    WorkspaceStat,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -88,6 +90,63 @@ fn clear_workspace_analysis_cmd(
 fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     fetch_dashboard_stats(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_prompts_cmd(
+    search: Option<String>,
+    category: Option<String>,
+    starred_only: Option<bool>,
+    state: State<'_, DbState>,
+) -> Result<Vec<PromptItem>, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    list_prompts(
+        &conn,
+        search.as_deref(),
+        category.as_deref(),
+        starred_only.unwrap_or(false),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_prompt_cmd(id: i64, state: State<'_, DbState>) -> Result<PromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    get_prompt(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_prompt_cmd(input: PromptInput, state: State<'_, DbState>) -> Result<PromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    create_prompt(&conn, &input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_prompt_cmd(
+    id: i64,
+    input: PromptInput,
+    state: State<'_, DbState>,
+) -> Result<PromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    update_prompt(&conn, id, &input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_prompt_cmd(id: i64, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    delete_prompt(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_prompt_star_cmd(id: i64, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    toggle_prompt_star(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn record_prompt_use_cmd(id: i64, state: State<'_, DbState>) -> Result<PromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    record_prompt_use(&conn, id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -677,6 +736,13 @@ pub fn run() {
         .manage(db_state)
         .invoke_handler(tauri::generate_handler![
             get_dashboard_stats,
+            list_prompts_cmd,
+            get_prompt_cmd,
+            create_prompt_cmd,
+            update_prompt_cmd,
+            delete_prompt_cmd,
+            toggle_prompt_star_cmd,
+            record_prompt_use_cmd,
             get_workspace_detail,
             list_workspaces,
             list_conversations,

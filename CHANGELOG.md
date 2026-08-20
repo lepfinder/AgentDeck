@@ -2,6 +2,13 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.2.6] - 2026-08-20
+
+### 新增
+- **提示词库 (Prompt Library)**：独立收藏外部 prompt，支持分类、标签、来源备注；App 内浏览与管理
+- **提示词库 REST API**：`GET/POST/DELETE /api/prompts` 及分类候选接口，供 HomeCore 等本地 Agent 插入、查重与删除
+- **Dashboard 查询修复**：用户消息统计兼容 Cursor `role` 字段格式
+
 ## [0.2.5] - 2026-08-19
 
 ### 新增

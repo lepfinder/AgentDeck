@@ -417,6 +417,7 @@
 
     .method-get { background: var(--get-bg); color: var(--get); border: 1px solid var(--get-border); }
     .method-post { background: var(--post-bg); color: var(--post); border: 1px solid var(--post-border); }
+    .method-delete { background: rgba(220, 38, 38, 0.1); color: #dc2626; border: 1px solid rgba(220, 38, 38, 0.25); }
 
     .path {
       font-family: 'JetBrains Mono', monospace;
@@ -587,7 +588,7 @@
   <!-- 顶部导航 -->
   <header>
     <div class="brand">
-      <h1>AgentDeck REST API <span class="version-tag">v0.2.5</span></h1>
+      <h1>AgentDeck REST API <span class="version-tag" id="app-version-tag">…</span></h1>
     </div>
     <div class="header-actions">
       <div class="server-badge">
@@ -665,6 +666,26 @@
           <span>/api/sync</span>
         </a>
       </div>
+
+      <div class="menu-group">
+        <div class="menu-title">提示词库</div>
+        <a href="#endpoint-prompts-categories" class="menu-item" data-path="/api/prompts/categories">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/prompts/categories</span>
+        </a>
+        <a href="#endpoint-prompts-list" class="menu-item" data-path="/api/prompts">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/prompts</span>
+        </a>
+        <a href="#endpoint-prompts-create" class="menu-item" data-path="/api/prompts">
+          <span class="badge-mini method-post">POST</span>
+          <span>/api/prompts</span>
+        </a>
+        <a href="#endpoint-prompts-delete" class="menu-item" data-path="/api/prompts/:id">
+          <span class="badge-mini method-delete">DEL</span>
+          <span>/api/prompts/:id</span>
+        </a>
+      </div>
     </aside>
 
     <!-- 右侧内容区域 -->
@@ -697,11 +718,11 @@
         <div class="endpoint-content">
           <div class="example-section">
             <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
-            <pre class="example-body">{
+            <pre class="example-body" id="health-example-pre">{
   "ok": true,
   "status": "ok",
   "app": "AgentDeck",
-  "version": "0.2.4",
+  "version": "…",
   "cursor_available": true,
   "ai_available": true,
   "stats": {
@@ -1004,6 +1025,161 @@
           </div>
         </div>
       </div>
+
+      <div class="section-heading">提示词库（Agent 维护）</div>
+      <p style="color: var(--text-muted); font-size: 13px; margin: -8px 0 20px 0; max-width: 860px;">
+        推荐流程：先 <code>GET /api/prompts/categories</code> 选分类 → 搜索防重复 → 插入 → 必要时删除。
+        列表只返回 <code>content_preview</code>；星标/使用次数不对外暴露。
+      </p>
+
+      <div class="endpoint-card" id="endpoint-prompts-categories">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/prompts/categories</span>
+          </div>
+          <span class="desc">获取分类候选，Agent 插入前先调用以决定 category</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "categories": [
+    { "value": "coding", "label": "编程" },
+    { "value": "image", "label": "生图" },
+    { "value": "video", "label": "生视频" }
+  ],
+  "hint": "Call this before POST /api/prompts to pick a category value."
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('GET', '/api/prompts/categories', null, 'res-prompts-categories')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl http://127.0.0.1:8788/api/prompts/categories</div>
+          </div>
+          <div class="response-container" id="res-prompts-categories">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-prompts-list">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/prompts</span>
+          </div>
+          <span class="desc">列表与搜索（返回 content_preview，不含全文）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>q <input id="prompt-q" type="text" placeholder="搜索标题/正文/标签"></label>
+            <label>category <input id="prompt-category" type="text" placeholder="coding / image / …"></label>
+            <label>limit <input id="prompt-limit" type="number" value="50" min="1" max="200"></label>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "total": 1,
+  "limit": 50,
+  "categories": [{ "value": "coding", "label": "编程" }],
+  "prompts": [
+    {
+      "id": 1,
+      "title": "深度 Code Review",
+      "content_preview": "请按 correctness / regression / style 三项 review…",
+      "category": "coding",
+      "tags": ["review"],
+      "source_note": "某 Skill 推荐"
+    }
+  ]
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testPromptsList()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-prompts-list">curl "http://127.0.0.1:8788/api/prompts"</div>
+          </div>
+          <div class="response-container" id="res-prompts-list">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-prompts-create">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/prompts</span>
+          </div>
+          <span class="desc">插入保存（主要操作，最简只需 title + content）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>请求体示例 (JSON)</span></div>
+            <pre class="example-body">{
+  "title": "API 文档测试 Prompt",
+  "content": "这是通过 /docs 页面插入的测试条目，可安全删除。",
+  "category": "coding",
+  "tags": ["test", "api-docs"],
+  "source_note": "api_docs.html 测试按钮"
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testPromptCreate()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-prompts-create">curl -X POST http://127.0.0.1:8788/api/prompts …</div>
+          </div>
+          <div class="response-container" id="res-prompts-create">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-prompts-delete">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-delete">DELETE</span>
+            <span class="path">/api/prompts/:id</span>
+          </div>
+          <span class="desc">删除过时条目（主要操作）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>id <input id="prompt-delete-id" type="number" value="1" min="1"></label>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK)</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "deleted": true,
+  "id": 1
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testPromptDelete()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-prompts-delete">curl -X DELETE http://127.0.0.1:8788/api/prompts/1</div>
+          </div>
+          <div class="response-container" id="res-prompts-delete">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 
@@ -1034,6 +1210,26 @@
     }
 
     initTheme();
+    loadAppVersion();
+
+    async function loadAppVersion() {
+      try {
+        const res = await fetch('/health');
+        const data = await res.json();
+        if (!data.version) return;
+        const tag = document.getElementById('app-version-tag');
+        if (tag) tag.textContent = 'v' + data.version;
+        const pre = document.getElementById('health-example-pre');
+        if (pre) {
+          pre.textContent = pre.textContent.replace(
+            /"version": "[^"]*"/,
+            `"version": "${data.version}"`
+          );
+        }
+      } catch (_) {
+        /* offline or first paint — keep placeholder */
+      }
+    }
 
     // 滚动监听与侧边栏高亮
     const observer = new IntersectionObserver((entries) => {
@@ -1139,219 +1335,57 @@
       sendReq('GET', path, null, 'res-search');
     }
 
-    function copyMarkdownDoc() {
-      const md = `# AgentDeck REST API 接口规范与集成文档 (v0.2.5)
-
-> **鉴权说明 (Authentication)**: 
-> 当前版本 API **无需 Token 校验 (No Token Required)**。
-> 服务默认严格监听在本机回环网卡 \`127.0.0.1:8788\`，仅限当前 Mac 本机进程访问（外部网络无法直接连通），方便各类本地脚本、Raycast 扩展、Alfred 插件及 CLI 工具免签调用。
-
-- **基础 URL (Base URL)**: \`http://127.0.0.1:8788\`
-- **协议格式**: \`HTTP/1.1\` + \`JSON (UTF-8)\`
-
----
-
-## 接口清单与返回值示例
-
-### 1. 服务健康检查 (Health Check)
-- **请求方法**: \`GET /health\`
-- **功能说明**: 探测应用运行状态、版本信息及多智能体数据源可用性。
-- **调用示例**:
-  \`\`\`bash
-  curl http://127.0.0.1:8788/health
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "status": "ok",
-    "app": "AgentDeck",
-    "version": "0.2.4",
-    "cursor_available": true,
-    "ai_available": true,
-    "stats": {
-      "total_conversations": 42,
-      "total_user_messages": 128
+    function testPromptsList() {
+      const q = document.getElementById('prompt-q').value.trim();
+      const category = document.getElementById('prompt-category').value.trim();
+      const limit = document.getElementById('prompt-limit').value.trim() || '50';
+      const params = new URLSearchParams();
+      if (q) params.set('q', q);
+      if (category) params.set('category', category);
+      params.set('limit', limit);
+      const path = `/api/prompts?${params.toString()}`;
+      document.getElementById('curl-prompts-list').textContent = `curl "http://127.0.0.1:8788${path}"`;
+      sendReq('GET', path, null, 'res-prompts-list');
     }
-  }
-  \`\`\`
 
----
+    function testPromptCreate() {
+      const body = {
+        title: 'API 文档测试 Prompt',
+        content: '这是通过 /docs 页面插入的测试条目，可安全删除。',
+        category: 'coding',
+        tags: ['test', 'api-docs'],
+        source_note: 'api_docs.html 测试按钮'
+      };
+      const curl = `curl -X POST http://127.0.0.1:8788/api/prompts -H "Content-Type: application/json" -d '${JSON.stringify(body)}'`;
+      document.getElementById('curl-prompts-create').textContent = curl;
+      sendReq('POST', '/api/prompts', body, 'res-prompts-create');
+    }
 
-### 2. 全局大盘统计 (Dashboard Stats)
-- **请求方法**: \`GET /api/stats\`
-- **功能说明**: 获取全量会话数、用户提问数、智能体工具（Antigravity、Cursor、Claude Code、Codex、WorkBuddy）占比分布及工作区统计。
-- **调用示例**:
-  \`\`\`bash
-  curl http://127.0.0.1:8788/api/stats
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "stats": {
-      "total_conversations": 42,
-      "total_user_messages": 128,
-      "total_workspaces": 5,
-      "source_counts": {
-        "antigravity": 25,
-        "cursor": 12,
-        "claude": 5
-      }
-    },
-    "cursor_available": true,
-    "ai_available": true
-  }
-  \`\`\`
+    function testPromptDelete() {
+      const id = document.getElementById('prompt-delete-id').value || '1';
+      const path = `/api/prompts/${id}`;
+      document.getElementById('curl-prompts-delete').textContent = `curl -X DELETE http://127.0.0.1:8788${path}`;
+      sendReq('DELETE', path, null, 'res-prompts-delete');
+    }
 
----
-
-### 3. 项目工作区列表 (Workspaces)
-- **请求方法**: \`GET /api/workspaces\`
-- **查询参数**:
-  - \`q\` (*string, 可选*): 按工作区名称或路径模糊过滤
-- **调用示例**:
-  \`\`\`bash
-  curl "http://127.0.0.1:8788/api/workspaces?q=AgentDeck"
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "total": 1,
-    "workspaces": [
-      {
-        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
-        "cnt": 15,
-        "total_conversations": 15,
-        "total_user_messages": 48,
-        "last_activity_at": "2026-08-19 11:20:00"
-      }
-    ]
-  }
-  \`\`\`
-
----
-
-### 4. 智能体会话流列表 (Conversations)
-- **请求方法**: \`GET /api/conversations\`
-- **查询参数**:
-  - \`workspace\` (*string, 可选*): 限定工作区路径
-  - \`source\` (*string, 可选*): 限定工具源 (\`antigravity\` / \`cursor\` / \`claude\` / \`codex\` / \`workbuddy\`)
-  - \`limit\` (*number, 可选*): 限制返回条数 (默认 50)
-  - \`offset\` (*number, 可选*): 分页偏移量 (默认 0)
-- **调用示例**:
-  \`\`\`bash
-  curl "http://127.0.0.1:8788/api/conversations?limit=2"
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "total": 42,
-    "conversations": [
-      {
-        "id": "conv-1787102766025",
-        "title": "重构 REST API 端口与接口文档",
-        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
-        "source": "antigravity",
-        "model": "gemini-2.5-flash",
-        "user_message_count": 8,
-        "created_at": "2026-08-19 10:30:00"
-      }
-    ]
-  }
-  \`\`\`
-
----
-
-### 5. 单个会话全量消息流 (Conversation Messages)
-- **请求方法**: \`GET /api/conversations/:id\`
-- **功能说明**: 返回指定会话的完整问答交互流，包含用户提问、Agent 思考链 (\`thinking\`)、工具调用 (\`tool_args\`) 及本地附图 (\`images\`)。
-- **调用示例**:
-  \`\`\`bash
-  curl "http://127.0.0.1:8788/api/conversations/{conversation_id}"
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "conversation_id": "conv-1787102766025",
-    "messages": [
-      {
-        "id": "msg-1",
-        "role": "user",
-        "content": "现在对外的 API 有 token 校验的要求吗",
-        "created_at": "2026-08-19 11:06:49",
-        "source": "antigravity"
-      },
-      {
-        "id": "msg-2",
-        "role": "assistant",
-        "content": "目前没有 Token 鉴权要求，服务严格监听在 127.0.0.1 回环地址。",
-        "thinking": "用户询问鉴权要求...",
-        "tool_args": null,
-        "images": []
-      }
-    ]
-  }
-  \`\`\`
-
----
-
-### 6. 全局消息全文检索 (Search)
-- **请求方法**: \`GET /api/search\`
-- **查询参数**:
-  - \`q\` (*string, 必填*): 检索关键词
-  - \`limit\` (*number, 可选*): 限制返回条数 (默认 50)
-- **调用示例**:
-  \`\`\`bash
-  curl "http://127.0.0.1:8788/api/search?q=backup"
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "query": "backup",
-    "total": 1,
-    "results": [
-      {
-        "conversation_id": "conv-1787102766025",
-        "message_id": "msg-1",
-        "role": "user",
-        "content": "检查下备份目录是否支持选择",
-        "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
-        "created_at": "2026-08-19 10:15:00"
-      }
-    ]
-  }
-  \`\`\`
-
----
-
-### 7. 触发多源增量扫描与同步 (Sync)
-- **请求方法**: \`POST /api/sync\`
-- **功能说明**: 立即触发后端对全部 AI Coding 智能体目录进行增量变更扫描与 SQLite 落盘。
-- **调用示例**:
-  \`\`\`bash
-  curl -X POST http://127.0.0.1:8788/api/sync
-  \`\`\`
-- **返回值示例 (Response 200 OK)**:
-  \`\`\`json
-  {
-    "ok": true,
-    "message": "Sync completed successfully",
-    "synced_at": "2026-08-19 11:22:00"
-  }
-  \`\`\`
-`;
-      navigator.clipboard.writeText(md).then(() => {
-        const btn = document.getElementById('copyDocBtn');
+    async function copyMarkdownDoc() {
+      const btn = document.getElementById('copyDocBtn');
+      try {
+        const res = await fetch('/api/docs/markdown');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const md = await res.text();
+        await navigator.clipboard.writeText(md);
         btn.innerHTML = `${CHECK_SVG}<span>已复制 Markdown 文档</span>`;
         setTimeout(() => {
           btn.innerHTML = `${COPY_SVG}<span>复制 Markdown 文档</span>`;
         }, 2000);
-      });
+      } catch (err) {
+        btn.innerHTML = `${COPY_SVG}<span>复制失败</span>`;
+        setTimeout(() => {
+          btn.innerHTML = `${COPY_SVG}<span>复制 Markdown 文档</span>`;
+        }, 2000);
+        console.error('copyMarkdownDoc failed', err);
+      }
     }
   </script>
 </body>

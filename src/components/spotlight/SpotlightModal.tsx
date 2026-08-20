@@ -27,6 +27,12 @@ function HighlightText({ text, query }: { text: string; query: string }) {
   );
 }
 
+interface Props {
+  isOpen: boolean;
+  onClose: () => void;
+  onSelectResult: (convId: string, wsPath: string) => void;
+}
+
 export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResult }) => {
   const [query, setQuery] = useState('');
   const [role, setRole] = useState<'user' | 'all'>('user');

@@ -14,6 +14,8 @@ import type {
   RestoreInfo,
   CloudPreset,
   AppConfig,
+  PromptItem,
+  PromptInput,
 } from '../types';
 
 export const isTauri = () => {
@@ -288,10 +290,10 @@ export const api = {
         const { getVersion } = await import('@tauri-apps/api/app');
         return await getVersion();
       } catch {
-        return '0.2.2';
+        return 'unknown';
       }
     }
-    return '0.2.2';
+    return 'unknown';
   },
 
   async createBackup(targetDir: string, maxSnapshots = 3): Promise<BackupInfo> {
@@ -359,5 +361,62 @@ export const api = {
       }
     }
     window.open(url, '_blank');
+  },
+
+  async listPrompts(
+    search?: string,
+    category?: string,
+    starredOnly?: boolean
+  ): Promise<PromptItem[]> {
+    if (isTauri()) {
+      return await invoke<PromptItem[]>('list_prompts_cmd', {
+        search: search || null,
+        category: category || null,
+        starredOnly: !!starredOnly,
+      });
+    }
+    return [];
+  },
+
+  async getPrompt(id: number): Promise<PromptItem> {
+    if (isTauri()) {
+      return await invoke<PromptItem>('get_prompt_cmd', { id });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async createPrompt(input: PromptInput): Promise<PromptItem> {
+    if (isTauri()) {
+      return await invoke<PromptItem>('create_prompt_cmd', { input });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async updatePrompt(id: number, input: PromptInput): Promise<PromptItem> {
+    if (isTauri()) {
+      return await invoke<PromptItem>('update_prompt_cmd', { id, input });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async deletePrompt(id: number): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('delete_prompt_cmd', { id });
+    }
+    return false;
+  },
+
+  async togglePromptStar(id: number): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('toggle_prompt_star_cmd', { id });
+    }
+    return false;
+  },
+
+  async recordPromptUse(id: number): Promise<PromptItem> {
+    if (isTauri()) {
+      return await invoke<PromptItem>('record_prompt_use_cmd', { id });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
   },
 };

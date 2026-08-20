@@ -1,11 +1,12 @@
 {
   "name": "agentdeck",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "generate:api-docs": "tsx scripts/generate-api-docs.ts",
     "lint": "oxlint",
     "preview": "vite preview",
     "tauri": "tauri",
@@ -36,6 +37,7 @@
     "@vitejs/plugin-react": "^6.0.4",
     "oxlint": "^1.75.0",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.12",
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
   }

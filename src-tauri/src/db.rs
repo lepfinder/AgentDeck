@@ -434,6 +434,22 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             message TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            category TEXT NOT NULL DEFAULT 'coding',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            source_url TEXT,
+            source_note TEXT,
+            notes TEXT,
+            is_starred INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_used_at TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_conv_workspace ON conversations(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_conv_updated ON conversations(updated_at);
         CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at);
@@ -443,6 +459,9 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_messages_tool_name ON messages(tool_name) WHERE tool_name IS NOT NULL AND tool_name != '';
         CREATE INDEX IF NOT EXISTS idx_blocks_fine_ws ON workspace_blocks_fine(workspace_path);
         CREATE INDEX IF NOT EXISTS idx_blocks_modules_ws ON workspace_blocks_modules(workspace_path);
+        CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
+        CREATE INDEX IF NOT EXISTS idx_prompts_starred ON prompts(is_starred);
+        CREATE INDEX IF NOT EXISTS idx_prompts_updated ON prompts(updated_at);
         "#
     )?;
 
@@ -2057,4 +2076,345 @@ pub fn clear_workspace_analysis(conn: &Connection, workspace_path: &str) -> Resu
         params![workspace_path],
     )?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptItem {
+    pub id: i64,
+    pub title: String,
+    pub content: String,
+    pub category: String,
+    pub tags: Vec<String>,
+    pub source_url: Option<String>,
+    pub source_note: Option<String>,
+    pub notes: Option<String>,
+    pub is_starred: bool,
+    pub use_count: i64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_used_at: Option<String>,
+}
+
+/// 对外 Agent API 使用的精简视图（不含星标、计数、时间戳）
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptAgentItem {
+    pub id: i64,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_preview: Option<String>,
+    pub category: String,
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PromptCategoryOption {
+    pub value: String,
+    pub label: String,
+}
+
+pub fn default_prompt_category() -> String {
+    "coding".to_string()
+}
+
+pub fn prompt_category_options() -> Vec<PromptCategoryOption> {
+    vec![
+        PromptCategoryOption {
+            value: "coding".into(),
+            label: "编程".into(),
+        },
+        PromptCategoryOption {
+            value: "research".into(),
+            label: "研究".into(),
+        },
+        PromptCategoryOption {
+            value: "writing".into(),
+            label: "写作".into(),
+        },
+        PromptCategoryOption {
+            value: "product".into(),
+            label: "产品 / 设计".into(),
+        },
+        PromptCategoryOption {
+            value: "agent".into(),
+            label: "Agent / 自动化".into(),
+        },
+        PromptCategoryOption {
+            value: "image".into(),
+            label: "生图".into(),
+        },
+        PromptCategoryOption {
+            value: "video".into(),
+            label: "生视频".into(),
+        },
+        PromptCategoryOption {
+            value: "persona".into(),
+            label: "角色 / 人格".into(),
+        },
+        PromptCategoryOption {
+            value: "meta".into(),
+            label: "元提示词".into(),
+        },
+    ]
+}
+
+pub fn allowed_prompt_category_values() -> Vec<String> {
+    prompt_category_options()
+        .into_iter()
+        .map(|c| c.value)
+        .collect()
+}
+
+pub fn normalize_prompt_category(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    let cat = if trimmed.is_empty() {
+        default_prompt_category()
+    } else {
+        trimmed.to_string()
+    };
+    if allowed_prompt_category_values().iter().any(|v| v == &cat) {
+        Ok(cat)
+    } else {
+        Err(format!("invalid category: {}", cat))
+    }
+}
+
+const PROMPT_PREVIEW_CHARS: usize = 120;
+
+fn prompt_content_preview(content: &str) -> String {
+    if content.chars().count() <= PROMPT_PREVIEW_CHARS {
+        return content.to_string();
+    }
+    format!(
+        "{}…",
+        content.chars().take(PROMPT_PREVIEW_CHARS).collect::<String>()
+    )
+}
+
+impl PromptAgentItem {
+    pub fn list_from(item: &PromptItem) -> Self {
+        Self {
+            id: item.id,
+            title: item.title.clone(),
+            content: None,
+            content_preview: Some(prompt_content_preview(&item.content)),
+            category: item.category.clone(),
+            tags: item.tags.clone(),
+            source_url: item.source_url.clone(),
+            source_note: item.source_note.clone(),
+            notes: item.notes.clone(),
+        }
+    }
+
+    pub fn detail_from(item: &PromptItem) -> Self {
+        Self {
+            id: item.id,
+            title: item.title.clone(),
+            content: Some(item.content.clone()),
+            content_preview: None,
+            category: item.category.clone(),
+            tags: item.tags.clone(),
+            source_url: item.source_url.clone(),
+            source_note: item.source_note.clone(),
+            notes: item.notes.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptInput {
+    pub title: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default = "default_prompt_category")]
+    pub category: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub source_note: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub is_starred: bool,
+}
+
+fn row_to_prompt_item(row: &rusqlite::Row<'_>) -> Result<PromptItem> {
+    let tags_json: String = row.get(4)?;
+    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    Ok(PromptItem {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        content: row.get(2)?,
+        category: row.get(3)?,
+        tags,
+        source_url: row.get(5)?,
+        source_note: row.get(6)?,
+        notes: row.get(7)?,
+        is_starred: row.get::<_, i64>(8)? != 0,
+        use_count: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        last_used_at: row.get(12)?,
+    })
+}
+
+const PROMPT_SELECT: &str = r#"
+    SELECT id, title, content, category, tags_json, source_url, source_note, notes,
+           is_starred, use_count, created_at, updated_at, last_used_at
+    FROM prompts
+"#;
+
+pub fn list_prompts(
+    conn: &Connection,
+    search: Option<&str>,
+    category: Option<&str>,
+    starred_only: bool,
+) -> Result<Vec<PromptItem>> {
+    let mut list = Vec::new();
+    let sql = format!(
+        r#"{PROMPT_SELECT}
+        WHERE (?1 IS NULL OR ?1 = '' OR title LIKE '%' || ?1 || '%' OR content LIKE '%' || ?1 || '%' OR tags_json LIKE '%' || ?1 || '%')
+          AND (?2 IS NULL OR ?2 = '' OR category = ?2)
+          AND (?3 = 0 OR is_starred = 1)
+        ORDER BY is_starred DESC, updated_at DESC, id DESC"#
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params![
+            search.unwrap_or(""),
+            category.unwrap_or(""),
+            if starred_only { 1 } else { 0 }
+        ],
+        row_to_prompt_item,
+    )?;
+    for r in rows.flatten() {
+        list.push(r);
+    }
+    Ok(list)
+}
+
+pub fn get_prompt(conn: &Connection, id: i64) -> Result<PromptItem> {
+    let sql = format!("{PROMPT_SELECT} WHERE id = ?1");
+    conn.query_row(&sql, params![id], row_to_prompt_item)
+}
+
+pub fn create_prompt(conn: &Connection, input: &PromptInput) -> Result<PromptItem> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "title cannot be empty".into(),
+        ));
+    }
+    let category = normalize_prompt_category(&input.category).map_err(|e| {
+        rusqlite::Error::InvalidParameterName(e)
+    })?;
+    let now = Utc::now().to_rfc3339();
+    let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    conn.execute(
+        r#"
+        INSERT INTO prompts (
+            title, content, category, tags_json, source_url, source_note, notes,
+            is_starred, use_count, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9)
+        "#,
+        params![
+            title,
+            input.content,
+            category,
+            tags_json,
+            input.source_url,
+            input.source_note,
+            input.notes,
+            if input.is_starred { 1 } else { 0 },
+            now,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    get_prompt(conn, id)
+}
+
+pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<PromptItem> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "title cannot be empty".into(),
+        ));
+    }
+    let category = normalize_prompt_category(&input.category).map_err(|e| {
+        rusqlite::Error::InvalidParameterName(e)
+    })?;
+    let now = Utc::now().to_rfc3339();
+    let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    let changed = conn.execute(
+        r#"
+        UPDATE prompts SET
+            title = ?1,
+            content = ?2,
+            category = ?3,
+            tags_json = ?4,
+            source_url = ?5,
+            source_note = ?6,
+            notes = ?7,
+            is_starred = ?8,
+            updated_at = ?9
+        WHERE id = ?10
+        "#,
+        params![
+            title,
+            input.content,
+            category,
+            tags_json,
+            input.source_url,
+            input.source_note,
+            input.notes,
+            if input.is_starred { 1 } else { 0 },
+            now,
+            id,
+        ],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    get_prompt(conn, id)
+}
+
+pub fn delete_prompt(conn: &Connection, id: i64) -> Result<bool> {
+    let changed = conn.execute("DELETE FROM prompts WHERE id = ?1", params![id])?;
+    Ok(changed > 0)
+}
+
+pub fn toggle_prompt_star(conn: &Connection, id: i64) -> Result<bool> {
+    let now = Utc::now().to_rfc3339();
+    let current: i64 = conn.query_row(
+        "SELECT is_starred FROM prompts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    let next = if current != 0 { 0 } else { 1 };
+    conn.execute(
+        "UPDATE prompts SET is_starred = ?1, updated_at = ?2 WHERE id = ?3",
+        params![next, now, id],
+    )?;
+    Ok(next != 0)
+}
+
+pub fn record_prompt_use(conn: &Connection, id: i64) -> Result<PromptItem> {
+    let now = Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE prompts SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1 WHERE id = ?2",
+        params![now, id],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    get_prompt(conn, id)
 }

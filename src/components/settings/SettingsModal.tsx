@@ -139,7 +139,7 @@ export const SettingsModal: React.FC<Props> = ({
   onAutoSyncIntervalChange,
   totalConversations = 0,
   totalMessages = 0,
-  appVersion = '0.2.2',
+  appVersion = 'unknown',
 }) => {
   const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'api' | 'appearance' | 'about'>('ai');
 
