@@ -1,0 +1,272 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch: aarch64
+          - target: x86_64-apple-darwin
+            arch: x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Package macOS zip + checksums
+        env:
+          VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          APP_PATH="$(find src-tauri/target -path "*/release/bundle/macos/AgentDeck.app" -print -quit)"
+          DMG_PATH="$(find src-tauri/target -path "*/release/bundle/dmg/*.dmg" -print -quit)"
+          OUT_DIR="$RUNNER_TEMP/agentdeck-macos-${ARCH}"
+          mkdir -p "$OUT_DIR"
+
+          if [ -n "$APP_PATH" ]; then
+            (
+              cd "$(dirname "$APP_PATH")"
+              zip -r "$OUT_DIR/AgentDeck-${VERSION}-macos-${ARCH}.zip" AgentDeck.app
+            )
+          fi
+
+          if [ -n "$DMG_PATH" ]; then
+            cp "$DMG_PATH" "$OUT_DIR/AgentDeck-${VERSION}-macos-${ARCH}.dmg"
+          fi
+
+          (
+            cd "$OUT_DIR"
+            shasum -a 256 AgentDeck-* > "checksums-macos-${ARCH}.sha256"
+            cat "checksums-macos-${ARCH}.sha256"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-macos-${{ matrix.arch }}
+          path: ${{ runner.temp }}/agentdeck-macos-${{ matrix.arch }}/*
+          retention-days: 7
+
+  build-windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Package Windows artifacts + checksums
+        shell: pwsh
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = $env:VERSION -replace '^v', ''
+          $outDir = Join-Path $env:RUNNER_TEMP "agentdeck-windows"
+          New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+
+          $bundleRoot = Join-Path "src-tauri" "target" "release" "bundle"
+          Get-ChildItem -Path $bundleRoot -Recurse -Include *.exe,*.msi -File | ForEach-Object {
+            Copy-Item $_.FullName $outDir
+          }
+
+          $checksumFile = Join-Path $outDir "checksums-windows.sha256"
+          Get-ChildItem $outDir -File | Where-Object { $_.Extension -in ".exe", ".msi" } | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)" | Add-Content -Path $checksumFile -Encoding utf8
+          }
+          Get-Content $checksumFile
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-windows
+          path: ${{ runner.temp }}/agentdeck-windows/*
+          retention-days: 7
+
+  build-linux:
+    name: Linux (x64)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install Linux build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npm run tauri build
+
+      - name: Package Linux artifacts + checksums
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          OUT_DIR="$RUNNER_TEMP/agentdeck-linux"
+          mkdir -p "$OUT_DIR"
+          BUNDLE_ROOT="src-tauri/target/release/bundle"
+
+          find "$BUNDLE_ROOT" -type f \( -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \) -exec cp {} "$OUT_DIR/" \;
+
+          (
+            cd "$OUT_DIR"
+            shasum -a 256 *.AppImage *.deb *.rpm 2>/dev/null > checksums-linux.sha256 || true
+            [ -s checksums-linux.sha256 ] && cat checksums-linux.sha256
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build-linux
+          path: ${{ runner.temp }}/agentdeck-linux/*
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: find artifacts -type f | sort
+
+      - name: Write release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          cat > release-notes.md <<EOF
+          ## AgentDeck v${VERSION}
+
+          ### Install (macOS)
+
+          Download **\`AgentDeck-${VERSION}-macos-aarch64.zip\`** (Apple Silicon) or **\`AgentDeck-${VERSION}-macos-x64.zip\`** (Intel). Unzip and drag **AgentDeck.app** to Applications. A \`.dmg\` is also attached if you prefer disk images.
+
+          The app is ad-hoc signed, so macOS Gatekeeper may block the first launch: **right-click → Open → Open**, or run:
+
+          \`\`\`bash
+          xattr -d com.apple.quarantine /Applications/AgentDeck.app
+          \`\`\`
+
+          **Requirements:** macOS 12+ · Apple Silicon or Intel build below
+
+          Prefer building locally? See [README — Quick Start](https://github.com/lepfinder/AgentDeck#quick-start).
+
+          ### Install (Windows)
+
+          Download the \`.exe\` or \`.msi\` installer from Assets and run it. Windows SmartScreen may warn on unsigned builds — choose **More info → Run anyway**.
+
+          ### Install (Linux)
+
+          Pick \`.AppImage\`, \`.deb\`, or \`.rpm\` from Assets for your distro.
+
+          ### SHA-256
+
+          Per-platform checksum files are bundled in Assets as \`checksums-*.sha256\`. A combined list is in \`SHA256SUMS.txt\`.
+          EOF
+
+      - name: Combine checksums
+        run: |
+          echo "## SHA-256 Checksums" > artifacts/SHA256SUMS.txt
+          echo "" >> artifacts/SHA256SUMS.txt
+          for cs in artifacts/checksums-*.sha256; do
+            [ -f "$cs" ] || continue
+            cat "$cs" >> artifacts/SHA256SUMS.txt
+            echo "" >> artifacts/SHA256SUMS.txt
+          done
+          cat artifacts/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          FILES=()
+          while IFS= read -r f; do
+            FILES+=("$f")
+          done < <(find artifacts -type f \
+            \( -name "*.zip" -o -name "*.dmg" -o -name "*.exe" -o -name "*.msi" \
+               -o -name "*.AppImage" -o -name "*.deb" -o -name "*.rpm" \
+               -o -name "checksums-*.sha256" -o -name "SHA256SUMS.txt" \) | sort)
+
+          gh release create "${TAG}" \
+            --title "AgentDeck v${VERSION}" \
+            --notes-file release-notes.md \
+            --latest \
+            "${FILES[@]}"

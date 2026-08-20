@@ -4,7 +4,7 @@ version = "0.2.6"
 description = "AgentDeck - AI Coding Cockpit"
 authors = ["AgentDeck Team"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/lepfinder/AgentDeck"
 edition = "2021"
 rust-version = "1.77.2"
 

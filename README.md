@@ -1,21 +1,23 @@
-<img src="public/app-icon.png" width="32" height="32" alt="AgentDeck" style="vertical-align: middle; margin-right: 8px;" /> AgentDeck
-===
+# AgentDeck
 
-**A local cockpit for AI coding agents** -- sync sessions from Cursor, Antigravity, Claude Code, Codex, Hermes, and WorkBuddy into SQLite, browse and search them in a native desktop app, and expose a loopback REST API for your local agents.
-
-[![GitHub release](https://img.shields.io/github/v/release/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/releases)
-[![GitHub stars](https://img.shields.io/github/stars/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/stargazers)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/lepfinder/AgentDeck/releases)
+[![License](https://img.shields.io/github/license/lepfinder/AgentDeck?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/lepfinder/AgentDeck/total?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases)
+[![Stars](https://img.shields.io/github/stars/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/lepfinder/AgentDeck/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/lepfinder/AgentDeck/actions/workflows/ci.yml)
 
 [中文文档](./README_CN.md)
 
+Collect every coding-agent session and message on your machine into one place — manage, search, and analyze them from a single native desktop app. Built with **Tauri 2 + Rust + React**.
+
+Cursor, Antigravity, Claude Code, Codex, Hermes, and WorkBuddy each keep their own logs in separate directories. AgentDeck syncs them read-only into SQLite, mirrors media locally, and exposes a loopback REST API so other agents can query your history too.
+
+![AgentDeck dashboard — stats, activity charts, and contribution heatmap](imgs/dashboard.png)
+
 ---
 
-![AgentDeck demo — dashboard stats, charts, heatmap tooltips, and workspace navigation](imgs/agentdeck_demo.gif)
-
----
-
-[Features](#features) | [AI Agent Friendly](#ai-agent-friendly) | [Supported Agents](#supported-agents) | [Quick Start](#quick-start) | [Local API](#local-api) | [Data](#data)
+[Features](#features) | [AI Agent Friendly](#ai-agent-friendly) | [Download](#download) | [Supported Agents](#supported-agents) | [Quick Start](#quick-start) | [Local API](#local-api) | [Data](#data)
 
 ---
 
@@ -79,6 +81,27 @@ Data stays on your machine under `~/.agentdeck/`. AgentDeck does not upload sess
 
 ---
 
+## Download
+
+Prebuilt installers are published on [GitHub Releases](https://github.com/lepfinder/AgentDeck/releases/latest).
+
+### macOS
+
+1. Download **`AgentDeck-<version>-macos-aarch64.zip`** (Apple Silicon) or **`-macos-x64.zip`** (Intel)
+2. Unzip and drag **AgentDeck.app** to Applications
+
+The app is ad-hoc signed. macOS Gatekeeper may block the first launch: **right-click → Open → Open**, or run:
+
+```bash
+xattr -d com.apple.quarantine /Applications/AgentDeck.app
+```
+
+### Windows / Linux
+
+Grab the `.exe` / `.msi`, or `.AppImage` / `.deb` / `.rpm` from Releases.
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -116,6 +139,20 @@ Artifacts land in `src-tauri/target/release/bundle/`. Before releasing, bump the
 3. `src-tauri/tauri.conf.json`
 
 Also update `CHANGELOG.md`. The build runs `npm run generate:api-docs` to refresh `src-tauri/src/api_docs.generated.md`.
+
+### Publish a release (maintainers)
+
+Pushing a **`v*`** tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build macOS (Apple Silicon + Intel), Windows, and Linux packages and create a GitHub Release with install notes (including the macOS `xattr` command).
+
+```bash
+# 1. Bump version in package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json
+# 2. Update CHANGELOG.md
+git add -A && git commit -m "chore: release v0.2.7"
+git tag v0.2.7
+git push origin main --tags
+```
+
+Every push to `main` and every PR also runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml) (lint, frontend build, `cargo check`).
 
 ---
 

@@ -1,21 +1,23 @@
-<img src="public/app-icon.png" width="32" height="32" alt="AgentDeck" style="vertical-align: middle; margin-right: 8px;" /> AgentDeck
-===
+# AgentDeck
 
-**本地 AI 编程智能体的驾驶舱** -- 把 Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 等历史会话同步进 SQLite，用桌面端浏览、检索、复盘，并提供本机 REST API 给外部 Agent 调用。
-
-[![GitHub release](https://img.shields.io/github/v/release/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/releases)
-[![GitHub stars](https://img.shields.io/github/stars/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/stargazers)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/lepfinder/AgentDeck/releases)
+[![License](https://img.shields.io/github/license/lepfinder/AgentDeck?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/lepfinder/AgentDeck/total?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases)
+[![Stars](https://img.shields.io/github/stars/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/stargazers)
+[![CI](https://img.shields.io/github/actions/workflow/status/lepfinder/AgentDeck/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/lepfinder/AgentDeck/actions/workflows/ci.yml)
 
 [English](./README.md)
 
+采集本机所有 coding agent 的会话与消息，在一处完成统一管理、检索与分析。基于 **Tauri 2 + Rust + React** 的原生桌面应用。
+
+Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 各自维护独立的会话目录。AgentDeck 只读同步到 SQLite，媒体本地镜像，并提供回环 REST API，供其他 Agent 实时查询与复盘。
+
+![AgentDeck 全景大盘 — 统计卡片、活跃图表与贡献热力图](imgs/dashboard.png)
+
 ---
 
-![AgentDeck 演示 — 大盘统计、图表交互、热力图 Tooltip 与工作区导航](imgs/agentdeck_demo.gif)
-
----
-
-[功能](#功能) | [AI Agent 友好](#ai-agent-友好) | [支持的 Agent](#支持的-agent) | [快速开始](#快速开始) | [本机 API](#本机-api) | [数据目录](#数据目录)
+[功能](#功能) | [AI Agent 友好](#ai-agent-友好) | [下载安装](#下载安装) | [支持的 Agent](#支持的-agent) | [快速开始](#快速开始) | [本机 API](#本机-api) | [数据目录](#数据目录)
 
 ---
 
@@ -79,6 +81,27 @@ AgentDeck 监听本地 Agent 数据目录，将会话同步到自有 SQLite 归�
 
 ---
 
+## 下载安装
+
+预编译包见 [GitHub Releases](https://github.com/lepfinder/AgentDeck/releases/latest)。
+
+### macOS
+
+1. 下载 **`AgentDeck-<version>-macos-aarch64.zip`**（Apple Silicon）或 **`-macos-x64.zip`**（Intel）
+2. 解压后将 **AgentDeck.app** 拖入「应用程序」
+
+应用为 ad-hoc 签名，首次打开可能被 Gatekeeper 拦截：**右键 → 打开 → 打开**，或在终端执行：
+
+```bash
+xattr -d com.apple.quarantine /Applications/AgentDeck.app
+```
+
+### Windows / Linux
+
+从 Releases 下载对应 `.exe` / `.msi`、`.AppImage` / `.deb` / `.rpm` 安装即可。
+
+---
+
 ## 快速开始
 
 ### 环境要求
@@ -116,6 +139,20 @@ npm run tauri build
 3. `src-tauri/tauri.conf.json`
 
 并更新 `CHANGELOG.md`。打包前会执行 `npm run generate:api-docs`，生成 `src-tauri/src/api_docs.generated.md`。
+
+### 发布新版本（维护者）
+
+推送 **`v*`** 标签会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：自动打包 macOS（Apple Silicon + Intel）、Windows、Linux，并创建 GitHub Release（含 macOS `xattr` 安装说明）。
+
+```bash
+# 1. 同步改 package.json、src-tauri/Cargo.toml、src-tauri/tauri.conf.json 版本号
+# 2. 更新 CHANGELOG.md
+git add -A && git commit -m "chore: release v0.2.7"
+git tag v0.2.7
+git push origin main --tags
+```
+
+推送到 `main` 的每次提交及 PR 会跑 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)（lint、前端构建、`cargo check`）。
 
 ---
 
