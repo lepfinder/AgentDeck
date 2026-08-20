@@ -4,10 +4,27 @@ import { api } from '../../api/tauriBridge';
 import { Clock3, Search, X } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/date';
 
-interface Props {
-  isOpen: boolean;
-  onClose: () => void;
-  onSelectResult: (convId: string, wsPath: string) => void;
+function HighlightText({ text, query }: { text: string; query: string }) {
+  const q = query.trim();
+  if (!q) return <>{text}</>;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === q.toLowerCase() ? (
+          <mark
+            key={`${part}-${i}`}
+            className="rounded-sm bg-amber-300/90 px-0.5 font-medium text-slate-900 dark:bg-amber-400/85"
+          >
+            {part}
+          </mark>
+        ) : (
+          <span key={`${part}-${i}`}>{part}</span>
+        ),
+      )}
+    </>
+  );
 }
 
 export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResult }) => {
@@ -199,14 +216,16 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
                       <span className="px-1.5 py-0.2 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">
                         {item.source_app}
                       </span>
-                      <span className="truncate">{item.conversation_title}</span>
+                      <span className="truncate">
+                        <HighlightText text={item.conversation_title} query={query} />
+                      </span>
                     </div>
                     <span className="text-[10px] theme-text-sub flex-shrink-0">
                       {item.sender === 'user' ? 'User' : 'Assistant'}
                     </span>
                   </div>
                   <div className="theme-text-muted line-clamp-2 text-[11px] leading-relaxed">
-                    {item.snippet}
+                    <HighlightText text={item.snippet} query={query} />
                   </div>
                 </div>
               );

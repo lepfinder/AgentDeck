@@ -373,6 +373,8 @@ export function App() {
         onToggleTheme={toggleTheme}
         autoSyncIntervalSec={autoSyncIntervalSec}
         onAutoSyncIntervalChange={setAutoSyncIntervalSec}
+        totalConversations={stats?.total_conversations ?? 0}
+        totalMessages={stats?.total_messages ?? 0}
         appVersion={appVersion}
       />
     </div>

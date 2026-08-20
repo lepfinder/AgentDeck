@@ -1467,6 +1467,35 @@ pub fn toggle_star_session(conn: &Connection, conversation_id: &str) -> Result<b
     }
 }
 
+fn snippet_around(text: &str, query: &str, radius: usize) -> String {
+    let q = query.trim();
+    if q.is_empty() {
+        return clip_chars(text, radius * 2);
+    }
+    let lower_text = text.to_lowercase();
+    let lower_q = q.to_lowercase();
+    let Some(byte_idx) = lower_text.find(&lower_q) else {
+        return clip_chars(text, radius * 2);
+    };
+    let char_idx = text.get(..byte_idx).map(|s| s.chars().count()).unwrap_or(0);
+    let match_len = q.chars().count();
+    let total = text.chars().count();
+    let start = char_idx.saturating_sub(radius);
+    let end = (char_idx + match_len + radius).min(total);
+    let snippet: String = text.chars().skip(start).take(end.saturating_sub(start)).collect();
+    let prefix = if start > 0 { "..." } else { "" };
+    let suffix = if end < total { "..." } else { "" };
+    format!("{}{}{}", prefix, snippet, suffix)
+}
+
+fn clip_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let s: String = text.chars().take(max_chars).collect();
+    format!("{}...", s)
+}
+
 pub fn search_global_messages(
     conn: &Connection,
     query: &str,
@@ -1504,12 +1533,7 @@ pub fn search_global_messages(
             let id_val: i64 = row.get(0)?;
             let raw_created: Option<String> = row.get(7)?;
             let text: String = row.get(6)?;
-            let snippet = if text.chars().count() > 180 {
-                let s: String = text.chars().take(180).collect();
-                format!("{}...", s)
-            } else {
-                text
-            };
+            let snippet = snippet_around(&text, query, 70);
             Ok(SearchResultItem {
                 message_id: id_val.to_string(),
                 conversation_id: row.get(1)?,
