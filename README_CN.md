@@ -201,12 +201,3 @@ HTTP 服务**仅监听 `127.0.0.1:8788`**，免 Token，不对外网暴露。
 | `⌘K` / `Ctrl+K` | 打开 Spotlight 搜索 |
 | `⌘R` / `Ctrl+R` | 触发同步 |
 | `⌘,` / `Ctrl+,` | 打开设置 |
-
----
-
-## 相关项目
-
-AgentDeck 聚焦**本地 Agent 历史的聚合与复盘**。若你需要多模型 Agent 客户端或更轻量的原生会话浏览器，可参考：
-
-- [CodePilot](https://github.com/op7418/CodePilot) -- 多模型 AI Agent 桌面客户端
-- [Wake](https://github.com/iAmCorey/Wake) -- macOS 原生会话浏览器（Rust + GPUI）

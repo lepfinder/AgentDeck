@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -41,7 +41,7 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        run: npm run tauri build -- --target ${{ matrix.target }} --bundles app
 
       - name: Package macOS zip + checksums
         env:
@@ -51,20 +51,18 @@ jobs:
           set -euo pipefail
           VERSION="${VERSION#v}"
           APP_PATH="$(find src-tauri/target -path "*/release/bundle/macos/AgentDeck.app" -print -quit)"
-          DMG_PATH="$(find src-tauri/target -path "*/release/bundle/dmg/*.dmg" -print -quit)"
           OUT_DIR="$RUNNER_TEMP/agentdeck-macos-${ARCH}"
           mkdir -p "$OUT_DIR"
 
-          if [ -n "$APP_PATH" ]; then
-            (
-              cd "$(dirname "$APP_PATH")"
-              zip -r "$OUT_DIR/AgentDeck-${VERSION}-macos-${ARCH}.zip" AgentDeck.app
-            )
+          if [ -z "$APP_PATH" ]; then
+            echo "AgentDeck.app not found"
+            exit 1
           fi
 
-          if [ -n "$DMG_PATH" ]; then
-            cp "$DMG_PATH" "$OUT_DIR/AgentDeck-${VERSION}-macos-${ARCH}.dmg"
-          fi
+          (
+            cd "$(dirname "$APP_PATH")"
+            zip -r "$OUT_DIR/AgentDeck-${VERSION}-macos-${ARCH}.zip" AgentDeck.app
+          )
 
           (
             cd "$OUT_DIR"
@@ -107,7 +105,7 @@ jobs:
 
           ### Install (macOS)
 
-          Download **\`AgentDeck-${VERSION}-macos-aarch64.zip\`** (Apple Silicon) or **\`AgentDeck-${VERSION}-macos-x64.zip\`** (Intel). Unzip and drag **AgentDeck.app** to Applications. A \`.dmg\` is also attached if you prefer disk images.
+          Download **\`AgentDeck-${VERSION}-macos-aarch64.zip\`** (Apple Silicon) or **\`AgentDeck-${VERSION}-macos-x64.zip\`** (Intel). Unzip and drag **AgentDeck.app** to Applications.
 
           The app is ad-hoc signed, so macOS Gatekeeper may block the first launch: **right-click → Open → Open**, or run:
 
@@ -145,7 +143,7 @@ jobs:
           while IFS= read -r f; do
             FILES+=("$f")
           done < <(find artifacts -type f \
-            \( -name "*.zip" -o -name "*.dmg" \
+            \( -name "*.zip" \
                -o -name "checksums-*.sha256" -o -name "SHA256SUMS.txt" \) | sort)
 
           gh release create "${TAG}" \

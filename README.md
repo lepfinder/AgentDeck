@@ -202,11 +202,10 @@ Do not commit local databases, backup archives, or absolute user paths into the 
 | `⌘R` / `Ctrl+R` | Trigger sync |
 | `⌘,` / `Ctrl+,` | Open settings |
 
----
+## Star History
 
-## Related Projects
+[![Star History Chart](https://api.star-history.com/chart?repos=lepfinder/AgentDeck&type=date&legend=top-left)](https://www.star-history.com/?repos=lepfinder%2FAgentDeck&type=date&legend=top-left)
 
-AgentDeck focuses on **aggregating and reviewing** local agent history. If you want a multi-model agent client or a lightweight native session browser, see also:
+## License
 
-- [CodePilot](https://github.com/op7418/CodePilot) -- multi-provider AI agent desktop client
-- [Wake](https://github.com/iAmCorey/Wake) -- native macOS session browser (Rust + GPUI)
+[MIT](LICENSE)
