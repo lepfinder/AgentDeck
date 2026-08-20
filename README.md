@@ -1,67 +1,174 @@
-# AgentDeck
+<img src="public/app-icon.png" width="32" height="32" alt="AgentDeck" style="vertical-align: middle; margin-right: 8px;" /> AgentDeck
+===
 
-本地 AI 编程智能体的驾驶舱：把 Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 等历史会话同步进 SQLite，用桌面端浏览、检索、复盘，并提供本机 REST API 给外部 Agent 调用。
+**A local cockpit for AI coding agents** -- sync sessions from Cursor, Antigravity, Claude Code, Codex, Hermes, and WorkBuddy into SQLite, browse and search them in a native desktop app, and expose a loopback REST API for your local agents.
 
-当前版本 **0.2.6**，基于 Tauri 2 + React + TypeScript，数据目录默认在 `~/.agentdeck/`。
+[![GitHub release](https://img.shields.io/github/v/release/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/releases)
+[![GitHub stars](https://img.shields.io/github/stars/lepfinder/AgentDeck)](https://github.com/lepfinder/AgentDeck/stargazers)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](https://github.com/lepfinder/AgentDeck/releases)
 
-## 功能
+[中文文档](./README_CN.md)
 
-- **全景数据大盘**：会话数、用户提问、消息量、工具调用；按来源 / 时段 / 项目分布。
-- **三栏会话浏览**：工作区导航、会话卡片、Markdown 消息流；支持星标收藏与 Spotlight（`⌘K`）。
-- **提示词库**：独立收藏外部 prompt（分类、标签、来源备注），不绑定某一条会话。
-- **项目分析**：按工作区生成复盘报告与功能模块。
-- **在 AI IDE 中打开**：选中项目后，可从会话列表用 Cursor / Antigravity 打开目录，或在终端启动 Claude Code / Codex。
-- **本机 REST API**：`127.0.0.1:8788`，免 Token，仅回环网卡。交互文档见 `/docs`。
-- **备份与媒体归档**：SQLite 热快照、媒体镜像到 `~/.agentdeck/media/`。
+---
 
-## 技术栈
+![AgentDeck demo — dashboard stats, charts, heatmap tooltips, and workspace navigation](imgs/agentdeck_demo.gif)
 
-- 桌面：Tauri 2（Rust）
-- 前端：React + TypeScript + Vite + Tailwind CSS
-- 存储：SQLite（rusqlite）+ FTS5
+---
 
-## 开发
+[Features](#features) | [AI Agent Friendly](#ai-agent-friendly) | [Supported Agents](#supported-agents) | [Quick Start](#quick-start) | [Local API](#local-api) | [Data](#data)
 
-需要 Node.js、Rust 与 Tauri 的系统依赖（macOS 需 Xcode Command Line Tools）。
+---
+
+## Features
+
+- **Panoramic dashboard** -- session counts, user prompts, message totals, tool-call stats; breakdowns by source, time of day, and workspace.
+- **Three-pane session browser** -- workspace sidebar, conversation cards, Markdown message stream; starred favorites and quick filters.
+- **Spotlight search (⌘K)** -- full-text search across conversations with role filters and jump-to-match navigation.
+- **Prompt library** -- collect external prompts independently (categories, tags, source notes); not tied to a single session.
+- **Project analysis** -- per-workspace retrospective reports and feature-module extraction powered by configurable LLM providers.
+- **Open in AI IDE** -- launch Cursor / Antigravity for the selected workspace, or start Claude Code / Codex in Terminal.
+- **Loopback REST API** -- `127.0.0.1:8788`, no token, localhost only; interactive docs at `/docs`.
+- **Backup & media archive** -- SQLite hot snapshots, media mirrored to `~/.agentdeck/media/`.
+- **i18n & themes** -- English + Chinese UI; dark / light theme toggle.
+
+![Spotlight search across all local AI sessions](imgs/search.png)
+
+---
+
+## AI Agent Friendly
+
+AgentDeck is not just a viewer -- it exposes a **standard localhost REST API** so other AI agents can plug in and analyze your coding history in real time.
+
+- **Loopback-only, zero friction** -- `127.0.0.1:8788`, no token, no cloud; any local agent, script, or MCP tool can call it directly.
+- **Read + write where it matters** -- query stats, workspaces, conversations, full-text search, and flat user-message exports; push prompts into the library via `POST /api/prompts`.
+- **Live data, not a static export** -- trigger `POST /api/sync` to refresh the archive, then pull the latest sessions for dynamic retrospectives and cross-project summaries.
+- **Self-describing docs** -- interactive playground at `/docs`; export the full Markdown spec via `GET /api/docs/markdown`.
+
+Wire the endpoints into your assistant as HTTP tools or MCP functions -- for example, list today's active workspaces, search recent prompts, and synthesize a daily development review across Cursor, Antigravity, and Claude Code sessions.
+
+![An external AI agent calling AgentDeck APIs to produce a real-time daily development retrospective](imgs/ai-agent.png)
+
+Typical agent workflows:
+
+| Goal | Endpoints |
+|---|---|
+| Global overview | `GET /api/stats` |
+| List / filter projects | `GET /api/workspaces`, `GET /api/workspaces/detail` |
+| Pull user prompts for analysis | `GET /api/user-messages`, `GET /api/search` |
+| Refresh before analysis | `POST /api/sync` |
+| Save reusable prompts | `POST /api/prompts`, `GET /api/prompts` |
+
+See [Local API](#local-api) below for endpoint details.
+
+---
+
+## Supported Agents
+
+AgentDeck watches local agent data directories and syncs them into its own SQLite archive. All parsing is read-only against source files.
+
+| Agent | Role in AgentDeck |
+|---|---|
+| Cursor | Full session + message sync; image attachments archived locally |
+| Antigravity | Full session + message sync; image attachments archived locally |
+| Claude Code | Session history sync |
+| Codex | Session history sync |
+| Hermes | Session history sync |
+| WorkBuddy | Session history sync |
+
+Data stays on your machine under `~/.agentdeck/`. AgentDeck does not upload sessions to the cloud.
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+| Tool | Notes |
+|---|---|
+| Node.js | 18+ recommended |
+| Rust | Stable toolchain + Tauri 2 system deps |
+| macOS | Xcode Command Line Tools |
+
+### Run from source
 
 ```bash
+git clone https://github.com/lepfinder/AgentDeck.git
+cd AgentDeck
 npm install
 npm run tauri dev
 ```
 
-REST API 随应用启动，默认：
+The REST API starts with the app:
 
-- 健康检查：`http://127.0.0.1:8788/health`
-- 接口文档：`http://127.0.0.1:8788/docs`
+- Health check: `http://127.0.0.1:8788/health`
+- Interactive docs: `http://127.0.0.1:8788/docs`
 
-## 打包
+### Build a release
 
 ```bash
 npm run tauri build
 ```
 
-产物在 `src-tauri/target/release/bundle/`。发版时同步改这三处版本号（其余从 Cargo / `package.json` 读取）：
+Artifacts land in `src-tauri/target/release/bundle/`. Before releasing, bump the version in all three places:
 
 1. `package.json`
 2. `src-tauri/Cargo.toml`
 3. `src-tauri/tauri.conf.json`
 
-并更新 `CHANGELOG.md`。打包前会执行 `npm run generate:api-docs`，生成 `src-tauri/src/api_docs.generated.md`。
+Also update `CHANGELOG.md`. The build runs `npm run generate:api-docs` to refresh `src-tauri/src/api_docs.generated.md`.
 
-## 本机 API（Agent）
+---
 
-服务只监听 `127.0.0.1:8788`。提示词库主流程：
+## Tech Stack
 
-1. `GET /api/prompts/categories` — 分类候选（`category` 必须用返回的 `value`）
-2. `GET /api/prompts` — 搜索查重（列表只有 `content_preview`）
-3. `POST /api/prompts` — 插入（`title` 必填）
-4. `DELETE /api/prompts/:id` — 删除
+- **Desktop:** Tauri 2 (Rust)
+- **Frontend:** React + TypeScript + Vite + Tailwind CSS
+- **Storage:** SQLite (rusqlite) + FTS5 full-text search
 
-完整说明与在线调试见 `/docs`，Markdown 规范：`GET /api/docs/markdown`。
+---
 
-会话检索（只读）还包括 `/api/stats`、`/api/workspaces`、`/api/conversations`、`/api/user-messages`、`/api/search` 等。
+## Local API
 
-## 数据
+The HTTP server listens on **`127.0.0.1:8788` only** -- no auth token, no external network exposure.
 
-- 配置与库：`~/.agentdeck/`
-- 不要把本地数据库、备份包或绝对用户路径提交进仓库
+**Prompt library workflow (typical for agents):**
+
+1. `GET /api/prompts/categories` -- category candidates (`category` must use returned `value`)
+2. `GET /api/prompts` -- search / dedupe (list returns `content_preview` only)
+3. `POST /api/prompts` -- insert (`title` required)
+4. `DELETE /api/prompts/:id` -- delete
+
+Read-only session endpoints include `/api/stats`, `/api/workspaces`, `/api/conversations`, `/api/user-messages`, and `/api/search`.
+
+Full reference: open `/docs` in the running app, or `GET /api/docs/markdown` for the Markdown spec.
+
+---
+
+## Data
+
+| Path | Contents |
+|---|---|
+| `~/.agentdeck/agentdeck.db` | SQLite archive (sessions, messages, FTS index, prompts) |
+| `~/.agentdeck/media/` | Mirrored conversation images |
+| `~/.agentdeck/config.json` | App config (backup paths, sync settings) |
+
+Do not commit local databases, backup archives, or absolute user paths into the repository.
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `⌘K` / `Ctrl+K` | Open Spotlight search |
+| `⌘R` / `Ctrl+R` | Trigger sync |
+| `⌘,` / `Ctrl+,` | Open settings |
+
+---
+
+## Related Projects
+
+AgentDeck focuses on **aggregating and reviewing** local agent history. If you want a multi-model agent client or a lightweight native session browser, see also:
+
+- [CodePilot](https://github.com/op7418/CodePilot) -- multi-provider AI agent desktop client
+- [Wake](https://github.com/iAmCorey/Wake) -- native macOS session browser (Rust + GPUI)

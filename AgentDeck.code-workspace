@@ -17,6 +17,12 @@
 		},
 		{
 			"path": "../HomeCore"
+		},
+		{
+			"path": "../../github/CodePilot"
+		},
+		{
+			"path": "../../github/Wake"
 		}
 	],
 	"settings": {}
