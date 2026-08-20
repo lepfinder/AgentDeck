@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/github/license/lepfinder/AgentDeck?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-007AFF?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/lepfinder/AgentDeck/total?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases)
 [![Stars](https://img.shields.io/github/stars/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/stargazers)
 [![CI](https://img.shields.io/github/actions/workflow/status/lepfinder/AgentDeck/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/lepfinder/AgentDeck/actions/workflows/ci.yml)
@@ -96,9 +96,9 @@ The app is ad-hoc signed. macOS Gatekeeper may block the first launch: **right-c
 xattr -d com.apple.quarantine /Applications/AgentDeck.app
 ```
 
-### Windows / Linux
+**Requirements:** macOS 14+ (Apple Silicon or Intel build below)
 
-Grab the `.exe` / `.msi`, or `.AppImage` / `.deb` / `.rpm` from Releases.
+Prefer building locally? See [Quick Start](#quick-start).
 
 ---
 
@@ -108,9 +108,10 @@ Grab the `.exe` / `.msi`, or `.AppImage` / `.deb` / `.rpm` from Releases.
 
 | Tool | Notes |
 |---|---|
+| macOS | 14+ (Apple Silicon or Intel) |
 | Node.js | 18+ recommended |
 | Rust | Stable toolchain + Tauri 2 system deps |
-| macOS | Xcode Command Line Tools |
+| Xcode | Command Line Tools |
 
 ### Run from source
 
@@ -142,7 +143,7 @@ Also update `CHANGELOG.md`. The build runs `npm run generate:api-docs` to refres
 
 ### Publish a release (maintainers)
 
-Pushing a **`v*`** tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build macOS (Apple Silicon + Intel), Windows, and Linux packages and create a GitHub Release with install notes (including the macOS `xattr` command).
+Pushing a **`v*`** tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) to build macOS packages (Apple Silicon + Intel) and create a GitHub Release with install notes (including the macOS `xattr` command).
 
 ```bash
 # 1. Bump version in package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json

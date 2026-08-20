@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/github/license/lepfinder/AgentDeck?style=flat-square)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-007AFF?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/lepfinder/AgentDeck/total?style=flat-square)](https://github.com/lepfinder/AgentDeck/releases)
 [![Stars](https://img.shields.io/github/stars/lepfinder/AgentDeck?style=flat-square)](https://github.com/lepfinder/AgentDeck/stargazers)
 [![CI](https://img.shields.io/github/actions/workflow/status/lepfinder/AgentDeck/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/lepfinder/AgentDeck/actions/workflows/ci.yml)
@@ -96,9 +96,9 @@ AgentDeck 监听本地 Agent 数据目录，将会话同步到自有 SQLite 归�
 xattr -d com.apple.quarantine /Applications/AgentDeck.app
 ```
 
-### Windows / Linux
+**要求：** macOS 14+（下方提供 Apple Silicon / Intel 安装包）
 
-从 Releases 下载对应 `.exe` / `.msi`、`.AppImage` / `.deb` / `.rpm` 安装即可。
+也可 [从源码构建](#从源码运行)。
 
 ---
 
@@ -108,9 +108,10 @@ xattr -d com.apple.quarantine /Applications/AgentDeck.app
 
 | 工具 | 说明 |
 |---|---|
+| macOS | 14+（Apple Silicon 或 Intel） |
 | Node.js | 建议 18+ |
 | Rust | Stable 工具链 + Tauri 2 系统依赖 |
-| macOS | 需 Xcode Command Line Tools |
+| Xcode | Command Line Tools |
 
 ### 从源码运行
 
@@ -142,7 +143,7 @@ npm run tauri build
 
 ### 发布新版本（维护者）
 
-推送 **`v*`** 标签会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：自动打包 macOS（Apple Silicon + Intel）、Windows、Linux，并创建 GitHub Release（含 macOS `xattr` 安装说明）。
+推送 **`v*`** 标签会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)：自动打包 macOS（Apple Silicon + Intel）并创建 GitHub Release（含 macOS `xattr` 安装说明）。
 
 ```bash
 # 1. 同步改 package.json、src-tauri/Cargo.toml、src-tauri/tauri.conf.json 版本号
