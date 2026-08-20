@@ -11,6 +11,12 @@
 		},
 		{
 			"path": "../../../.agentdeck"
+		},
+		{
+			"path": "../../../.xiaonuan"
+		},
+		{
+			"path": "../HomeCore"
 		}
 	],
 	"settings": {}

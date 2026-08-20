@@ -663,6 +663,119 @@ function generateLocalRuleBasedModules(fineBlocks: WorkspaceFineBlock[]): Worksp
   };
 }
 
+/** 报告上下文预算（字符）。每个 Block 压成一句话后再装填 */
+const REPORT_CONTEXT_CHAR_BUDGET = 10_000;
+const REPORT_MAX_TOKENS = 3_500;
+const BLOCK_SENTENCE_MAX = 80;
+
+function firstSentence(text: string, max = BLOCK_SENTENCE_MAX): string {
+  const t = (text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  const m = t.match(/^(.+?[。！？.!?])(\s|$)/);
+  const sentence = (m ? m[1] : t).trim();
+  return sentence.length > max ? `${sentence.slice(0, max)}…` : sentence;
+}
+
+/** 标题 + 摘要首句，合成一句 */
+function blockOneLiner(title: string, summary: string, max = BLOCK_SENTENCE_MAX): string {
+  const head = (title || '').replace(/\s+/g, ' ').trim();
+  const body = firstSentence(summary, max);
+  if (!head) return body;
+  if (!body || body === head || body.startsWith(head)) return head.slice(0, max);
+  const line = `${head}：${body}`;
+  return line.length > max + 24 ? `${line.slice(0, max + 24)}…` : line;
+}
+
+function slimModulesForReport(modules: WorkspaceModuleBlock[]) {
+  return (modules || []).map((m) => ({
+    id: m.module_id,
+    title: (m.title || '').slice(0, 40),
+    summary: (m.summary || '').slice(0, 140),
+    line: blockOneLiner(m.title, m.summary, 100),
+    start: m.start_date || null,
+    end: m.end_date || null,
+    keywords: (m.keywords || []).slice(0, 5),
+    fine_count: (m.child_fine_ids || []).length,
+  }));
+}
+
+function slimFinesForReport(fines: WorkspaceFineBlock[], budgetChars: number): string[] {
+  const packed: string[] = [];
+  let used = 0;
+  for (const f of fines || []) {
+    const date = f.start_date ? `${f.start_date} ` : '';
+    const line = `${date}${blockOneLiner(f.title, f.summary)}`.trim();
+    if (!line) continue;
+    if (used + line.length + 1 > budgetChars) break;
+    packed.push(line);
+    used += line.length + 1;
+  }
+  return packed;
+}
+
+function buildLocalFallbackReport(
+  stats: WorkspaceDetailStats,
+  modules: ReturnType<typeof slimModulesForReport>,
+  fines: ReturnType<typeof slimFinesForReport>
+): string {
+  const range = `${stats.first_active?.substring(0, 10) || '—'} ~ ${stats.last_active?.substring(0, 10) || '—'}`;
+  const moduleRows = modules
+    .map(
+      (m) =>
+        `| ${m.title} | ${m.fine_count} | ${m.start || '—'} | ${m.end || '—'} | ${(m.keywords || []).join('、') || '—'} |`
+    )
+    .join('\n');
+  const moduleSections = modules
+    .map(
+      (m) =>
+        `### ${m.title}\n\n${m.summary || '（无摘要）'}\n\n- 覆盖细粒度功能点：${m.fine_count} 个\n- 时间范围：${m.start || '—'} ~ ${m.end || '—'}`
+    )
+    .join('\n\n');
+  const fineList = fines
+    .slice(0, 24)
+    .map((line) => `- ${line}`)
+    .join('\n');
+
+  return `# 项目架构与研发演进复盘报告
+
+> 本报告由本地结构化模板生成（模型调用失败或超时时的兜底）。数字均来自已提取的模块与统计，未编造。
+
+## 1. 项目概览与研发画像
+
+- 项目：${stats.workspace_short || '未命名工作区'}
+- 活跃天数：${stats.active_days} 天（${range}）
+- 会话总数：${stats.conversation_count}
+- 交互消息：${stats.message_count}（用户提问 ${stats.user_message_count}）
+- 单日峰值：${stats.peak_count} 条${stats.peak_day ? `（${stats.peak_day}）` : ''}
+- 助手分布：${stats.agent_breakdown || '—'}
+
+## 2. 系统核心架构与模块总览
+
+| 模块 | 功能点数 | 开始 | 结束 | 关键词 |
+| --- | ---: | --- | --- | --- |
+${moduleRows || '| — | — | — | — | — |'}
+
+${moduleSections}
+
+## 3. 模块功能演进与迭代轨迹
+
+共收录细粒度功能点 ${stats.fine_blocks?.length || fines.length} 个。代表性条目：
+
+${fineList || '（暂无细粒度 Blocks）'}
+
+## 4. 研发节奏与工作流分析
+
+结合活跃天数与峰值日，该项目在 ${stats.active_days} 天内累计 ${stats.conversation_count} 次会话、${stats.user_message_count} 次用户提问。可优先复盘峰值日前后的模块变更。
+
+## 5. 后续演进建议与待办规划
+
+1. 对功能点最多的模块做边界收敛，避免继续横向膨胀。
+2. 将高频关键词对应的能力沉淀为可复用模块或文档。
+3. 对时间跨度最长的模块做一次稳定性与技术债盘点。
+4. 若峰值日与某模块起止高度重合，优先补测试与回归清单。
+`;
+}
+
 /** Pipeline 阶段 3：撰写 Markdown 架构演进与研发报告并入库 */
 export async function runGenerateReportPipeline(
   workspacePath: string,
@@ -690,72 +803,74 @@ export async function runGenerateReportPipeline(
 
   onProgress?.({
     stage: 'report',
-    detail: '正在基于模块总览与项目研发指标，撰写完整的 Markdown 架构报告…',
+    detail: '正在压缩模块与功能点上下文，撰写 Markdown 架构报告…',
     current: 1,
     total: 1,
   });
 
-  const prompt = `你是高级技术写作专家与架构师。请基于以下项目的「模块总览」、「细粒度 Blocks」和「研发统计指标」，撰写一份专业、详实的中文《项目架构与研发演进复盘报告》（Markdown 格式）。
+  const slimModules = slimModulesForReport(moduleBlocks);
+  const moduleLines = slimModules
+    .map((m, i) => `${i + 1}. ${m.line}（${m.fine_count} 个功能点）`)
+    .join('\n');
+  const remaining = Math.max(2_000, REPORT_CONTEXT_CHAR_BUDGET - moduleLines.length);
+  const slimFines = slimFinesForReport(fineBlocks, remaining);
+  const fineLines = slimFines.map((line, i) => `${i + 1}. ${line}`).join('\n');
 
-【报告必须包含以下核心章节】：
+  const prompt = `你是高级技术写作专家与架构师。请基于下列「一句话模块」和「一句话功能点」撰写中文《项目架构与研发演进复盘报告》（Markdown）。
+
+必须包含章节：
 ## 1. 项目概览与研发画像
-- 简述项目基本背景、会话总量 (${stats.conversation_count})、用户提问交互数 (${stats.user_message_count})、活跃开发天数 (${stats.active_days} 天) 等关键指标。
-
 ## 2. 系统核心架构与模块总览
-- 梳理系统主要模块构成及职责边界（参考下方模块总览）。
-
 ## 3. 模块功能演进与迭代轨迹
-- 结合各模块与时间轴，详细拆解核心功能、重构与关键 Bug 修复历程。
-
 ## 4. 研发节奏与工作流分析
-- 结合单日峰值 (${stats.peak_count} 条，${stats.peak_day || '近期'})、开发活跃周期与 AI 工具协同模式进行复盘总结。
-
 ## 5. 后续演进建议与待办规划
-- 给出 3～5 条切实可行的架构优化与演进建议。
 
-【写作规范】：
-- 语气专业、结构清晰、排版美观（合理使用表格、列表、引用与加粗）。
-- 严禁编造不存在的模块或数字。
-- 直接输出 Markdown 文本，无需额外包裹说明。
+写作规范：专业、简洁；可用表格；严禁编造模块或数字；直接输出 Markdown。不要逐条复述原文。
 
-【项目统计数据】：
-- 项目路径: ${workspacePath}
-- 活跃天数: ${stats.active_days} 天 (${stats.first_active?.substring(0, 10) || '—'} ~ ${stats.last_active?.substring(0, 10) || '—'})
-- 会话总数: ${stats.conversation_count}
-- 交互总消息数: ${stats.message_count} (用户提问: ${stats.user_message_count})
-- 助手分布: ${stats.agent_breakdown}
+【统计】
+项目: ${stats.workspace_short || '未命名'}
+活跃: ${stats.active_days} 天 (${stats.first_active?.substring(0, 10) || '—'} ~ ${stats.last_active?.substring(0, 10) || '—'})
+会话: ${stats.conversation_count}；消息: ${stats.message_count}（用户 ${stats.user_message_count}）
+峰值: ${stats.peak_count} 条${stats.peak_day ? ` @ ${stats.peak_day}` : ''}
+助手: ${stats.agent_breakdown || '—'}
+细粒度功能点总数: ${fineBlocks.length}（下列为压缩后的一句话样本，共 ${slimFines.length} 条）
 
-【模块总览数据】：
-${JSON.stringify(moduleBlocks, null, 2)}
+【模块总览（每条一句话）】
+${moduleLines || '（无）'}
 
-【细粒度 Blocks 样例】：
-${JSON.stringify(fineBlocks.slice(0, 30), null, 2)}`;
+【功能点（每条一句话）】
+${fineLines || '（无）'}`;
 
   const llmRes = await api.callLlmWithFallback(
     endpoints.primary,
     endpoints.fallback,
     [
-      { role: 'system', content: '你输出结构严谨、内容丰富的 Markdown 技术架构报告。' },
+      { role: 'system', content: '你输出结构严谨的 Markdown 技术架构报告。不要逐条复述输入的一句话列表。' },
       { role: 'user', content: prompt },
-    ]
+    ],
+    REPORT_MAX_TOKENS
   );
 
-  if (!llmRes.success || !llmRes.content) {
-    return {
-      success: false,
-      reportMd: '',
-      message: `报告生成失败: ${llmRes.error || 'LLM 未返回有效内容'}`,
-    };
+  let reportMd = '';
+  let usedFallback = false;
+  if (llmRes.success && llmRes.content?.trim()) {
+    reportMd = llmRes.content.trim();
+  } else {
+    usedFallback = true;
+    reportMd = buildLocalFallbackReport(stats, slimModules, slimFines);
+    console.warn(
+      '[R&D Analysis] 报告 LLM 失败，改用本地模板:',
+      llmRes.error || 'empty content'
+    );
   }
 
-  const reportMd = llmRes.content.trim();
-
-  // 持久化存库
   await api.saveWorkspaceReport(workspacePath, reportMd);
 
   onProgress?.({
     stage: 'done',
-    detail: 'Markdown 架构报告生成并保存完成！',
+    detail: usedFallback
+      ? '模型调用失败，已用本地模板生成并保存报告'
+      : 'Markdown 架构报告生成并保存完成！',
     current: 1,
     total: 1,
   });
@@ -763,6 +878,8 @@ ${JSON.stringify(fineBlocks.slice(0, 30), null, 2)}`;
   return {
     success: true,
     reportMd,
-    message: 'Markdown 架构报告生成成功！',
+    message: usedFallback
+      ? `模型调用失败（${llmRes.error || '无内容'}），已用本地模板生成报告`
+      : 'Markdown 架构报告生成成功！',
   };
 }

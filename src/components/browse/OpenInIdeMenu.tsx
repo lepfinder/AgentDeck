@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { ChevronDown, Loader2 } from 'lucide-react';
 import { api } from '../../api/tauriBridge';
 import type { IdeAppStatus } from '../../types';
+import { IdeIcon } from './ideIcons';
 
 const IDE_HINT: Record<string, string> = {
   cursor: '用 Cursor 打开此项目',
@@ -10,21 +11,29 @@ const IDE_HINT: Record<string, string> = {
   codex: '在终端进入目录并启动 codex',
 };
 
+const DEFAULT_IDES: IdeAppStatus[] = [
+  { id: 'cursor', label: 'Cursor', kind: 'app', installed: true },
+  { id: 'antigravity', label: 'Antigravity', kind: 'app', installed: false },
+  { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
+  { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
+];
+
 interface Props {
   workspacePath: string;
 }
 
 export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
   const [open, setOpen] = useState(false);
-  const [apps, setApps] = useState<IdeAppStatus[]>([]);
+  const [apps, setApps] = useState<IdeAppStatus[]>(DEFAULT_IDES);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const primary = apps[0] ?? DEFAULT_IDES[0];
 
   useEffect(() => {
     let cancelled = false;
     api.listIdeApps().then((list) => {
-      if (!cancelled) setApps(list);
+      if (!cancelled && list.length) setApps(list);
     });
     return () => {
       cancelled = true;
@@ -71,16 +80,17 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
     <div ref={containerRef} className="relative">
       <button
         type="button"
-        title="在 AI IDE 中打开"
+        title={`在 ${primary.label} 或其他 AI IDE 中打开`}
         onClick={() => {
           setOpen((prev) => !prev);
           setError(null);
         }}
-        className={`h-6 w-6 inline-flex items-center justify-center rounded-md theme-text-sub hover:theme-text-main hover:theme-bg-sub cursor-pointer transition-colors ${
-          open ? 'text-blue-500 theme-bg-sub' : ''
+        className={`h-6 inline-flex items-center gap-0.5 px-1 rounded-md theme-text-main hover:theme-bg-sub cursor-pointer transition-colors ${
+          open ? 'theme-bg-sub' : ''
         }`}
       >
-        <ExternalLink className="h-3.5 w-3.5" />
+        <IdeIcon id={primary.id} className="h-3.5 w-3.5" />
+        <ChevronDown className={`h-3 w-3 theme-text-sub transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
@@ -102,11 +112,11 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
                     : 'cursor-pointer hover:theme-bg-sub'
                 }`}
               >
-                <span className="mt-0.5 flex-shrink-0">
+                <span className="mt-0.5 flex-shrink-0 h-4 w-4 inline-flex items-center justify-center">
                   {openingId === ide.id ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
                   ) : (
-                    <IdeDot id={ide.id} />
+                    <IdeIcon id={ide.id} className="h-3.5 w-3.5" />
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
@@ -134,18 +144,4 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
       )}
     </div>
   );
-};
-
-const IdeDot: React.FC<{ id: string }> = ({ id }) => {
-  const color =
-    id === 'cursor'
-      ? 'bg-blue-500'
-      : id === 'antigravity'
-        ? 'bg-emerald-500'
-        : id === 'claude'
-          ? 'bg-orange-500'
-          : id === 'codex'
-            ? 'bg-pink-500'
-            : 'bg-slate-400';
-  return <span className={`mt-0.5 inline-block h-2 w-2 rounded-full ${color}`} />;
 };
