@@ -1,5 +1,8 @@
+import { getLocale, translate } from '../i18n';
+import { localeTag } from '../i18n/types';
+
 /**
- * 统一时间格式化工具库（默认按中国/北京时间 UTC+8 / Asia/Shanghai 转换与展示）
+ * 统一时间格式化（Asia/Shanghai），展示语言随界面 locale。
  */
 
 export const formatBeijingTime = (timeStr?: string, includeSeconds = false): string => {
@@ -12,7 +15,7 @@ export const formatBeijingTime = (timeStr?: string, includeSeconds = false): str
     }
     const d = new Date(str);
     if (!isNaN(d.getTime())) {
-      const parts = new Intl.DateTimeFormat('zh-CN', {
+      const parts = new Intl.DateTimeFormat(localeTag(getLocale()), {
         timeZone: 'Asia/Shanghai',
         year: 'numeric',
         month: '2-digit',
@@ -49,16 +52,16 @@ export const formatRelativeTime = (timeStr?: string): string => {
     if (isNaN(d.getTime())) return timeStr;
     const now = new Date();
     const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
-    if (diffSec < 0 || diffSec < 60) return '刚刚';
+    if (diffSec < 0 || diffSec < 60) return translate('rel.justNow');
     const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin} 分钟前`;
+    if (diffMin < 60) return translate('rel.minutes', { n: diffMin });
     const diffHour = Math.floor(diffMin / 60);
-    if (diffHour < 24) return `${diffHour} 小时前`;
+    if (diffHour < 24) return translate('rel.hours', { n: diffHour });
     const diffDay = Math.floor(diffHour / 24);
-    if (diffDay < 30) return `${diffDay} 天前`;
+    if (diffDay < 30) return translate('rel.days', { n: diffDay });
     const diffMonth = Math.floor(diffDay / 30);
-    if (diffMonth < 12) return `${diffMonth} 个月前`;
-    return `${Math.floor(diffDay / 365)} 年前`;
+    if (diffMonth < 12) return translate('rel.months', { n: diffMonth });
+    return translate('rel.years', { n: Math.floor(diffDay / 365) });
   } catch {
     return timeStr;
   }

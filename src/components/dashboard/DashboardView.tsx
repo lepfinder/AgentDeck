@@ -20,6 +20,7 @@ import { ActivityBarChart } from './ActivityBarChart';
 import type { ActivityBarItem } from './ActivityBarChart';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
 import { HourlyPunchcardCard } from './HourlyPunchcardCard';
+import { translate, useI18n } from '../../i18n';
 
 interface Props {
   stats: DashboardStats | null;
@@ -34,6 +35,7 @@ export const DashboardView: React.FC<Props> = ({
   onRefresh,
   onSelectConversation,
 }) => {
+  const { t } = useI18n();
   const [agentTab, setAgentTab] = useState<'convs' | 'msgs'>('msgs');
   const [hourlyTab, setHourlyTab] = useState<'msgs' | 'convs'>('msgs');
   const [last30Tab, setLast30Tab] = useState<'msgs' | 'convs'>('msgs');
@@ -44,7 +46,7 @@ export const DashboardView: React.FC<Props> = ({
     return (
       <div className="flex h-full flex-col items-center justify-center theme-text-muted">
         <RefreshCw className="h-8 w-8 animate-spin text-blue-500 mb-3" />
-        <p className="text-sm">正在加载全景驾驶舱大盘数据…</p>
+        <p className="text-sm">{t('dashboard.loading')}</p>
       </div>
     );
   }
@@ -52,7 +54,7 @@ export const DashboardView: React.FC<Props> = ({
   if (!stats) {
     return (
       <div className="flex h-full items-center justify-center theme-text-sub">
-        暂无大盘数据，请先同步会话。
+        {t('dashboard.empty')}
       </div>
     );
   }
@@ -60,7 +62,8 @@ export const DashboardView: React.FC<Props> = ({
   const agentData = agentTab === 'convs' ? stats.agent_comparison_convs : stats.agent_comparison_msgs;
   const hourlyDays = hourlyTab === 'msgs' ? stats.last30_hourly_msgs : stats.last30_hourly_convs;
   const topRankData = topRankTab === 'all' ? stats.top_conversations_all : stats.top_conversations_user;
-  const volumeUnit = (tab: 'msgs' | 'convs') => (tab === 'msgs' ? '条消息' : '个会话');
+  const volumeUnit = (tab: 'msgs' | 'convs') =>
+    tab === 'msgs' ? t('dashboard.unitMessages') : t('dashboard.unitSessions');
   const beijingNow = getBeijingNow();
   const currentHour = beijingNow.getHours();
   const todayStr = stats.beijing_today || formatBeijingDate(beijingNow);
@@ -110,10 +113,10 @@ export const DashboardView: React.FC<Props> = ({
         <div>
           <h1 className="text-xl font-bold tracking-tight theme-text-main flex items-center gap-2.5">
             <Sparkles className="h-5 w-5 text-blue-500" />
-            Agent 全景数据驾驶舱
+            {t('dashboard.title')}
           </h1>
           <p className="text-xs theme-text-muted mt-0.5">
-            聚合全平台 AI 编码智能体会话资产、多维活动热力与代码交互透视
+            {t('dashboard.subtitle')}
           </p>
         </div>
         <button
@@ -122,7 +125,7 @@ export const DashboardView: React.FC<Props> = ({
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium theme-bg-sub hover:opacity-80 active:scale-95 theme-text-main rounded-lg border theme-border transition-all cursor-pointer shadow-sm"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          刷新数据
+          {t('dashboard.refresh')}
         </button>
       </div>
 
@@ -131,7 +134,7 @@ export const DashboardView: React.FC<Props> = ({
         {/* 全量会话数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden backdrop-blur-sm">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">全量会话数</span>
+            <span className="text-xs font-medium">{t('dashboard.kpiSessions')}</span>
             <Layers className="h-4 w-4 text-blue-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
@@ -141,49 +144,49 @@ export const DashboardView: React.FC<Props> = ({
             <span className="text-amber-500 font-medium flex items-center gap-0.5">
               <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> {stats.starred_count}
             </span>
-            <span>个星标收藏</span>
+            <span>{t('dashboard.kpiStarred')}</span>
           </div>
         </div>
 
         {/* 用户消息数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden backdrop-blur-sm">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">用户提问 / 提示词</span>
+            <span className="text-xs font-medium">{t('dashboard.kpiPrompts')}</span>
             <MessageSquare className="h-4 w-4 text-emerald-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {stats.total_user_messages.toLocaleString()}
           </div>
           <div className="mt-2 text-[11px] theme-text-muted">
-            人类开发者主动 Prompt 交互
+            {t('dashboard.kpiPromptsHint')}
           </div>
         </div>
 
         {/* 全部消息交互总数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden backdrop-blur-sm">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">交互消息总数</span>
+            <span className="text-xs font-medium">{t('dashboard.kpiMessages')}</span>
             <Sparkles className="h-4 w-4 text-purple-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {stats.total_messages.toLocaleString()}
           </div>
           <div className="mt-2 text-[11px] theme-text-muted">
-            包含思考、回答与代码生成
+            {t('dashboard.kpiMessagesHint')}
           </div>
         </div>
 
         {/* 工具调用总数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden backdrop-blur-sm">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">工具调用执行 (Tool Usage)</span>
+            <span className="text-xs font-medium">{t('dashboard.kpiTools')}</span>
             <Wrench className="h-4 w-4 text-amber-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {stats.total_tool_calls.toLocaleString()}
           </div>
           <div className="mt-2 text-[11px] theme-text-muted">
-            覆盖 {stats.total_workspaces} 个项目工程目录
+            {t('dashboard.kpiToolsHint', { n: stats.total_workspaces })}
           </div>
         </div>
       </div>
@@ -194,7 +197,7 @@ export const DashboardView: React.FC<Props> = ({
           <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-blue-500" />
-              按日 24 小时活跃量
+              {t('dashboard.hourlyTitle')}
             </h2>
             <div className="flex items-center gap-2">
               <div className="flex items-center theme-bg-sub rounded-lg border theme-border text-xs">
@@ -207,7 +210,7 @@ export const DashboardView: React.FC<Props> = ({
                       ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
                       : 'theme-text-sub opacity-40 cursor-not-allowed'
                   }`}
-                  title="前一天"
+                  title={t('dashboard.prevDay')}
                 >
                   <ChevronLeft className="h-3.5 w-3.5" />
                 </button>
@@ -226,7 +229,7 @@ export const DashboardView: React.FC<Props> = ({
                       ? 'theme-text-main hover:bg-blue-600 hover:text-white cursor-pointer'
                       : 'theme-text-sub opacity-40 cursor-not-allowed'
                   }`}
-                  title="后一天"
+                  title={t('dashboard.nextDay')}
                 >
                   <ChevronRight className="h-3.5 w-3.5" />
                 </button>
@@ -240,7 +243,7 @@ export const DashboardView: React.FC<Props> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  按消息数
+                  {t('dashboard.byMessages')}
                 </button>
                 <button
                   onClick={() => setHourlyTab('convs')}
@@ -250,30 +253,30 @@ export const DashboardView: React.FC<Props> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  按会话数
+                  {t('dashboard.bySessions')}
                 </button>
               </div>
             </div>
           </div>
           <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
             <span>
-              当日合计 <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
+              {t('dashboard.dayTotal')} <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
             </span>
             {dayPeak && dayPeak.count > 0 && (
               <span>
-                峰值 {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
+                {t('dashboard.peak')} {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
               </span>
             )}
             {viewingToday && (
               <span className="ml-auto flex items-center gap-1">
                 <span className="w-2 h-2 rounded-sm bg-blue-500 inline-block" />
-                当前小时
+                {t('dashboard.currentHour')}
               </span>
             )}
           </div>
           <ActivityBarChart
             items={dayBarItems}
-            emptyHint="这一天没有交互"
+            emptyHint={t('dashboard.emptyDay')}
           />
         </div>
 
@@ -281,7 +284,7 @@ export const DashboardView: React.FC<Props> = ({
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
               <CalendarRange className="h-4 w-4 text-emerald-500" />
-              近 30 天每日活跃量
+              {t('dashboard.last30')}
             </h2>
             <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
               <button
@@ -292,7 +295,7 @@ export const DashboardView: React.FC<Props> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                按消息数
+                  {t('dashboard.byMessages')}
               </button>
               <button
                 onClick={() => setLast30Tab('convs')}
@@ -302,30 +305,30 @@ export const DashboardView: React.FC<Props> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                按会话数
+                  {t('dashboard.bySessions')}
               </button>
             </div>
           </div>
           <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
             <span>
-              合计 <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
+              {t('dashboard.total')} <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
             </span>
             <span>
-              日均 <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
+              {t('dashboard.dailyAvg')} <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
             </span>
             {last30Peak && last30Peak.count > 0 && (
               <span>
-                峰值 {last30Peak.key} · <strong className="theme-text-main font-mono">{last30Peak.count.toLocaleString()}</strong>
+                {t('dashboard.peak')} {last30Peak.key} · <strong className="theme-text-main font-mono">{last30Peak.count.toLocaleString()}</strong>
               </span>
             )}
             <span className="ml-auto flex items-center gap-1">
               <span className="w-2 h-2 rounded-sm bg-slate-400/45 inline-block" />
-              周末
+              {t('dashboard.weekend')}
             </span>
           </div>
           <ActivityBarChart
             items={last30BarItems}
-            emptyHint="近 30 天暂无数据"
+            emptyHint={t('dashboard.empty30')}
             onBarClick={(date) => setHourlyDate(date)}
             showLine
           />
@@ -334,8 +337,8 @@ export const DashboardView: React.FC<Props> = ({
 
       {/* 中部第二排：GitHub 风格年度活跃全景热力图 (Annual Contribution Calendar) */}
       <ContributionHeatmap
-        title="AI 编码活跃热力全景 (Annual Contribution Heatmap)"
-        subtitle="过去 365 天跨平台智能体会话密度与每日代码交互节奏"
+        title={t('dashboard.heatmapTitle')}
+        subtitle={t('dashboard.heatmapSubtitle')}
         icon={<Calendar className="h-4 w-4 text-emerald-500" />}
         cellsAllMsgs={stats.heatmap_cells || []}
         cellsUserMsgs={stats.heatmap_cells_user || []}
@@ -357,7 +360,7 @@ export const DashboardView: React.FC<Props> = ({
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
                 <Layers className="h-4 w-4 text-blue-500" />
-                Agent 平台分布占比
+                {t('dashboard.agentShare')}
               </h2>
               {/* 双维切换 Tab */}
               <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
@@ -369,7 +372,7 @@ export const DashboardView: React.FC<Props> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  <Layers className="h-3 w-3" /> 按会话数
+                  <Layers className="h-3 w-3" /> {t('dashboard.bySessions')}
                 </button>
                 <button
                   onClick={() => setAgentTab('msgs')}
@@ -379,7 +382,7 @@ export const DashboardView: React.FC<Props> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  <MessageSquare className="h-3 w-3" /> 按消息数
+                  <MessageSquare className="h-3 w-3" /> {t('dashboard.byMessages')}
                 </button>
               </div>
             </div>
@@ -434,7 +437,7 @@ export const DashboardView: React.FC<Props> = ({
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
               <Flame className="h-4 w-4 text-orange-500" />
-              深度会话排行榜 Top 10
+              {t('dashboard.top10')}
             </h2>
             <div className="flex theme-bg-sub p-0.5 rounded-lg border theme-border text-xs">
               <button
@@ -445,7 +448,7 @@ export const DashboardView: React.FC<Props> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                全部消息数
+                {t('dashboard.topAll')}
               </button>
               <button
                 onClick={() => setTopRankTab('user')}
@@ -455,7 +458,7 @@ export const DashboardView: React.FC<Props> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                用户提问数
+                {t('dashboard.topUser')}
               </button>
             </div>
           </div>
@@ -497,9 +500,9 @@ export const DashboardView: React.FC<Props> = ({
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0 text-right">
                   <div className="text-xs font-bold theme-text-main font-mono">
-                    {item.message_count} 条
+                    {t('dashboard.nItems', { n: item.message_count })}
                     <span className="text-[10px] font-normal theme-text-muted block">
-                      用户 {item.user_message_count}
+                      {t('dashboard.userN', { n: item.user_message_count })}
                     </span>
                   </div>
                   <ArrowUpRight className="h-3.5 w-3.5 theme-text-muted group-hover:theme-text-main transition-colors" />
@@ -515,7 +518,7 @@ export const DashboardView: React.FC<Props> = ({
           <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2 mb-3">
               <Wrench className="h-4 w-4 text-emerald-500" />
-              Agent 工具调用分布
+              {t('dashboard.toolDist')}
             </h2>
             <div className="space-y-2.5">
               {stats.tool_usage.map((tool) => (
@@ -541,7 +544,7 @@ export const DashboardView: React.FC<Props> = ({
           <div className="theme-bg-card border theme-border rounded-xl p-5 backdrop-blur-sm">
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2 mb-3">
               <FolderGit2 className="h-4 w-4 text-purple-500" />
-              热门项目工作区分布 Top 8
+              {t('dashboard.hotProjects')}
             </h2>
             <div className="space-y-2">
               {stats.top_workspaces.slice(0, 8).map((ws) => (
@@ -554,7 +557,7 @@ export const DashboardView: React.FC<Props> = ({
                     <div className="text-[10px] theme-text-muted truncate">{ws.path}</div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <div className="font-bold theme-text-main font-mono">{ws.count} 会话</div>
+                    <div className="font-bold theme-text-main font-mono">{t('dashboard.nSessions', { n: ws.count })}</div>
                     <div className="text-[10px] theme-text-muted">{ws.percent}%</div>
                   </div>
                 </div>
@@ -652,11 +655,11 @@ function toLast30BarItems(
 }
 
 function formatDayNavLabel(dateStr: string, today: string, yesterday: string): string {
-  if (dateStr === today) return '今天';
-  if (dateStr === yesterday) return '昨天';
+  if (dateStr === today) return translate('dashboard.today');
+  if (dateStr === yesterday) return translate('dashboard.yesterday');
   const parts = dateStr.split('-');
   if (parts.length !== 3) return dateStr;
-  return `${Number(parts[1])}月${Number(parts[2])}日`;
+  return translate('dashboard.md', { m: Number(parts[1]), d: Number(parts[2]) });
 }
 
 function peakItem(items: ActivityBarItem[]): ActivityBarItem | null {

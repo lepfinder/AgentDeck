@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '../../api/tauriBridge';
 import {
@@ -32,94 +32,14 @@ import {
   Lock,
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
+import { useI18n } from '../../i18n';
 import type { CloudPreset, BackupInfo, BackupProgress } from '../../types';
+import { AI_PROVIDERS } from '../../config/aiProviders';
 
-export interface AiProviderConfig {
-  id: string;
-  name: string;
-  iconName: 'Flame' | 'Bot' | 'Sparkles' | 'Zap' | 'Globe';
-  baseUrl: string;
-  defaultModel: string;
-  models: string[];
-  apiKeyLink: string;
-  apiKeyPlaceholder: string;
-}
-
-export const AI_PROVIDERS: AiProviderConfig[] = [
-  {
-    id: 'bailian',
-    name: '通义千问（百炼）',
-    iconName: 'Flame',
-    baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
-    defaultModel: 'qwen3.8-max',
-    models: ['qwen3.8-max', 'qwen3.6-flash', 'kimi-k2.7-code', 'kimi-k2.6', 'deepseek-v4-pro'],
-    apiKeyLink: 'https://bailian.console.aliyun.com/cn-beijing?tab=plan#/efm/subscription/token-plan/enterprise',
-    apiKeyPlaceholder: 'sk-...',
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    iconName: 'Bot',
-    baseUrl: 'https://api.deepseek.com',
-    defaultModel: 'deepseek-v4-flash',
-    models: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-chat', 'deepseek-reasoner'],
-    apiKeyLink: 'https://platform.deepseek.com/api_keys',
-    apiKeyPlaceholder: 'sk-...',
-  },
-  {
-    id: 'volcano_ark_coding_plan',
-    name: '火山方舟 Coding Plan',
-    iconName: 'Sparkles',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
-    defaultModel: 'deepseek-v4-flash',
-    models: ['deepseek-v4-flash', 'doubao-seed-2.0-mini', 'doubao-seed-evolving', 'minimax-m3', 'kimi-k2.7-code', 'kimi-k3'],
-    apiKeyLink: 'https://console.volcengine.com/ark/region:cn-beijing/subscription/coding-plan?projectName=default',
-    apiKeyPlaceholder: 'sk-...',
-  },
-  {
-    id: 'zhipu',
-    name: '智谱 GLM',
-    iconName: 'Zap',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-4-plus',
-    models: ['glm-4-plus', 'glm-4-air', 'glm-4-flash', 'codegeex-4'],
-    apiKeyLink: 'https://open.bigmodel.cn/usercenter/apikeys',
-    apiKeyPlaceholder: 'API Key...',
-  },
-  {
-    id: 'minimax',
-    name: 'MiniMax',
-    iconName: 'Bot',
-    baseUrl: 'https://api.minimax.chat/v1',
-    defaultModel: 'MiniMax-Text-01',
-    models: ['MiniMax-Text-01', 'abab6.5s-chat'],
-    apiKeyLink: 'https://platform.minimaxi.com/user-center/basic-information/interface-key',
-    apiKeyPlaceholder: 'sk-...',
-  },
-  {
-    id: 'gemini',
-    name: 'Google Gemini',
-    iconName: 'Sparkles',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    defaultModel: 'gemini-2.0-flash',
-    models: ['gemini-2.0-flash', 'gemini-2.0-pro-exp-02-05', 'gemini-1.5-pro', 'gemini-1.5-flash'],
-    apiKeyLink: 'https://aistudio.google.com/app/apikey',
-    apiKeyPlaceholder: 'AIzaSy...',
-  },
-  {
-    id: 'custom',
-    name: '自定义 OpenAI 兼容接口',
-    iconName: 'Globe',
-    baseUrl: 'http://localhost:11434/v1',
-    defaultModel: 'llama3.3',
-    models: ['llama3.3', 'qwen2.5-coder:32b', 'deepseek-r1:14b'],
-    apiKeyLink: '',
-    apiKeyPlaceholder: 'sk-...（本地 Ollama 可选留空）',
-  },
-];
+export type { AiProviderConfig } from '../../config/aiProviders';
+export { AI_PROVIDERS } from '../../config/aiProviders';
 
 interface Props {
-  isOpen: boolean;
   onClose: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
@@ -131,7 +51,6 @@ interface Props {
 }
 
 export const SettingsModal: React.FC<Props> = ({
-  isOpen,
   onClose,
   theme,
   onToggleTheme,
@@ -141,7 +60,8 @@ export const SettingsModal: React.FC<Props> = ({
   totalMessages = 0,
   appVersion = 'unknown',
 }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'api' | 'appearance' | 'about'>('ai');
+  const { t, locale, setLocale } = useI18n();
+  const [activeTab, setActiveTab] = useState<'ai' | 'storage' | 'backup' | 'api' | 'appearance' | 'about'>('appearance');
 
   // API 服务状态与检测
   const [apiHealth, setApiHealth] = useState<{ status: string; latencyMs: number; ok: boolean; version?: string } | null>(null);
@@ -154,20 +74,23 @@ export const SettingsModal: React.FC<Props> = ({
       const data = await res.json();
       const latency = Math.round(performance.now() - start);
       if (data && data.ok) {
-        setApiHealth({ status: '服务正常运行中 (Active)', latencyMs: latency, ok: true, version: data.version });
+        setApiHealth({ status: t('settings.apiOk'), latencyMs: latency, ok: true, version: data.version });
       } else {
-        setApiHealth({ status: '服务响应异常', latencyMs: latency, ok: false });
+        setApiHealth({ status: t('settings.apiBad'), latencyMs: latency, ok: false });
       }
     } catch {
-      setApiHealth({ status: '连接失败 (服务未启动或端口被占用)', latencyMs: 0, ok: false });
+      setApiHealth({ status: t('settings.apiFail'), latencyMs: 0, ok: false });
     }
   };
 
   useEffect(() => {
-    if (isOpen && activeTab === 'api') {
+    if (activeTab === 'api') {
       checkApiHealth();
     }
-  }, [isOpen, activeTab]);
+  }, [activeTab]);
+
+  const storageBootstrapped = useRef(false);
+  const backupBootstrapped = useRef(false);
 
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -257,42 +180,47 @@ export const SettingsModal: React.FC<Props> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      api.getDatabasePathInfo().then((p) => {
-        if (p) setDbPath(p);
-      });
+    if (activeTab !== 'storage' || storageBootstrapped.current) return;
+    storageBootstrapped.current = true;
+    api.getDatabasePathInfo().then((p) => {
+      if (p) setDbPath(p);
+    });
+  }, [activeTab]);
 
-      api.getAppConfig().then((cfg) => {
-        if (cfg && cfg.backup?.target_path) {
-          setBackupTargetPath(cfg.backup.target_path);
-          if (typeof cfg.backup.auto_backup_enabled === 'boolean') {
-            setAutoBackupEnabled(cfg.backup.auto_backup_enabled);
-          }
-          refreshBackups(cfg.backup.target_path);
-        } else {
-          const savedPath = localStorage.getItem('agentdeck_backup_target_path');
-          if (savedPath) {
-            setBackupTargetPath(savedPath);
-            refreshBackups(savedPath);
-          }
-        }
-      });
+  useEffect(() => {
+    if (activeTab !== 'backup' || backupBootstrapped.current) return;
+    backupBootstrapped.current = true;
 
-      api.getCloudPresets().then((presets) => {
-        setCloudPresets(presets);
-        const currentSaved = localStorage.getItem('agentdeck_backup_target_path');
-        if (!currentSaved) {
-          const gdrive = presets.find((p) => p.id === 'gdrive' && p.available);
-          const defaultPath = gdrive
-            ? gdrive.path
-            : (presets.find((p) => p.id === 'documents')?.path || '~/Documents/AgentDeck_Backups');
-          setBackupTargetPath(defaultPath);
-          persistBackupSettings(defaultPath, true);
-          refreshBackups(defaultPath);
+    api.getAppConfig().then((cfg) => {
+      if (cfg && cfg.backup?.target_path) {
+        setBackupTargetPath(cfg.backup.target_path);
+        if (typeof cfg.backup.auto_backup_enabled === 'boolean') {
+          setAutoBackupEnabled(cfg.backup.auto_backup_enabled);
         }
-      });
-    }
-  }, [isOpen]);
+        refreshBackups(cfg.backup.target_path);
+      } else {
+        const savedPath = localStorage.getItem('agentdeck_backup_target_path');
+        if (savedPath) {
+          setBackupTargetPath(savedPath);
+          refreshBackups(savedPath);
+        }
+      }
+    });
+
+    api.getCloudPresets().then((presets) => {
+      setCloudPresets(presets);
+      const currentSaved = localStorage.getItem('agentdeck_backup_target_path');
+      if (!currentSaved) {
+        const gdrive = presets.find((p) => p.id === 'gdrive' && p.available);
+        const defaultPath = gdrive
+          ? gdrive.path
+          : (presets.find((p) => p.id === 'documents')?.path || '~/Documents/AgentDeck_Backups');
+        setBackupTargetPath(defaultPath);
+        persistBackupSettings(defaultPath, true);
+        refreshBackups(defaultPath);
+      }
+    });
+  }, [activeTab]);
 
   // 每个供应商的配置状态
   const [apiKeys, setApiKeys] = useState<Record<string, string>>(() => {
@@ -527,11 +455,9 @@ export const SettingsModal: React.FC<Props> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={onClose}
     >
       <div
@@ -545,8 +471,8 @@ export const SettingsModal: React.FC<Props> = ({
               <Sliders className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-sm font-bold theme-text-main">应用设置 (Settings)</h2>
-              <p className="text-xs theme-text-muted">配置 AI 模型高可用主备架构、多数据源增量同步与全局偏好</p>
+              <h2 className="text-sm font-bold theme-text-main">{t('settings.title')}</h2>
+              <p className="text-xs theme-text-muted">{t('settings.subtitle')}</p>
             </div>
           </div>
           <button
@@ -562,6 +488,17 @@ export const SettingsModal: React.FC<Props> = ({
           {/* 左侧 Tab 切换 */}
           <div className="w-48 border-r theme-border p-3 space-y-1 flex-shrink-0 theme-bg-sub">
             <button
+              onClick={() => setActiveTab('appearance')}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'appearance'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
+                }`}
+            >
+              <Sun className="h-4 w-4" />
+              <span>{t('settings.tabAppearance')}</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('ai')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'ai'
                   ? 'bg-blue-600 text-white shadow-xs'
@@ -569,7 +506,7 @@ export const SettingsModal: React.FC<Props> = ({
                 }`}
             >
               <Cpu className="h-4 w-4" />
-              <span>AI 供应商与主备</span>
+              <span>{t('settings.tabAi')}</span>
             </button>
 
             <button
@@ -580,7 +517,7 @@ export const SettingsModal: React.FC<Props> = ({
                 }`}
             >
               <Database className="h-4 w-4" />
-              <span>数据存储与源</span>
+              <span>{t('settings.tabStorage')}</span>
             </button>
 
             <button
@@ -591,7 +528,7 @@ export const SettingsModal: React.FC<Props> = ({
                 }`}
             >
               <Archive className="h-4 w-4" />
-              <span>数据备份与恢复</span>
+              <span>{t('settings.tabBackup')}</span>
             </button>
 
             <button
@@ -602,18 +539,7 @@ export const SettingsModal: React.FC<Props> = ({
                 }`}
             >
               <Server className="h-4 w-4" />
-              <span>REST API 服务</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('appearance')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all cursor-pointer ${activeTab === 'appearance'
-                  ? 'bg-blue-600 text-white shadow-xs'
-                  : 'theme-text-muted hover:theme-text-main hover:theme-bg-card'
-                }`}
-            >
-              <Sun className="h-4 w-4" />
-              <span>外观与主题</span>
+              <span>{t('settings.tabApi')}</span>
             </button>
 
             <button
@@ -624,7 +550,7 @@ export const SettingsModal: React.FC<Props> = ({
                 }`}
             >
               <Info className="h-4 w-4" />
-              <span>关于 AgentDeck</span>
+              <span>{t('settings.tabAbout')}</span>
             </button>
           </div>
 
@@ -637,10 +563,10 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Sparkles className="h-4 w-4 text-blue-500" />
-                      <span className="font-bold text-xs theme-text-main">高可用主备模型架构 (HA Dual-LLM Pipeline)</span>
+                      <span className="font-bold text-xs theme-text-main">{t('settings.haTitle')}</span>
                     </div>
                     <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                      <span className="theme-text-muted text-[11px]">自动故障降级 (Failover)</span>
+                      <span className="theme-text-muted text-[11px]">{t('settings.failover')}</span>
                       <input
                         type="checkbox"
                         checked={autoFallbackEnabled}
@@ -655,7 +581,7 @@ export const SettingsModal: React.FC<Props> = ({
                     <div className="p-2.5 rounded-xl border theme-border theme-bg-card flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-600 text-white rounded">
-                          主力 Primary
+                          {t('settings.primary')}
                         </span>
                         <span className="font-medium theme-text-main truncate">{primaryProvider.name}</span>
                       </div>
@@ -668,7 +594,7 @@ export const SettingsModal: React.FC<Props> = ({
                     <div className={`p-2.5 rounded-xl border theme-border theme-bg-card flex items-center justify-between ${!autoFallbackEnabled ? 'opacity-50' : ''}`}>
                       <div className="flex items-center gap-2">
                         <span className="px-1.5 py-0.5 text-[10px] font-bold bg-purple-600 text-white rounded">
-                          备用 Fallback
+                          {t('settings.fallback')}
                         </span>
                         <span className="font-medium theme-text-main truncate">{fallbackProvider.name}</span>
                       </div>
@@ -679,14 +605,14 @@ export const SettingsModal: React.FC<Props> = ({
                   </div>
 
                   <div className="flex items-center justify-between pt-1 text-[11px] theme-text-muted">
-                    <span>当主力模型遇到超时、限流 (429) 或服务器异常时，系统将无缝自动切换至备用模型。</span>
+                    <span>{t('settings.haHint')}</span>
                     <button
                       onClick={handleTestPipeline}
                       disabled={testingPipeline}
                       className="flex items-center gap-1 text-blue-500 hover:underline font-medium cursor-pointer flex-shrink-0"
                     >
                       {testingPipeline ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                      <span>一键测试主备链路</span>
+                      <span>{t('settings.testPipeline')}</span>
                     </button>
                   </div>
 
@@ -702,11 +628,15 @@ export const SettingsModal: React.FC<Props> = ({
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-[11px] font-mono opacity-90">
                         <div>
-                          主力 [{primaryProvider.name}]: {pipelineResult.primary.success ? `✅ 正常 (${pipelineResult.primary.latency_ms}ms)` : `❌ 失败 (${pipelineResult.primary.message})`}
+                          {pipelineResult.primary.success
+                            ? t('settings.primaryOk', { name: primaryProvider.name, ms: pipelineResult.primary.latency_ms })
+                            : t('settings.primaryFail', { name: primaryProvider.name, msg: pipelineResult.primary.message })}
                         </div>
                         {pipelineResult.fallback && (
                           <div>
-                            备用 [{fallbackProvider.name}]: {pipelineResult.fallback.success ? `✅ 正常 (${pipelineResult.fallback.latency_ms}ms)` : `❌ 失败 (${pipelineResult.fallback.message})`}
+                            {pipelineResult.fallback.success
+                              ? t('settings.fallbackOk', { name: fallbackProvider.name, ms: pipelineResult.fallback.latency_ms })
+                              : t('settings.fallbackFail', { name: fallbackProvider.name, msg: pipelineResult.fallback.message })}
                           </div>
                         )}
                       </div>
@@ -715,9 +645,9 @@ export const SettingsModal: React.FC<Props> = ({
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">AI 供应商列表</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.providerList')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    点击供应商卡片可配置 API 密钥并指定为主力或备用模型。
+                    {t('settings.providerListHint')}
                   </p>
                 </div>
 
@@ -747,19 +677,19 @@ export const SettingsModal: React.FC<Props> = ({
                             <span className="truncate font-semibold">{provider.name}</span>
                           </div>
                           {hasKey && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title="已配置 API Key" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" title={t('settings.keyConfigured')} />
                           )}
                         </div>
 
                         <div className="flex items-center gap-1 mt-1">
                           {isPrimary && (
                             <span className="px-1.5 py-0.2 text-[9px] font-bold bg-blue-600 text-white rounded">
-                              主力模型
+                              {t('settings.primaryModel')}
                             </span>
                           )}
                           {isFallback && (
                             <span className="px-1.5 py-0.2 text-[9px] font-bold bg-purple-600 text-white rounded">
-                              备用模型
+                              {t('settings.fallbackModel')}
                             </span>
                           )}
                           {!isPrimary && !isFallback && (
@@ -778,7 +708,7 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       {renderProviderIcon(activeProvider.iconName)}
-                      <span className="font-bold text-xs theme-text-main">{activeProvider.name} 配置详情</span>
+                      <span className="font-bold text-xs theme-text-main">{t('settings.configDetail', { name: activeProvider.name })}</span>
                     </div>
 
                     <div className="flex items-center gap-2">
@@ -787,7 +717,7 @@ export const SettingsModal: React.FC<Props> = ({
                           onClick={() => handleSetAsPrimary(activeProvider.id)}
                           className="px-2 py-1 text-[11px] rounded-lg border theme-border bg-blue-600/10 text-blue-500 hover:bg-blue-600 hover:text-white transition-all cursor-pointer"
                         >
-                          设为主力模型
+                          {t('settings.setPrimary')}
                         </button>
                       )}
                       {activeProvider.id !== fallbackProviderId && (
@@ -795,7 +725,7 @@ export const SettingsModal: React.FC<Props> = ({
                           onClick={() => handleSetAsFallback(activeProvider.id)}
                           className="px-2 py-1 text-[11px] rounded-lg border theme-border bg-purple-600/10 text-purple-500 hover:bg-purple-600 hover:text-white transition-all cursor-pointer"
                         >
-                          设为备用模型
+                          {t('settings.setFallback')}
                         </button>
                       )}
                       {activeProvider.apiKeyLink && (
@@ -805,7 +735,7 @@ export const SettingsModal: React.FC<Props> = ({
                           rel="noreferrer"
                           className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 ml-1"
                         >
-                          <span>获取 Key</span>
+                          <span>{t('settings.getKey')}</span>
                           <ExternalLink className="h-3 w-3" />
                         </a>
                       )}
@@ -816,7 +746,7 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-medium theme-text-muted flex items-center gap-1">
                       <Key className="h-3 w-3" />
-                      <span>API 密钥 (API Key)</span>
+                      <span>{t('settings.apiKey')}</span>
                     </label>
                     <input
                       type="password"
@@ -831,7 +761,7 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-medium theme-text-muted flex items-center gap-1">
                       <Globe className="h-3 w-3" />
-                      <span>接口端点 (Base URL)</span>
+                      <span>{t('settings.baseUrl')}</span>
                     </label>
                     <input
                       type="text"
@@ -845,7 +775,7 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="space-y-1.5">
                     <label className="text-[11px] font-medium theme-text-muted flex items-center gap-1">
                       <Cpu className="h-3 w-3" />
-                      <span>模型名称 (Model)</span>
+                      <span>{t('settings.model')}</span>
                     </label>
                     <div className="flex gap-2">
                       <input
@@ -860,7 +790,7 @@ export const SettingsModal: React.FC<Props> = ({
                           onChange={(val) => {
                             if (val) handleModelChange(val);
                           }}
-                          placeholder="常用预设..."
+                          placeholder={t('settings.presetPh')}
                           options={activeProvider.models.map((m) => ({
                             value: m,
                             label: m,
@@ -879,7 +809,7 @@ export const SettingsModal: React.FC<Props> = ({
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-all cursor-pointer shadow-xs"
                     >
                       {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                      <span>测试当前端点连通性</span>
+                      <span>{t('settings.testEndpoint')}</span>
                     </button>
 
                     {testResult && (
@@ -901,17 +831,17 @@ export const SettingsModal: React.FC<Props> = ({
             {activeTab === 'storage' && (
               <div className="space-y-5">
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">数据存储与同步 (Data Source)</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.storageTitle')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    AgentDeck 直接通过 Rust 本地 IPC 读取 SQLite 会话大库，数据全本地持久化。
+                    {t('settings.storageHint')}
                   </p>
                 </div>
 
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold theme-text-main">当前主会话库</span>
+                    <span className="text-xs font-semibold theme-text-main">{t('settings.dbTitle')}</span>
                     <span className="px-2 py-0.5 text-[10px] bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 rounded font-medium">
-                      正常挂载
+                      {t('settings.mounted')}
                     </span>
                   </div>
 
@@ -921,13 +851,13 @@ export const SettingsModal: React.FC<Props> = ({
 
                   <div className="grid grid-cols-2 gap-3 pt-2">
                     <div className="p-2.5 rounded-lg theme-bg-card border theme-border text-xs">
-                      <div className="theme-text-muted">聚合会话总数</div>
+                      <div className="theme-text-muted">{t('settings.aggSessions')}</div>
                       <div className="text-base font-bold theme-text-main font-mono mt-0.5">
                         {totalConversations.toLocaleString()}
                       </div>
                     </div>
                     <div className="p-2.5 rounded-lg theme-bg-card border theme-border text-xs">
-                      <div className="theme-text-muted">历史交互消息总数</div>
+                      <div className="theme-text-muted">{t('settings.histMessages')}</div>
                       <div className="text-base font-bold theme-text-main font-mono mt-0.5">
                         {totalMessages.toLocaleString()}
                       </div>
@@ -937,9 +867,9 @@ export const SettingsModal: React.FC<Props> = ({
 
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
                   <div>
-                    <div className="text-xs font-semibold theme-text-main">自动同步频率</div>
+                    <div className="text-xs font-semibold theme-text-main">{t('settings.syncFreq')}</div>
                     <p className="text-[11px] theme-text-muted mt-1">
-                      后台监听检测到源文件变化后，会按这里的频率轮询检查。无变化时不会弹通知。
+                      {t('settings.syncFreqHint')}
                     </p>
                   </div>
 
@@ -948,15 +878,15 @@ export const SettingsModal: React.FC<Props> = ({
                       value={autoSyncIntervalSec}
                       onChange={(val) => onAutoSyncIntervalChange(val)}
                       options={[
-                        { value: 30, label: '30 秒', subLabel: '高频探测' },
-                        { value: 60, label: '60 秒', subLabel: '推荐默认' },
-                        { value: 120, label: '120 秒', subLabel: '省电模式' },
-                        { value: 300, label: '300 秒', subLabel: '低频模式' },
+                        { value: 30, label: t('settings.sec30'), subLabel: t('settings.highFreq') },
+                        { value: 60, label: t('settings.sec60'), subLabel: t('settings.recommended') },
+                        { value: 120, label: t('settings.sec120'), subLabel: t('settings.powerSave') },
+                        { value: 300, label: t('settings.sec300'), subLabel: t('settings.lowFreq') },
                       ]}
                       className="min-w-[130px]"
                     />
                     <span className="text-[11px] theme-text-sub">
-                      默认 60 秒，建议在频繁切换 Agent 时保持 60 秒或更高。
+                      {t('settings.syncDefaultHint')}
                     </span>
                   </div>
                 </div>
@@ -966,17 +896,17 @@ export const SettingsModal: React.FC<Props> = ({
             {activeTab === 'backup' && (
               <div className="space-y-5">
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">数据备份与灾备恢复 (Backup & Disaster Recovery)</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.backupTitle')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    自动将 SQLite 会话库（热快照）与图片媒体资产打包为压缩包（.tar.gz），支持定期自动备份与跨端迁移。
+                    {t('settings.backupHint')}
                   </p>
                 </div>
 
                 {/* 备份存储目录配置 */}
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold theme-text-main">备份存储目标路径</span>
-                    <span className="text-[11px] theme-text-muted">支持本地、Google Drive、iCloud 或 NAS 挂载路径</span>
+                    <span className="text-xs font-semibold theme-text-main">{t('settings.backupPath')}</span>
+                    <span className="text-[11px] theme-text-muted">{t('settings.backupPathHint')}</span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -994,25 +924,25 @@ export const SettingsModal: React.FC<Props> = ({
                     <button
                       onClick={handleSelectFolder}
                       className="px-3 py-2 text-xs font-medium bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/30 rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shrink-0 shadow-xs"
-                      title="打开系统原生文件夹选择器"
+                      title={t('settings.openFolder')}
                     >
                       <Folder className="h-3.5 w-3.5" />
-                      <span>浏览...</span>
+                      <span>{t('settings.browse')}</span>
                     </button>
                     <button
                       onClick={() => refreshBackups(backupTargetPath)}
                       className="px-3 py-2 text-xs font-medium theme-bg-card hover:theme-bg-sub border theme-border theme-text-main rounded-lg transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
-                      title="刷新快照列表"
+                      title={t('settings.refreshList')}
                     >
                       <RefreshCw className={`h-3.5 w-3.5 ${loadingBackups ? 'animate-spin' : ''}`} />
-                      <span>刷新</span>
+                      <span>{t('settings.refresh')}</span>
                     </button>
                   </div>
 
                   {/* 快捷预设胶囊按钮 */}
                   <div className="pt-1">
                     <div className="text-[11px] theme-text-muted mb-1.5 flex items-center gap-1">
-                      <span>常用预设:</span>
+                      <span>{t('settings.presets')}</span>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {cloudPresets.map((preset) => (
@@ -1034,7 +964,7 @@ export const SettingsModal: React.FC<Props> = ({
                           {preset.id === 'documents' && <Folder className="h-3.5 w-3.5 text-amber-400" />}
                           <span>{preset.name}</span>
                           {preset.available && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title="已检测到该应用" />
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" title={t('settings.detected')} />
                           )}
                         </button>
                       ))}
@@ -1046,9 +976,9 @@ export const SettingsModal: React.FC<Props> = ({
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <div className="text-xs font-semibold theme-text-main">每日自动备份</div>
+                      <div className="text-xs font-semibold theme-text-main">{t('settings.autoBackup')}</div>
                       <p className="text-[11px] theme-text-muted mt-0.5">
-                        在后台静默执行热快照并压缩归档，自动保留最新的 3 份历史备份（超期旧备份自动修剪）。
+                        {t('settings.autoBackupHint')}
                       </p>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer">
@@ -1073,7 +1003,7 @@ export const SettingsModal: React.FC<Props> = ({
                       className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition-all cursor-pointer shadow-xs"
                     >
                       {isBackingUp ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Archive className="h-3.5 w-3.5" />}
-                      <span>{isBackingUp ? '正在执行备份...' : '立即执行备份 (Backup Now)'}</span>
+                      <span>{isBackingUp ? t('settings.backingUp') : t('settings.backupNow')}</span>
                     </button>
 
                     {backupFeedback && !isBackingUp && (
@@ -1113,9 +1043,9 @@ export const SettingsModal: React.FC<Props> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold theme-text-main flex items-center gap-1.5">
                       <FileArchive className="h-4 w-4 text-blue-500" />
-                      <span>现有快照备份 (最近 {backupList.length} / 3 份)</span>
+                      <span>{t('settings.snapshots', { n: backupList.length })}</span>
                     </span>
-                    <span className="text-[11px] theme-text-muted">单文件自包含归档包</span>
+                    <span className="text-[11px] theme-text-muted">{t('settings.selfContained')}</span>
                   </div>
 
                   {restoreFeedback && (
@@ -1133,7 +1063,7 @@ export const SettingsModal: React.FC<Props> = ({
 
                   {backupList.length === 0 ? (
                     <div className="text-center py-6 text-xs theme-text-muted border border-dashed theme-border rounded-lg">
-                      暂无备份文件，点击上方「立即执行备份」生成首份快照。
+                      {t('settings.noBackup')}
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1145,34 +1075,34 @@ export const SettingsModal: React.FC<Props> = ({
                           <div className="space-y-1">
                             <div className="flex items-center gap-2">
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                                快照 #{index + 1}
+                                {t('settings.snapshotN', { n: index + 1 })}
                               </span>
                               <span className="text-xs font-mono font-medium theme-text-main">{item.file_name}</span>
                             </div>
                             <div className="text-[11px] theme-text-muted flex items-center gap-3">
-                              <span>大小: {item.file_size_formatted}</span>
-                              <span>时间: {item.created_at ? new Date(item.created_at).toLocaleString() : '未知'}</span>
+                              <span>{t('settings.size', { size: item.file_size_formatted })}</span>
+                              <span>{t('settings.time', { time: item.created_at ? new Date(item.created_at).toLocaleString() : t('settings.unknown') })}</span>
                             </div>
                           </div>
 
                           <div>
                             {confirmRestoreFile === item.file_path ? (
                               <div className="flex items-center gap-2">
-                                <span className="text-[11px] text-amber-400 font-medium">确认还原覆盖当前库?</span>
+                                <span className="text-[11px] text-amber-400 font-medium">{t('settings.confirmRestore')}</span>
                                 <button
                                   onClick={() => handleRestoreBackup(item.file_path)}
                                   disabled={isRestoring}
                                   className="px-2.5 py-1 text-xs bg-amber-600 hover:bg-amber-500 text-white rounded-md cursor-pointer flex items-center gap-1"
                                 >
                                   {isRestoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                                  <span>确认</span>
+                                  <span>{t('settings.confirm')}</span>
                                 </button>
                                 <button
                                   onClick={() => setConfirmRestoreFile(null)}
                                   disabled={isRestoring}
                                   className="px-2 py-1 text-xs theme-bg-sub theme-text-muted hover:theme-text-main rounded-md cursor-pointer"
                                 >
-                                  取消
+                                  {t('settings.cancel')}
                                 </button>
                               </div>
                             ) : (
@@ -1185,7 +1115,7 @@ export const SettingsModal: React.FC<Props> = ({
                                 className="px-3 py-1.5 text-xs font-medium theme-bg-sub hover:bg-blue-600 hover:text-white border theme-border hover:border-blue-600 rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
                               >
                                 <RotateCcw className="h-3.5 w-3.5" />
-                                <span>从此快照还原</span>
+                                <span>{t('settings.restoreFrom')}</span>
                               </button>
                             )}
                           </div>
@@ -1200,9 +1130,9 @@ export const SettingsModal: React.FC<Props> = ({
             {activeTab === 'api' && (
               <div className="space-y-5">
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">REST API 服务 (API Service)</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.apiTitle')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    AgentDeck 嵌入式后台 HTTP 服务已启动，可用于外部脚本、Raycast 及第三方工具调用。
+                    {t('settings.apiHint')}
                   </p>
                 </div>
 
@@ -1211,7 +1141,7 @@ export const SettingsModal: React.FC<Props> = ({
                   {/* 状态与地址栏 */}
                   <div className="flex items-center justify-between flex-wrap gap-4">
                     <div className="space-y-1.5">
-                      <div className="text-xs font-semibold theme-text-muted">服务监听地址 (Base URL)</div>
+                      <div className="text-xs font-semibold theme-text-muted">{t('settings.listenAddr')}</div>
                       <div className="flex items-center gap-2">
                         <div className="px-3.5 py-2 rounded-xl bg-black/20 dark:bg-white/5 border theme-border font-mono text-sm text-blue-400 font-bold select-all">
                           http://127.0.0.1:8788
@@ -1219,19 +1149,19 @@ export const SettingsModal: React.FC<Props> = ({
                         <button
                           onClick={() => copyToClipboard('http://127.0.0.1:8788', 'base-url')}
                           className="px-3 py-2 text-xs theme-bg-card hover:theme-bg-sub border theme-border theme-text-muted hover:theme-text-main rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
-                          title="复制 Base URL"
+                          title={t('settings.copyBase')}
                         >
                           {copiedEndpoint === 'base-url' ? <Check className="h-4 w-4 text-emerald-500" /> : <Copy className="h-4 w-4" />}
-                          <span>{copiedEndpoint === 'base-url' ? '已复制' : '复制'}</span>
+                          <span>{copiedEndpoint === 'base-url' ? t('settings.copied') : t('settings.copy')}</span>
                         </button>
                       </div>
                     </div>
 
                     <div className="flex flex-col items-end gap-1.5">
-                      <div className="text-xs font-semibold theme-text-muted">服务状态</div>
+                      <div className="text-xs font-semibold theme-text-muted">{t('settings.apiStatus')}</div>
                       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-                        <span>{apiHealth?.ok ? '服务运行中 (Active)' : '服务已就绪 (Active)'}</span>
+                        <span>{apiHealth?.ok ? t('settings.apiActive') : t('settings.apiReady')}</span>
                         {apiHealth && (
                           <span className="text-[11px] font-mono text-emerald-400/80">
                             ({apiHealth.latencyMs}ms)
@@ -1247,9 +1177,9 @@ export const SettingsModal: React.FC<Props> = ({
                       <Lock className="h-4 w-4" />
                     </div>
                     <div className="text-xs space-y-1">
-                      <div className="font-bold text-blue-400">免 Token 鉴权 (No Token Required)</div>
+                      <div className="font-bold text-blue-400">{t('settings.noToken')}</div>
                       <p className="theme-text-muted text-xs leading-relaxed">
-                        当前服务默认严格限制在本机回环网卡（<code className="font-mono text-blue-300">127.0.0.1:8788</code>），外部网络无法直连，保证本机数据安全的同时方便脚本直接免签调用。
+                        {t('settings.noTokenHint')}
                       </p>
                     </div>
                   </div>
@@ -1259,7 +1189,7 @@ export const SettingsModal: React.FC<Props> = ({
                     onClick={() => api.openUrl('http://127.0.0.1:8788/docs')}
                     className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm rounded-xl transition-all duration-150 cursor-pointer shadow-xs flex items-center justify-center gap-2"
                   >
-                    <span>查看 API 文档</span>
+                    <span>{t('settings.viewDocs')}</span>
                     <ExternalLink className="h-4 w-4 opacity-90" />
                   </button>
                 </div>
@@ -1269,10 +1199,39 @@ export const SettingsModal: React.FC<Props> = ({
             {activeTab === 'appearance' && (
               <div className="space-y-5">
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">外观与主题偏好 (Appearance)</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.appearanceTitle')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    切换应用界面色彩风格，支持深色沉浸模式与清爽浅色模式。
+                    {t('settings.appearanceSub')}
                   </p>
+                </div>
+
+                <div>
+                  <div className="text-xs font-semibold theme-text-main mb-1">{t('settings.language')}</div>
+                  <p className="text-[11px] theme-text-muted mb-2">{t('settings.langAutoHint')}</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setLocale('zh')}
+                      className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                        locale === 'zh'
+                          ? 'bg-blue-600/15 border-blue-500 theme-text-main shadow-xs'
+                          : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted'
+                      }`}
+                    >
+                      {t('settings.langZh')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLocale('en')}
+                      className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                        locale === 'en'
+                          ? 'bg-blue-600/15 border-blue-500 theme-text-main shadow-xs'
+                          : 'theme-bg-sub theme-border hover:theme-border-hover theme-text-muted'
+                      }`}
+                    >
+                      {t('settings.langEn')}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -1286,8 +1245,8 @@ export const SettingsModal: React.FC<Props> = ({
                       }`}
                   >
                     <Moon className="h-6 w-6 text-indigo-400" />
-                    <span className="font-semibold">深色模式 (Dark)</span>
-                    <span className="text-[10px] theme-text-sub">极客黑蓝科技质感</span>
+                    <span className="font-semibold">{t('settings.dark')}</span>
+                    <span className="text-[10px] theme-text-sub">{t('settings.darkHint')}</span>
                   </div>
 
                   <div
@@ -1300,8 +1259,8 @@ export const SettingsModal: React.FC<Props> = ({
                       }`}
                   >
                     <Sun className="h-6 w-6 text-amber-500" />
-                    <span className="font-semibold">浅色模式 (Light)</span>
-                    <span className="text-[10px] theme-text-sub">清爽高对比度现代风格</span>
+                    <span className="font-semibold">{t('settings.light')}</span>
+                    <span className="text-[10px] theme-text-sub">{t('settings.lightHint')}</span>
                   </div>
                 </div>
               </div>
@@ -1310,23 +1269,23 @@ export const SettingsModal: React.FC<Props> = ({
             {activeTab === 'about' && (
               <div className="space-y-5">
                 <div>
-                  <h3 className="text-sm font-bold theme-text-main">关于 AgentDeck</h3>
+                  <h3 className="text-sm font-bold theme-text-main">{t('settings.aboutTitle')}</h3>
                   <p className="text-xs theme-text-muted mt-0.5">
-                    AI Coding 智能体全景数据资产与会话交互驾驶舱
+                    {t('settings.aboutSub')}
                   </p>
                 </div>
 
                 <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3 text-xs">
                   <div className="flex justify-between py-1 border-b theme-border-sub">
-                    <span className="theme-text-muted">应用版本</span>
+                    <span className="theme-text-muted">{t('settings.version')}</span>
                     <span className="font-mono font-medium theme-text-main">v{appVersion}</span>
                   </div>
                   <div className="flex justify-between py-1 border-b theme-border-sub">
-                    <span className="theme-text-muted">底层框架</span>
+                    <span className="theme-text-muted">{t('settings.stack')}</span>
                     <span className="font-mono font-medium theme-text-main">Tauri v2 + Rust + React 19</span>
                   </div>
                   <div className="flex justify-between py-1 border-b theme-border-sub">
-                    <span className="theme-text-muted">支持智能体平台</span>
+                    <span className="theme-text-muted">{t('settings.agents')}</span>
                     <span className="font-medium theme-text-main">Antigravity, Cursor, Claude Code, Codex, Hermes, WorkBuddy</span>
                   </div>
                 </div>

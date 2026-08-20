@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats } from '../../types';
 import { api, isTauri } from '../../api/tauriBridge';
+import { formatBeijingTime, formatRelativeTime } from '../../utils/date';
+import { useI18n } from '../../i18n';
 import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import { OpenInIdeMenu } from './OpenInIdeMenu';
@@ -57,6 +59,7 @@ export const BrowseView: React.FC<Props> = ({
   loadingStats,
   onRefreshStats,
 }) => {
+  const { t } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceStat[]>([]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [messages, setMessages] = useState<MessageItem[]>([]);
@@ -217,68 +220,7 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
-  const formatRelativeTime = (timeStr?: string) => {
-    if (!timeStr) return '';
-    try {
-      let str = timeStr.trim();
-      if (/^\d{10,13}$/.test(str)) {
-        const num = Number(str);
-        str = new Date(str.length === 10 ? num * 1000 : num).toISOString();
-      }
-      const d = new Date(str);
-      if (isNaN(d.getTime())) return timeStr;
-      const now = new Date();
-      const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
-      if (diffSec < 0 || diffSec < 60) return '刚刚';
-      const diffMin = Math.floor(diffSec / 60);
-      if (diffMin < 60) return `${diffMin} 分钟前`;
-      const diffHour = Math.floor(diffMin / 60);
-      if (diffHour < 24) return `${diffHour} 小时前`;
-      const diffDay = Math.floor(diffHour / 24);
-      if (diffDay < 30) return `${diffDay} 天前`;
-      const diffMonth = Math.floor(diffDay / 30);
-      if (diffMonth < 12) return `${diffMonth} 个月前`;
-      return `${Math.floor(diffDay / 365)} 年前`;
-    } catch {
-      return timeStr;
-    }
-  };
-
-  // 严格按北京时间 (UTC+8 / Asia/Shanghai) 格式化时间
-  const formatTime = (timeStr?: string, includeSeconds = false) => {
-    if (!timeStr) return '';
-    try {
-      let str = timeStr.trim();
-      if (/^\d{10,13}$/.test(str)) {
-        const num = Number(str);
-        str = new Date(str.length === 10 ? num * 1000 : num).toISOString();
-      }
-      const d = new Date(str);
-      if (!isNaN(d.getTime())) {
-        const parts = new Intl.DateTimeFormat('zh-CN', {
-          timeZone: 'Asia/Shanghai',
-          year: 'numeric',
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: includeSeconds ? '2-digit' : undefined,
-          hour12: false,
-        }).formatToParts(d);
-        const p = Object.fromEntries(parts.map((it) => [it.type, it.value]));
-        if (includeSeconds) {
-          return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
-        }
-        return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}`;
-      }
-    } catch {
-      // fallback
-    }
-    if (timeStr.length >= 16) {
-      return timeStr.substring(0, 16).replace('T', ' ');
-    }
-    return timeStr;
-  };
+  const formatTime = formatBeijingTime;
 
   // 会话消息按 User Turn 轮次进行分组
   interface MessageTurn {
@@ -317,7 +259,7 @@ export const BrowseView: React.FC<Props> = ({
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
             <input
               type="text"
-              placeholder="搜索目录…"
+              placeholder={t('nav.searchWorkspaces')}
               value={wsSearch}
               onChange={(e) => setWsSearch(e.target.value)}
               className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
@@ -337,9 +279,9 @@ export const BrowseView: React.FC<Props> = ({
           >
             <div className="flex items-center gap-2">
               <LayoutDashboard className="h-4 w-4" />
-              <span>全景数据大盘</span>
+              <span>{t('nav.dashboard')}</span>
             </div>
-            <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">大盘</span>
+            <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">{t('nav.dashboardBadge')}</span>
           </button>
 
           <button
@@ -352,7 +294,7 @@ export const BrowseView: React.FC<Props> = ({
           >
             <div className="flex items-center gap-2">
               <BookMarked className="h-4 w-4" />
-              <span>提示词库</span>
+              <span>{t('nav.prompts')}</span>
             </div>
             {promptLibraryCount > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] bg-violet-500/15 text-violet-500 rounded font-mono">
@@ -371,7 +313,7 @@ export const BrowseView: React.FC<Props> = ({
           >
             <div className="flex items-center gap-2">
               <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-              <span>我的收藏</span>
+              <span>{t('nav.starred')}</span>
             </div>
             {starredCount > 0 && (
               <span className="px-1.5 py-0.5 text-[10px] bg-amber-500/20 text-amber-500 rounded font-mono">
@@ -386,7 +328,7 @@ export const BrowseView: React.FC<Props> = ({
           {workspaces.map((ws) => {
             const shortName = ws.workspace_path
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
-              : '未分类';
+              : t('nav.uncategorized');
             const isActive = !isStarredView && !isPromptLibraryView && ws.workspace_path === selectedWorkspace;
             return (
               <div
@@ -410,12 +352,12 @@ export const BrowseView: React.FC<Props> = ({
                   )}
                 </div>
                 <div className="text-[10px] theme-text-sub truncate mt-0.5 font-mono">
-                  {ws.workspace_path || '未分类目录'}
+                  {ws.workspace_path || t('nav.uncategorizedPath')}
                 </div>
 
                 {/* Agent 来源标签 */}
                 <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                  <span className="text-[10px] font-mono theme-text-muted">{ws.cnt} 会话</span>
+                  <span className="text-[10px] font-mono theme-text-muted">{t('nav.sessionCount', { n: ws.cnt })}</span>
                   {ws.ag_cnt > 0 && (
                     <span className="px-1 py-0.2 text-[9px] bg-purple-500/15 text-purple-500 rounded font-mono">
                       AG {ws.ag_cnt}
@@ -449,9 +391,9 @@ export const BrowseView: React.FC<Props> = ({
                 </div>
 
                 <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
-                  <span>· 用户 {ws.user_message_count}</span>
+                  <span>· {t('nav.userCount', { n: ws.user_message_count })}</span>
                   <span>·</span>
-                  <span>全部 {ws.message_count}</span>
+                  <span>{t('nav.messageCount', { n: ws.message_count })}</span>
                 </div>
               </div>
             );
@@ -486,12 +428,12 @@ export const BrowseView: React.FC<Props> = ({
                   {isStarredView ? (
                     <>
                       <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                      <span>我的收藏</span>
+                      <span>{t('nav.starred')}</span>
                     </>
                   ) : (
                     <>
                       <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
-                      <span>会话列表 ({conversations.length})</span>
+                      <span>{t('conv.list', { n: conversations.length })}</span>
                     </>
                   )}
                 </div>
@@ -503,7 +445,7 @@ export const BrowseView: React.FC<Props> = ({
                       className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
                     >
                       <BarChart3 className="h-3 w-3" />
-                      <span>查看项目分析</span>
+                      <span>{t('conv.analysis')}</span>
                     </button>
                     <OpenInIdeMenu workspacePath={selectedWorkspace} />
                   </div>
@@ -514,7 +456,7 @@ export const BrowseView: React.FC<Props> = ({
                 <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
                 <input
                   type="text"
-                  placeholder="搜索会话标题…"
+                  placeholder={t('conv.search')}
                   value={convSearch}
                   onChange={(e) => setConvSearch(e.target.value)}
                   className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
@@ -540,7 +482,7 @@ export const BrowseView: React.FC<Props> = ({
                         {conv.is_starred && (
                           <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
                         )}
-                        <span>{conv.title || '未命名会话'}</span>
+                        <span>{conv.title || t('conv.untitled')}</span>
                       </div>
                     </div>
 
@@ -550,9 +492,9 @@ export const BrowseView: React.FC<Props> = ({
                         <span>{formatTime(conv.updated_at || conv.created_at)}</span>
                       </div>
                       <div className="flex items-center gap-1">
-                        <span>用户 {conv.user_message_count}</span>
+                        <span>{t('conv.userN', { n: conv.user_message_count })}</span>
                         <span>·</span>
-                        <span>全部 {conv.message_count}</span>
+                        <span>{t('nav.messageCount', { n: conv.message_count })}</span>
                       </div>
                     </div>
                   </div>
@@ -574,17 +516,17 @@ export const BrowseView: React.FC<Props> = ({
                         className="text-xs text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
                       >
                         <ArrowLeft className="h-3.5 w-3.5" />
-                        <span>返回项目分析</span>
+                        <span>{t('conv.backAnalysis')}</span>
                       </button>
                     </div>
                     <h2 className="text-base font-bold theme-text-main truncate flex items-center gap-2">
-                      <span>{currentConv.title || '未命名会话'}</span>
+                      <span>{currentConv.title || t('conv.untitled')}</span>
                     </h2>
                     <div className="flex items-center gap-3 text-xs theme-text-muted mt-1">
                       {getSourceBadge(currentConv.source_app)}
                       <span className="truncate font-mono">{currentConv.workspace_path}</span>
                       <span>·</span>
-                      <span>{messages.length} 条消息记录</span>
+                      <span>{t('conv.messages', { n: messages.length })}</span>
                     </div>
                   </div>
 
@@ -593,11 +535,11 @@ export const BrowseView: React.FC<Props> = ({
                     {/* 正序 / 倒序切换按钮 */}
                     <button
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
-                      title={`当前：${sortOrder === 'asc' ? '正序 (最早在前)' : '倒序 (最新在前)'}，点击切换`}
+                      title={sortOrder === 'asc' ? t('conv.sortTitleAsc') : t('conv.sortTitleDesc')}
                       className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs"
                     >
                       <ArrowUpDown className="h-3.5 w-3.5 text-blue-500" />
-                      <span>{sortOrder === 'asc' ? '正序' : '倒序'}</span>
+                      <span>{sortOrder === 'asc' ? t('conv.sortAsc') : t('conv.sortDesc')}</span>
                     </button>
 
                     <button
@@ -619,8 +561,8 @@ export const BrowseView: React.FC<Props> = ({
                       {messageTurns.length > 0 &&
                       Object.keys(expandedTurns).length === messageTurns.length &&
                       Object.values(expandedTurns).every(Boolean)
-                        ? '全部折叠'
-                        : '全部展开'}
+                        ? t('conv.collapseAll')
+                        : t('conv.expandAll')}
                     </button>
 
                     <button
@@ -636,7 +578,7 @@ export const BrowseView: React.FC<Props> = ({
                           currentConv.is_starred ? 'fill-amber-400 text-amber-400' : 'theme-text-sub'
                         }`}
                       />
-                      <span>{currentConv.is_starred ? '已收藏' : '收藏'}</span>
+                      <span>{currentConv.is_starred ? t('conv.starredBtn') : t('conv.star')}</span>
                     </button>
                   </div>
                 </div>
@@ -645,10 +587,10 @@ export const BrowseView: React.FC<Props> = ({
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {loadingConv ? (
                     <div className="flex h-full items-center justify-center theme-text-muted">
-                      <Clock className="h-6 w-6 animate-spin mr-2" /> 正在加载对话流…
+                      <Clock className="h-6 w-6 animate-spin mr-2" /> {t('conv.loading')}
                     </div>
                   ) : displayTurns.length === 0 ? (
-                    <div className="py-12 text-center text-xs theme-text-sub">此会话暂无消息记录</div>
+                    <div className="py-12 text-center text-xs theme-text-sub">{t('conv.empty')}</div>
                   ) : (
                     displayTurns.map((turn) => {
                       const isExpanded = !!expandedTurns[turn.origIndex];
@@ -670,7 +612,7 @@ export const BrowseView: React.FC<Props> = ({
                                 {isExpanded ? '▼' : '▶'}
                               </span>
                               <span className="px-1.5 py-0.5 text-[10px] font-bold bg-blue-600 text-white rounded">
-                                用户
+                                {t('conv.user')}
                               </span>
                               {userMsg && (
                                 <span className="text-[11px] font-mono theme-text-sub">
@@ -686,9 +628,9 @@ export const BrowseView: React.FC<Props> = ({
 
                             {replyCount > 0 && (
                               <div className="flex items-center gap-1 text-[11px] font-medium text-blue-500 hover:underline">
-                                <span>{replyCount} 条 Agent 回复</span>
+                                <span>{t('conv.agentReplyCount', { n: replyCount })}</span>
                                 <span className="text-[10px] theme-text-muted">
-                                  {isExpanded ? '(点击收起)' : '(点击展开)'}
+                                  {isExpanded ? t('conv.clickCollapse') : t('conv.clickExpand')}
                                 </span>
                               </div>
                             )}
@@ -720,13 +662,13 @@ export const BrowseView: React.FC<Props> = ({
                                       >
                                         <img
                                           src={img.src}
-                                          alt={`附图 ${i + 1}`}
+                                          alt={t('conv.imageAlt', { n: i + 1 })}
                                           loading="lazy"
                                           className="w-full h-full object-contain max-h-60 rounded-xl transition-transform group-hover:scale-105"
                                         />
                                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs gap-1 font-medium pointer-events-none">
                                           <Maximize2 className="h-3.5 w-3.5" />
-                                          <span>点击放大</span>
+                                          <span>{t('conv.zoom')}</span>
                                         </div>
                                       </div>
                                     ))}
@@ -756,7 +698,7 @@ export const BrowseView: React.FC<Props> = ({
                                     <div className="flex items-center justify-between text-[10px] theme-text-sub pb-1.5 border-b theme-border-sub">
                                       <div className="flex items-center gap-2">
                                         <span className="px-1.5 py-0.2 rounded font-semibold bg-purple-500/15 text-purple-400 border border-purple-500/30">
-                                          {m.sender === 'system' ? '系统' : 'Agent / 模型'}
+                                          {m.sender === 'system' ? t('conv.system') : t('conv.agent')}
                                         </span>
                                         <span className="font-mono">step {m.step_index}</span>
                                         {m.created_at && (
@@ -771,7 +713,7 @@ export const BrowseView: React.FC<Props> = ({
                                       <details className="rounded-lg border theme-border theme-bg-card p-2.5 text-xs text-slate-400 group">
                                         <summary className="cursor-pointer font-medium text-[11px] select-none flex items-center gap-1.5 text-purple-400">
                                           <Sparkles className="h-3 w-3" />
-                                          <span>思考与推理过程 (Thinking)</span>
+                                          <span>{t('conv.thinking')}</span>
                                         </summary>
                                         <div className="mt-2 pt-2 border-t theme-border whitespace-pre-wrap font-mono text-[10.5px] leading-relaxed text-slate-400">
                                           {m.thinking}
@@ -805,13 +747,13 @@ export const BrowseView: React.FC<Props> = ({
                                             >
                                               <img
                                                 src={img.src}
-                                                alt={`回复附图 ${i + 1}`}
+                                                alt={t('conv.replyImageAlt', { n: i + 1 })}
                                                 loading="lazy"
                                                 className="w-full h-full object-contain max-h-60 rounded-xl transition-transform group-hover:scale-105"
                                               />
                                               <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white text-xs gap-1 font-medium pointer-events-none">
                                                 <Maximize2 className="h-3.5 w-3.5" />
-                                                <span>点击放大</span>
+                                                <span>{t('conv.zoom')}</span>
                                               </div>
                                             </div>
                                           ))}
@@ -830,9 +772,9 @@ export const BrowseView: React.FC<Props> = ({
                                             <summary className="cursor-pointer font-medium text-blue-500 flex items-center justify-between">
                                               <div className="flex items-center gap-1.5">
                                                 <Wrench className="h-3 w-3" />
-                                                <span>Tool: {tc.tool_name || tc.name || '工具调用'}</span>
+                                                <span>Tool: {tc.tool_name || tc.name || t('conv.toolCall')}</span>
                                               </div>
-                                              <span className="text-[10px] theme-text-sub">查看参数</span>
+                                              <span className="text-[10px] theme-text-sub">{t('conv.viewArgs')}</span>
                                             </summary>
                                             {tc.args && (
                                               <pre className="mt-1.5 text-[10px] theme-text-muted overflow-x-auto p-2 theme-bg-main rounded border theme-border-sub">
@@ -862,7 +804,7 @@ export const BrowseView: React.FC<Props> = ({
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
                 <Sparkles className="h-10 w-10 mb-2 opacity-50" />
-                <p className="text-sm">从左侧选择一个项目工作区查看全景分析</p>
+                <p className="text-sm">{t('conv.pickWorkspace')}</p>
               </div>
             )}
           </main>
@@ -882,13 +824,13 @@ export const BrowseView: React.FC<Props> = ({
             <button
               onClick={() => setLightboxImg(null)}
               className="absolute -top-10 right-0 text-white/80 hover:text-white p-1.5 rounded-lg bg-black/50 hover:bg-black/80 transition-all cursor-pointer"
-              title="关闭预览"
+              title={t('conv.closePreview')}
             >
               <X className="h-5 w-5" />
             </button>
             <img
               src={lightboxImg}
-              alt="原图预览"
+              alt={t('conv.previewAlt')}
               className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl border border-white/15"
             />
           </div>

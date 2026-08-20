@@ -5,7 +5,7 @@ import type {
   WorkspaceModuleBlock,
   AnalysisUserMessage,
 } from '../types';
-import { AI_PROVIDERS } from '../components/settings/SettingsModal';
+import { AI_PROVIDERS } from '../config/aiProviders';
 
 export interface PipelineProgress {
   stage: 'collect' | 'batch' | 'merge' | 'report' | 'done' | 'error';
@@ -666,6 +666,7 @@ function generateLocalRuleBasedModules(fineBlocks: WorkspaceFineBlock[]): Worksp
 /** 报告上下文预算（字符）。每个 Block 压成一句话后再装填 */
 const REPORT_CONTEXT_CHAR_BUDGET = 10_000;
 const REPORT_MAX_TOKENS = 3_500;
+const REPORT_MAX_CHARS = 3_000;
 const BLOCK_SENTENCE_MAX = 80;
 
 function firstSentence(text: string, max = BLOCK_SENTENCE_MAX): string {
@@ -676,7 +677,6 @@ function firstSentence(text: string, max = BLOCK_SENTENCE_MAX): string {
   return sentence.length > max ? `${sentence.slice(0, max)}…` : sentence;
 }
 
-/** 标题 + 摘要首句，合成一句 */
 function blockOneLiner(title: string, summary: string, max = BLOCK_SENTENCE_MAX): string {
   const head = (title || '').replace(/\s+/g, ' ').trim();
   const body = firstSentence(summary, max);
@@ -703,7 +703,7 @@ function slimFinesForReport(fines: WorkspaceFineBlock[], budgetChars: number): s
   const packed: string[] = [];
   let used = 0;
   for (const f of fines || []) {
-    const date = f.start_date ? `${f.start_date} ` : '';
+    const date = f.start_date ? `${f.start_date.slice(0, 10)} ` : '';
     const line = `${date}${blockOneLiner(f.title, f.summary)}`.trim();
     if (!line) continue;
     if (used + line.length + 1 > budgetChars) break;
@@ -825,7 +825,7 @@ export async function runGenerateReportPipeline(
 ## 4. 研发节奏与工作流分析
 ## 5. 后续演进建议与待办规划
 
-写作规范：专业、简洁；可用表格；严禁编造模块或数字；直接输出 Markdown。不要逐条复述原文。
+写作规范：专业、可读；全文控制在 ${REPORT_MAX_CHARS} 字以内；可用表格；严禁编造模块或数字；直接输出 Markdown。不要逐条复述原文清单。
 
 【统计】
 项目: ${stats.workspace_short || '未命名'}
@@ -845,7 +845,7 @@ ${fineLines || '（无）'}`;
     endpoints.primary,
     endpoints.fallback,
     [
-      { role: 'system', content: '你输出结构严谨的 Markdown 技术架构报告。不要逐条复述输入的一句话列表。' },
+      { role: 'system', content: `你输出结构严谨的 Markdown 技术架构报告，全文不超过 ${REPORT_MAX_CHARS} 字。不要逐条复述输入的一句话列表。` },
       { role: 'user', content: prompt },
     ],
     REPORT_MAX_TOKENS
@@ -864,7 +864,16 @@ ${fineLines || '（无）'}`;
     );
   }
 
-  await api.saveWorkspaceReport(workspacePath, reportMd);
+  try {
+    await api.saveWorkspaceReport(workspacePath, reportMd);
+  } catch (saveErr) {
+    console.error('[R&D Analysis] 报告入库失败:', saveErr);
+    return {
+      success: false,
+      reportMd,
+      message: `报告已生成但入库失败: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`,
+    };
+  }
 
   onProgress?.({
     stage: 'done',

@@ -3,12 +3,13 @@ import { ChevronDown, Loader2 } from 'lucide-react';
 import { api } from '../../api/tauriBridge';
 import type { IdeAppStatus } from '../../types';
 import { IdeIcon } from './ideIcons';
+import { useI18n, type MessageKey } from '../../i18n';
 
-const IDE_HINT: Record<string, string> = {
-  cursor: '用 Cursor 打开此项目',
-  antigravity: '用 Antigravity 打开此项目',
-  claude: '在终端进入目录并启动 claude',
-  codex: '在终端进入目录并启动 codex',
+const IDE_HINT_KEYS: Record<string, MessageKey> = {
+  cursor: 'ide.hint.cursor',
+  antigravity: 'ide.hint.antigravity',
+  claude: 'ide.hint.claude',
+  codex: 'ide.hint.codex',
 };
 
 const DEFAULT_IDES: IdeAppStatus[] = [
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [apps, setApps] = useState<IdeAppStatus[]>(DEFAULT_IDES);
   const [openingId, setOpeningId] = useState<string | null>(null);
@@ -80,7 +82,7 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
     <div ref={containerRef} className="relative">
       <button
         type="button"
-        title={`在 ${primary.label} 或其他 AI IDE 中打开`}
+        title={t('ide.openIn', { name: primary.label })}
         onClick={() => {
           setOpen((prev) => !prev);
           setError(null);
@@ -96,7 +98,7 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1.5 w-56 rounded-xl p-1 shadow-xl border theme-border theme-bg-card">
           <div className="px-2.5 py-1.5 text-[10px] font-semibold theme-text-sub tracking-wide">
-            在 AI IDE 中打开
+            {t('ide.menuTitle')}
           </div>
           {apps.map((ide) => {
             const disabled = !ide.installed || openingId !== null;
@@ -123,15 +125,13 @@ export const OpenInIdeMenu: React.FC<Props> = ({ workspacePath }) => {
                   <span className="block text-xs font-medium theme-text-main">
                     {ide.label}
                     {!ide.installed && (
-                      <span className="ml-1 text-[10px] font-normal theme-text-sub">未安装</span>
+                      <span className="ml-1 text-[10px] font-normal theme-text-sub">{t('ide.notInstalled')}</span>
                     )}
                   </span>
                   <span className="block text-[10px] theme-text-sub truncate">
                     {ide.installed
-                      ? IDE_HINT[ide.id] || (ide.kind === 'cli' ? '在终端打开该目录' : '打开此项目')
-                      : ide.kind === 'cli'
-                        ? '未在 PATH 中找到命令'
-                        : '未找到应用程序'}
+                      ? (IDE_HINT_KEYS[ide.id] ? t(IDE_HINT_KEYS[ide.id]) : t(ide.kind === 'cli' ? 'ide.openTerminal' : 'ide.openProject'))
+                      : t(ide.kind === 'cli' ? 'ide.noPath' : 'ide.noApp')}
                   </span>
                 </span>
               </button>

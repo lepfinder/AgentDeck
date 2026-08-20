@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import type { PunchcardSlot } from '../../types';
 import { Clock, Crown, TrendingUp } from 'lucide-react';
+import { translate, useI18n } from '../../i18n';
 
 interface Props {
   punchcardMsgs: PunchcardSlot[];
@@ -8,19 +9,20 @@ interface Props {
 }
 
 const getTimePeriodLabel = (hour: number) => {
-  if (hour >= 0 && hour < 6) return '凌晨 / 深夜';
-  if (hour >= 6 && hour < 9) return '清晨 / 早晨';
-  if (hour >= 9 && hour < 12) return '上午黄金时段';
-  if (hour >= 12 && hour < 14) return '午间休息 / 整理';
-  if (hour >= 14 && hour < 18) return '下午高效专注期';
-  if (hour >= 18 && hour < 21) return '傍晚 / 晚间编码';
-  return '夜间灵感爆发';
+  if (hour >= 0 && hour < 6) return translate('punch.slot0');
+  if (hour >= 6 && hour < 9) return translate('punch.slot6');
+  if (hour >= 9 && hour < 12) return translate('punch.slot9');
+  if (hour >= 12 && hour < 14) return translate('punch.slot12');
+  if (hour >= 14 && hour < 18) return translate('punch.slot14');
+  if (hour >= 18 && hour < 21) return translate('punch.slot18');
+  return translate('punch.slot21');
 };
 
 export const HourlyPunchcardCard: React.FC<Props> = ({
   punchcardMsgs,
   punchcardConvs,
 }) => {
+  const { t } = useI18n();
   const [tab, setTab] = useState<'msgs' | 'convs'>('msgs');
   const [hovered, setHovered] = useState<{
     hour: number;
@@ -84,7 +86,7 @@ export const HourlyPunchcardCard: React.FC<Props> = ({
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
             <Clock className="h-4 w-4 text-emerald-500" />
-            24 小时活跃时段分布 (Hourly Punchcard)
+            {t('punch.title')}
           </h2>
 
           {/* 双维切换 Tab */}
@@ -98,7 +100,7 @@ export const HourlyPunchcardCard: React.FC<Props> = ({
                   : 'theme-text-muted hover:theme-text-main'
               }`}
             >
-              按消息数
+              {t('dashboard.byMessages')}
             </button>
             <button
               type="button"
@@ -109,7 +111,7 @@ export const HourlyPunchcardCard: React.FC<Props> = ({
                   : 'theme-text-muted hover:theme-text-main'
               }`}
             >
-              按会话数
+              {t('dashboard.bySessions')}
             </button>
           </div>
         </div>
@@ -140,17 +142,17 @@ export const HourlyPunchcardCard: React.FC<Props> = ({
 
         {/* 底部图例 */}
         <div className="flex items-center justify-between text-[11px] theme-text-muted pt-2 border-t theme-border-sub select-none">
-          <span>0h (午夜)</span>
+          <span>{t('punch.midnight')}</span>
           <div className="flex items-center gap-1.5">
-            <span>低</span>
+            <span>{t('punch.low')}</span>
             <span className="w-3 h-3 rounded punchcard-cell lvl-0 inline-block border theme-border-sub" />
             <span className="w-3 h-3 rounded punchcard-cell lvl-1 inline-block" />
             <span className="w-3 h-3 rounded punchcard-cell lvl-2 inline-block" />
             <span className="w-3 h-3 rounded punchcard-cell lvl-3 inline-block" />
             <span className="w-3 h-3 rounded punchcard-cell lvl-4 inline-block" />
-            <span>高</span>
+            <span>{t('punch.high')}</span>
           </div>
-          <span>23h (深夜)</span>
+          <span>{t('punch.late')}</span>
         </div>
       </div>
 
@@ -189,6 +191,7 @@ const PunchcardTooltip: React.FC<TooltipProps> = ({
   containerWidth,
   isPeak,
 }) => {
+  const { t } = useI18n();
   const periodLabel = getTimePeriodLabel(hour);
   const hourFormatted = `${hour.toString().padStart(2, '0')}:00 - ${hour.toString().padStart(2, '0')}:59`;
   const msgCount = msgSlot?.count ?? 0;
@@ -227,11 +230,11 @@ const PunchcardTooltip: React.FC<TooltipProps> = ({
           {isPeak ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
               <Crown className="h-3 w-3 text-amber-400" />
-              <span>全天峰值</span>
+              <span>{t('punch.dayPeak')}</span>
             </span>
           ) : !hasActivity ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
-              闲置
+              {t('punch.idle')}
             </span>
           ) : null}
         </div>
@@ -242,20 +245,20 @@ const PunchcardTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                消息总数
+                {t('punch.msgTotal')}
               </span>
               <span className="font-mono font-semibold text-blue-300">
-                {msgCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">条</span>
+                {msgCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitTiao')}</span>
               </span>
             </div>
 
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                活跃会话
+                {t('punch.sessions')}
               </span>
               <span className="font-mono font-semibold text-emerald-300">
-                {convCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">个</span>
+                {convCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitGe')}</span>
               </span>
             </div>
 
@@ -263,7 +266,7 @@ const PunchcardTooltip: React.FC<TooltipProps> = ({
               <div className="pt-1.5 mt-1.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
                 <span className="flex items-center gap-1 text-neutral-300">
                   <TrendingUp className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>相对全天 peak:</span>
+                  <span>{t('punch.vsPeak')}</span>
                 </span>
                 <span className="font-mono text-cyan-300 font-medium">
                   {msgSlot.percent}%
@@ -273,7 +276,7 @@ const PunchcardTooltip: React.FC<TooltipProps> = ({
           </div>
         ) : (
           <div className="py-1 text-center text-neutral-400 text-[11px]">
-            历史上该时段暂无活跃交互
+            {t('punch.empty')}
           </div>
         )}
       </div>

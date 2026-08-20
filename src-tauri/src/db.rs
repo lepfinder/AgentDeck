@@ -518,6 +518,11 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     );
     let _ = conn.execute("ALTER TABLE workspace_blocks_modules ADD COLUMN message_fingerprint TEXT NOT NULL DEFAULT ''", []);
 
+    let _ = conn.execute(
+        "ALTER TABLE workspace_reports ADD COLUMN updated_at TEXT",
+        [],
+    );
+
     // 兼容短暂出现过的 file_path 列名（正式库为 source_path）
     let _ = conn.execute(
         "ALTER TABLE sync_state RENAME COLUMN file_path TO source_path",
@@ -2048,6 +2053,20 @@ pub fn save_workspace_report(
     workspace_path: &str,
     report_md: &str,
 ) -> Result<()> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS workspace_reports (
+            workspace_path TEXT PRIMARY KEY,
+            report_md TEXT NOT NULL DEFAULT '',
+            updated_at TEXT
+        );
+        "#,
+    )?;
+    let _ = conn.execute(
+        "ALTER TABLE workspace_reports ADD COLUMN updated_at TEXT",
+        [],
+    );
+
     let now = Utc::now().to_rfc3339();
     conn.execute(
         r#"

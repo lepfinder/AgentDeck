@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { api, isTauri } from './api/tauriBridge';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -6,7 +6,7 @@ import type { DashboardStats, SyncResultInfo } from './types';
 import { formatBeijingTime } from './utils/date';
 import { BrowseView } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
-import { SettingsModal } from './components/settings/SettingsModal';
+import { useI18n } from './i18n';
 import {
   Search,
   Command,
@@ -19,12 +19,21 @@ import {
 
 const AUTO_SYNC_INTERVAL_KEY = 'agentdeck_auto_sync_interval_sec';
 
+const SettingsModal = lazy(() =>
+  import('./components/settings/SettingsModal').then((m) => ({ default: m.SettingsModal }))
+);
+
+function prefetchSettingsModal() {
+  void import('./components/settings/SettingsModal');
+}
+
 function getInitialAutoSyncIntervalSec(): number {
   const saved = Number(localStorage.getItem(AUTO_SYNC_INTERVAL_KEY) || '60');
   return Number.isFinite(saved) && saved >= 15 ? saved : 60;
 }
 
 export function App() {
+  const { t, locale, setLocale } = useI18n();
   const [isStarredView, setIsStarredView] = useState(false);
   const [isPromptLibraryView, setIsPromptLibraryView] = useState(false);
   const [promptLibraryCount, setPromptLibraryCount] = useState(0);
@@ -176,7 +185,7 @@ export function App() {
       }
     } catch (err) {
       console.error('Sync failed:', err);
-      showSyncToast('同步失败，请检查数据源', 4000);
+      showSyncToast(t('header.syncFailed'), 4000);
     } finally {
       setIsSyncing(false);
     }
@@ -220,7 +229,7 @@ export function App() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleLogoClick}
-            title="点击返回全景大盘"
+            title={t('header.backDashboard')}
             className="flex items-center gap-2 hover:opacity-85 transition-opacity cursor-pointer group"
           >
             <img
@@ -241,7 +250,7 @@ export function App() {
           <button
             onClick={() => handleTriggerSync(false)}
             disabled={isSyncing}
-            title="刷新并增量同步所有 Agent 会话 (快捷键 ⌘R / Ctrl+R)"
+            title={t('header.refreshTitle')}
             className="flex items-center gap-1.5 px-2.5 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm group"
           >
             <RefreshCw
@@ -251,7 +260,7 @@ export function App() {
                   : 'text-blue-400 group-hover:rotate-180 transition-transform duration-500'
               }`}
             />
-            <span>{isSyncing ? '刷新中…' : '刷新'}</span>
+            <span>{isSyncing ? t('header.refreshing') : t('header.refresh')}</span>
             <div className="flex items-center gap-0.5 text-[10px] theme-text-sub theme-bg-input px-1.5 py-0.5 rounded border theme-border">
               <Command className="h-2.5 w-2.5" />
               <span>R</span>
@@ -263,17 +272,17 @@ export function App() {
             className="flex items-center gap-2 px-3 py-1 text-xs theme-bg-sub hover:opacity-90 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-sm"
           >
             <Search className="h-3.5 w-3.5 text-blue-500" />
-            <span>搜索全量会话…</span>
+            <span>{t('header.search')}</span>
             <div className="flex items-center gap-0.5 text-[10px] theme-text-sub theme-bg-input px-1.5 py-0.5 rounded border theme-border">
               <Command className="h-2.5 w-2.5" />
               <span>K</span>
             </div>
           </button>
 
-          {/* 浅色 / 深色模式切换按钮 */}
+          {/* 浅色 / 深色模式切换 */}
           <button
             onClick={toggleTheme}
-            title={theme === 'dark' ? '切换为浅色模式' : '切换为深色模式'}
+            title={theme === 'dark' ? t('header.themeLight') : t('header.themeDark')}
             className="p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
           >
             {theme === 'dark' ? (
@@ -283,10 +292,23 @@ export function App() {
             )}
           </button>
 
-          {/* 设置入口按钮 */}
+          {/* 中 / EN 语言切换 */}
           <button
+            onClick={() => setLocale(locale === 'zh' ? 'en' : 'zh')}
+            title={locale === 'zh' ? t('header.langToEn') : t('header.langToZh')}
+            className="p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer min-w-[2rem] flex items-center justify-center"
+          >
+            <span className="text-[11px] font-semibold leading-none tracking-tight">
+              {locale === 'zh' ? '中' : 'EN'}
+            </span>
+          </button>
+
+          {/* 设置入口 */}
+          <button
+            onMouseEnter={prefetchSettingsModal}
+            onFocus={prefetchSettingsModal}
             onClick={() => setIsSettingsOpen(true)}
-            title="应用设置 (AI 供应商、数据源与偏好设置 Cmd+,)"
+            title={t('header.settingsTitle')}
             className="p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
           >
             <Settings className="h-4 w-4" />
@@ -344,8 +366,8 @@ export function App() {
       {/* 底部全局状态栏（低对比度浅色样式，安静不喧宾夺主） */}
       <footer className="h-6 border-t theme-border-sub theme-bg-header/40 px-3 flex items-center justify-between text-[10.5px] theme-text-sub font-mono select-none flex-shrink-0 z-10 opacity-75 hover:opacity-100 transition-opacity">
         <div className="flex items-center gap-1.5 truncate pr-4">
-          <span className="font-medium">AI 历史会话</span>
-          <span>{stats?.total_conversations?.toLocaleString() ?? 0} 会话</span>
+          <span className="font-medium">{t('footer.history')}</span>
+          <span>{t('footer.sessions', { n: (stats?.total_conversations ?? 0).toLocaleString() })}</span>
           {(() => {
             const parts = (stats?.agent_comparison_convs || [])
               .filter((a) => a.count > 0)
@@ -354,11 +376,11 @@ export function App() {
               <span>（{parts.join(' · ')}）</span>
             ) : null;
           })()}
-          <span>· 用户 {stats?.total_user_messages?.toLocaleString() ?? 0}</span>
-          <span>· 全部 {stats?.total_messages?.toLocaleString() ?? 0}</span>
+          <span>· {t('footer.users', { n: (stats?.total_user_messages ?? 0).toLocaleString() })}</span>
+          <span>· {t('footer.all', { n: (stats?.total_messages ?? 0).toLocaleString() })}</span>
           {stats?.last_sync_time && (
             <span>
-              · 同步 {formatBeijingTime(stats.last_sync_time)}
+              · {t('footer.synced', { time: formatBeijingTime(stats.last_sync_time) })}
             </span>
           )}
         </div>
@@ -366,10 +388,10 @@ export function App() {
         <div className="flex items-center gap-3 flex-shrink-0 text-[10px]">
           <div
             className="flex items-center gap-1"
-            title="本地多源 Agent 会话文件监听中，有更新将自动增量同步"
+            title={t('footer.watchingTitle')}
           >
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500/70 animate-pulse" />
-            <span>监听中</span>
+            <span>{t('footer.watching')}</span>
           </div>
           <span className="opacity-80 font-medium">AgentDeck v{appVersion}</span>
         </div>
@@ -383,17 +405,29 @@ export function App() {
       />
 
       {/* 应用设置弹窗 (AI 供应商、数据源与外观) */}
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-        autoSyncIntervalSec={autoSyncIntervalSec}
-        onAutoSyncIntervalChange={setAutoSyncIntervalSec}
-        totalConversations={stats?.total_conversations ?? 0}
-        totalMessages={stats?.total_messages ?? 0}
-        appVersion={appVersion}
-      />
+      {isSettingsOpen && (
+        <Suspense
+          fallback={
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onClick={() => setIsSettingsOpen(false)}
+            >
+              <div className="w-full max-w-4xl h-[620px] max-h-[85vh] min-h-[500px] theme-bg-main border theme-border rounded-2xl shadow-2xl" />
+            </div>
+          }
+        >
+          <SettingsModal
+            onClose={() => setIsSettingsOpen(false)}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            autoSyncIntervalSec={autoSyncIntervalSec}
+            onAutoSyncIntervalChange={setAutoSyncIntervalSec}
+            totalConversations={stats?.total_conversations ?? 0}
+            totalMessages={stats?.total_messages ?? 0}
+            appVersion={appVersion}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

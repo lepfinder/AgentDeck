@@ -3,6 +3,7 @@ import type { ConversationItem, SearchResultItem } from '../../types';
 import { api } from '../../api/tauriBridge';
 import { Clock3, Search, X } from 'lucide-react';
 import { formatRelativeTime } from '../../utils/date';
+import { useI18n } from '../../i18n';
 
 function HighlightText({ text, query }: { text: string; query: string }) {
   const q = query.trim();
@@ -34,6 +35,7 @@ interface Props {
 }
 
 export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResult }) => {
+  const { t } = useI18n();
   const [query, setQuery] = useState('');
   const [role, setRole] = useState<'user' | 'all'>('user');
   const [results, setResults] = useState<SearchResultItem[]>([]);
@@ -122,7 +124,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
           <input
             ref={inputRef}
             type="text"
-            placeholder="搜索全库会话提问、代码片段与知识..."
+            placeholder={t('spotlight.placeholder')}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="flex-1 bg-transparent text-sm theme-text-main placeholder-slate-400 focus:outline-none"
@@ -143,7 +145,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
                   : 'theme-text-muted hover:theme-text-main'
               }`}
             >
-              用户提问
+              {t('spotlight.user')}
             </button>
             <button
               onClick={() => setRole('all')}
@@ -153,7 +155,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
                   : 'theme-text-muted hover:theme-text-main'
               }`}
             >
-              全部消息
+              {t('spotlight.all')}
             </button>
           </div>
         </div>
@@ -162,17 +164,17 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {loading ? (
             <div className="py-12 text-center text-xs theme-text-muted">
-              {query.trim() ? '正在搜索全库会话记录…' : '正在加载最近活跃会话…'}
+              {query.trim() ? t('spotlight.searching') : t('spotlight.loadingRecent')}
             </div>
           ) : !query.trim() && recentConversations.length > 0 ? (
             <>
               <div className="flex items-center gap-1.5 px-2 py-2 text-[11px] font-medium theme-text-sub">
                 <Clock3 className="h-3.5 w-3.5" />
-                最近活跃会话
+                {t('spotlight.recent')}
               </div>
               {recentConversations.map((item, idx) => {
                 const isSelected = idx === selectedIndex;
-                const workspaceName = item.workspace_path.split('/').filter(Boolean).pop() || '未分类';
+                const workspaceName = item.workspace_path.split('/').filter(Boolean).pop() || t('nav.uncategorized');
                 return (
                   <div
                     key={item.id}
@@ -188,7 +190,7 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
                   >
                     <div className="min-w-0 flex items-center gap-2">
                       <span className="h-1.5 w-1.5 rounded-full bg-blue-500 flex-shrink-0" />
-                      <span className="font-medium theme-text-main truncate">{item.title || '未命名会话'}</span>
+                      <span className="font-medium theme-text-main truncate">{item.title || t('conv.untitled')}</span>
                     </div>
                     <div className="flex-shrink-0 flex items-center gap-2 text-[10px] theme-text-sub">
                       <span className="px-1.5 py-0.5 bg-blue-500/15 text-blue-500 rounded font-medium">
@@ -237,10 +239,10 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
               );
             })
           ) : query.trim() ? (
-            <div className="py-12 text-center text-xs theme-text-sub">未找到匹配的消息记录</div>
+            <div className="py-12 text-center text-xs theme-text-sub">{t('spotlight.emptyMsg')}</div>
           ) : (
             <div className="py-12 text-center text-xs theme-text-sub">
-              暂无最近活跃会话
+              {t('spotlight.emptyRecent')}
             </div>
           )}
         </div>
@@ -250,13 +252,13 @@ export const SpotlightModal: React.FC<Props> = ({ isOpen, onClose, onSelectResul
           <div className="flex items-center gap-3">
             <span className="flex items-center gap-1">
               <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">↑</kbd>
-              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">↓</kbd> 导航
+              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">↓</kbd> {t('spotlight.nav')}
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">↵</kbd> 跳转
+              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">↵</kbd> {t('spotlight.jump')}
             </span>
             <span className="flex items-center gap-1">
-              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">Esc</kbd> 退出
+              <kbd className="px-1.5 py-0.5 theme-bg-card rounded border theme-border font-mono">Esc</kbd> {t('spotlight.esc')}
             </span>
           </div>
           <span className="text-blue-500 font-medium">AgentDeck Spotlight</span>

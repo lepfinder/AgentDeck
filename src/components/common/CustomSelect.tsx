@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, Check } from 'lucide-react';
+import { useI18n } from '../../i18n';
 
 export interface SelectOption<T = string | number> {
   value: T;
@@ -23,12 +24,14 @@ export function CustomSelect<T extends string | number>({
   value,
   options,
   onChange,
-  placeholder = '请选择...',
+  placeholder,
   className = '',
   triggerClassName = '',
   menuClassName = '',
   disabled = false,
 }: CustomSelectProps<T>) {
+  const { t } = useI18n();
+  const resolvedPlaceholder = placeholder ?? t('settings.select');
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -70,7 +73,7 @@ export function CustomSelect<T extends string | number>({
         <span className="flex items-center gap-2 truncate">
           {selectedOption?.icon}
           <span className="truncate">
-            {selectedOption ? selectedOption.label : placeholder}
+            {selectedOption ? selectedOption.label : resolvedPlaceholder}
           </span>
         </span>
         <ChevronDown

@@ -26,12 +26,14 @@ import {
   AlertTriangle,
 } from 'lucide-react';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
+import { useI18n } from '../../i18n';
 
 interface Props {
   workspacePath: string;
 }
 
 export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
+  const { t } = useI18n();
   const [detail, setDetail] = useState<WorkspaceDetailStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'fine' | 'modules' | 'report'>('fine');
@@ -61,14 +63,14 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const handleExtractBlocks = async (force: boolean) => {
     const endpoints = getAiEndpoints();
     if (!endpoints.hasKey) {
-      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行智能提取。');
+      setExtractMessage(t('analysis.needKeyExtract'));
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
     setExtracting(true);
     setProgressInfo(null);
-    setExtractMessage(force ? '正在重新提取项目全部细粒度 Blocks…' : '正在增量提取 Blocks…');
+    setExtractMessage(force ? t('analysis.reextracting') : t('analysis.extracting'));
 
     try {
       const res = await runExtractFineBlocksPipeline(workspacePath, force, (p) => {
@@ -81,11 +83,11 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         await fetchDetail();
         setActiveTab('fine');
       } else {
-        setExtractMessage(`⚠️ 提取未完成: ${res.message}`);
+        setExtractMessage(t('analysis.extractFail', { msg: res.message }));
       }
     } catch (err: any) {
       console.error('Extract blocks error:', err);
-      setExtractMessage(`❌ 提取发生错误: ${err?.message || err}`);
+      setExtractMessage(t('analysis.extractErr', { msg: err?.message || err }));
     } finally {
       setExtracting(false);
       setTimeout(() => {
@@ -98,20 +100,20 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const handleMergeModules = async (force: boolean) => {
     const endpoints = getAiEndpoints();
     if (!endpoints.hasKey) {
-      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可执行模块合并。');
+      setExtractMessage(t('analysis.needKeyMerge'));
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
     if (!detail || detail.fine_blocks.length === 0) {
-      setExtractMessage('提示：当前暂无细粒度 Blocks 数据，请先点击「提取 Blocks」。');
+      setExtractMessage(t('analysis.needFine'));
       setTimeout(() => setExtractMessage(null), 4000);
       return;
     }
 
     setExtracting(true);
     setProgressInfo(null);
-    setExtractMessage('正在将细粒度 Blocks 聚合为核心功能模块总览…');
+    setExtractMessage(t('analysis.merging'));
 
     try {
       const res = await runMergeModulesPipeline(workspacePath, detail.fine_blocks, detail, force, (p) => {
@@ -124,11 +126,11 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         await fetchDetail();
         setActiveTab('modules');
       } else {
-        setExtractMessage(`⚠️ 模块合并未完成: ${res.message}`);
+        setExtractMessage(t('analysis.mergeFail', { msg: res.message }));
       }
     } catch (err: any) {
       console.error('Merge modules error:', err);
-      setExtractMessage(`❌ 合并发生错误: ${err?.message || err}`);
+      setExtractMessage(t('analysis.mergeErr', { msg: err?.message || err }));
     } finally {
       setExtracting(false);
       setTimeout(() => {
@@ -141,20 +143,20 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const handleGenerateReport = async (_force: boolean) => {
     const endpoints = getAiEndpoints();
     if (!endpoints.hasKey) {
-      setExtractMessage('提示：请先在右上角「设置」中配置 AI 供应商与 API Key 后即可生成架构报告。');
+      setExtractMessage(t('analysis.needKeyReport'));
       setTimeout(() => setExtractMessage(null), 5000);
       return;
     }
 
     if (!detail || (detail.module_blocks.length === 0 && detail.fine_blocks.length === 0)) {
-      setExtractMessage('提示：当前缺少模块与 Blocks 数据，请先完成「提取 Blocks」与「合并模块」。');
+      setExtractMessage(t('analysis.needBlocks'));
       setTimeout(() => setExtractMessage(null), 4000);
       return;
     }
 
     setExtracting(true);
     setProgressInfo(null);
-    setExtractMessage('正在基于模块总览撰写完整的 Markdown 架构报告…');
+    setExtractMessage(t('analysis.reporting'));
 
     try {
       const res = await runGenerateReportPipeline(
@@ -173,11 +175,11 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         await fetchDetail();
         setActiveTab('report');
       } else {
-        setExtractMessage(`⚠️ 报告生成未完成: ${res.message}`);
+        setExtractMessage(t('analysis.reportFail', { msg: res.message }));
       }
     } catch (err: any) {
       console.error('Generate report error:', err);
-      setExtractMessage(`❌ 报告生成错误: ${err?.message || err}`);
+      setExtractMessage(t('analysis.reportErr', { msg: err?.message || err }));
     } finally {
       setExtracting(false);
       setTimeout(() => {
@@ -190,7 +192,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
     return (
       <div className="flex h-full flex-col items-center justify-center theme-text-muted">
         <Clock className="h-8 w-8 animate-spin text-blue-500 mb-3" />
-        <p className="text-sm">正在加载工作区研发分析数据…</p>
+        <p className="text-sm">{t('analysis.loading')}</p>
       </div>
     );
   }
@@ -198,7 +200,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   if (!detail) {
     return (
       <div className="flex h-full items-center justify-center theme-text-sub">
-        暂无该工作区的分析数据。
+        {t('analysis.empty')}
       </div>
     );
   }
@@ -241,14 +243,14 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const getBlockTypeBadge = (type: string) => {
     switch (type.toLowerCase()) {
       case 'module':
-        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-500 border border-purple-500/30 rounded">模块</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-purple-500/15 text-purple-500 border border-purple-500/30 rounded">{t('analysis.module')}</span>;
       case 'feature':
-        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/15 text-blue-500 border border-blue-500/30 rounded">功能</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-500/15 text-blue-500 border border-blue-500/30 rounded">{t('analysis.feature')}</span>;
       case 'refactor':
-        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/15 text-amber-500 border border-amber-500/30 rounded">重构</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-amber-500/15 text-amber-500 border border-amber-500/30 rounded">{t('analysis.refactor')}</span>;
       case 'bugfix':
       case 'fix':
-        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 rounded">修复</span>;
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 rounded">{t('analysis.fix')}</span>;
       default:
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted border theme-border rounded">{type}</span>;
     }
@@ -269,7 +271,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         {/* 会话数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">会话总数</span>
+            <span className="text-xs font-medium">{t('analysis.sessionsTotal')}</span>
             <Layers className="h-4 w-4 text-blue-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
@@ -283,25 +285,25 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         {/* 用户提问 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">用户提问 / 提示词</span>
+            <span className="text-xs font-medium">{t('dashboard.kpiPrompts')}</span>
             <MessageSquare className="h-4 w-4 text-emerald-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {detail.user_message_count.toLocaleString()}
           </div>
           <div className="mt-2 text-[11px] theme-text-muted">
-            全部交互 {detail.message_count.toLocaleString()} 条
+            {t('analysis.allInteract', { n: detail.message_count.toLocaleString() })}
           </div>
         </div>
 
         {/* 活跃天数 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">累计活跃天数</span>
+            <span className="text-xs font-medium">{t('analysis.activeDaysTotal')}</span>
             <Calendar className="h-4 w-4 text-purple-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
-            {detail.active_days} <span className="text-xs font-normal theme-text-muted">天</span>
+            {detail.active_days} <span className="text-xs font-normal theme-text-muted">{t('analysis.daysUnit')}</span>
           </div>
           <div className="mt-2 text-[11px] theme-text-muted truncate">
             {detail.first_active && detail.last_active
@@ -313,11 +315,11 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         {/* 峰值日消息 */}
         <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
           <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">单日峰值消息</span>
+            <span className="text-xs font-medium">{t('analysis.peakMsgs')}</span>
             <Flame className="h-4 w-4 text-orange-500" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
-            {detail.peak_count.toLocaleString()} <span className="text-xs font-normal theme-text-muted">条</span>
+            {detail.peak_count.toLocaleString()} <span className="text-xs font-normal theme-text-muted">{t('analysis.tiao')}</span>
           </div>
           <div className="mt-2 text-[11px] theme-text-muted">
             {detail.peak_day || '—'}
@@ -327,8 +329,8 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
       {/* 研发日历贡献热力图 (GitHub 风格) */}
       <ContributionHeatmap
-        title="研发日历 (52-Week Activity Heatmap)"
-        subtitle="过去 365 天研发交互轨迹，颜色越深表示当天研发活跃度越高"
+        title={t('analysis.heatmapTitle')}
+        subtitle={t('analysis.heatmapSub')}
         icon={<Calendar className="h-4 w-4 text-emerald-500" />}
         cellsAllMsgs={detail.heatmap_cells || []}
         activeDays={detail.active_days || 0}
@@ -344,10 +346,10 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
           <div>
             <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-purple-500" />
-              研发分析 (R&D Intelligence)
+              {t('analysis.rdTitle')}
             </h2>
             <p className="text-xs theme-text-muted mt-0.5">
-              三级数据流：细粒度 Blocks → 模块总览 → Markdown 架构报告
+              {t('analysis.pipeline')}
             </p>
           </div>
 
@@ -362,7 +364,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Sparkles className="h-3.5 w-3.5 text-purple-500" />}
-                    <span>提取 Blocks</span>
+                    <span>{t('analysis.extract')}</span>
                   </button>
                   <button
                     onClick={() => handleExtractBlocks(true)}
@@ -370,7 +372,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
-                    <span>重新提取</span>
+                    <span>{t('analysis.reextract')}</span>
                   </button>
                 </>
               )}
@@ -383,7 +385,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <Boxes className="h-3.5 w-3.5 text-purple-500" />}
-                    <span>合并模块</span>
+                    <span>{t('analysis.merge')}</span>
                   </button>
                   <button
                     onClick={() => handleMergeModules(true)}
@@ -391,7 +393,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
-                    <span>重新合并</span>
+                    <span>{t('analysis.remerge')}</span>
                   </button>
                 </>
               )}
@@ -404,7 +406,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     {extracting ? <Clock className="h-3.5 w-3.5 animate-spin text-blue-500" /> : <FileText className="h-3.5 w-3.5 text-blue-500" />}
-                    <span>生成报告</span>
+                    <span>{t('analysis.report')}</span>
                   </button>
                   <button
                     onClick={() => handleGenerateReport(true)}
@@ -412,7 +414,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                     className="px-2.5 py-1 text-xs font-medium theme-bg-sub hover:opacity-80 border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-all cursor-pointer flex items-center gap-1 shadow-2xs"
                   >
                     <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
-                    <span>刷新报告</span>
+                    <span>{t('analysis.refreshReport')}</span>
                   </button>
                 </>
               )}
@@ -429,7 +431,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 }`}
               >
                 <Zap className="h-3 w-3" />
-                <span>细粒度 Blocks ({detail.fine_blocks.length})</span>
+                <span>{t('analysis.tabFine', { n: detail.fine_blocks.length })}</span>
               </button>
 
               <button
@@ -441,7 +443,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 }`}
               >
                 <Boxes className="h-3 w-3" />
-                <span>模块总览 ({detail.module_blocks.length})</span>
+                <span>{t('analysis.tabModules', { n: detail.module_blocks.length })}</span>
               </button>
 
               <button
@@ -453,7 +455,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 }`}
               >
                 <FileText className="h-3 w-3" />
-                <span>Markdown 报告</span>
+                <span>{t('analysis.tabReport')}</span>
               </button>
             </div>
           </div>
@@ -503,10 +505,10 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 <div>
                   <h3 className="text-xs font-bold theme-text-main flex items-center gap-1.5">
                     <Clock className="h-3.5 w-3.5 text-blue-500" />
-                    <span>研发时间轴</span>
+                    <span>{t('analysis.timeline')}</span>
                   </h3>
                   <p className="text-[11px] theme-text-muted mt-0.5">
-                    基于细粒度 Blocks 按月份排列，圆点颜色对应类型
+                    {t('analysis.timelineHint')}
                   </p>
                 </div>
 
@@ -556,8 +558,8 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
             {/* 细粒度 Blocks 卡片列表（自适应响应式网格布局，对齐 Python 版） */}
             <div className="space-y-3">
               <div className="text-xs font-semibold theme-text-muted flex items-center justify-between">
-                <span>分批从用户消息提取的局部功能点（数量较多）</span>
-                <span>共 {detail.fine_blocks.length} 项</span>
+                <span>{t('analysis.fineHint')}</span>
+                <span>{t('analysis.nItems', { n: detail.fine_blocks.length })}</span>
               </div>
 
               <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
@@ -581,7 +583,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                         <div className="flex items-center gap-1.5 mb-1.5">
                           {block.batch_index !== undefined && block.batch_index !== null && (
                             <span className="px-1.5 py-0.2 text-[9px] bg-black/5 dark:bg-white/10 rounded font-mono text-slate-500 dark:text-slate-400">
-                              批{block.batch_index + 1}
+                              {t('analysis.batch', { n: block.batch_index + 1 })}
                             </span>
                           )}
                           {getBlockTypeBadge(block.type)}
@@ -652,9 +654,9 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
                     {mod.child_fine_ids && mod.child_fine_ids.length > 0 && (
                       <div className="pt-2 border-t theme-border-sub text-[11px] theme-text-sub flex items-center justify-between">
-                        <span>关联细粒度 Blocks:</span>
+                        <span>{t('analysis.relatedFine')}</span>
                         <span className="font-mono font-medium text-blue-500">
-                          {mod.child_fine_ids.length} 项
+                          {t('analysis.nXiang', { n: mod.child_fine_ids.length })}
                         </span>
                       </div>
                     )}
@@ -663,7 +665,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
               </div>
             ) : (
               <div className="py-12 text-center text-xs theme-text-sub">
-                当前工作区暂无模块总览数据。
+                {t('analysis.noModules')}
               </div>
             )}
           </div>
@@ -678,7 +680,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
               </div>
             ) : (
               <div className="py-12 text-center text-xs theme-text-sub">
-                当前工作区暂未生成 Markdown 架构报告。
+                {t('analysis.noReportYet')}
               </div>
             )}
           </div>
@@ -699,7 +701,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
               <div className="flex items-center justify-between border-b theme-border pb-3">
                 <div className="flex items-center gap-2">
                   {getBlockTypeBadge(selectedBlock.type)}
-                  <span className="text-xs font-mono theme-text-muted">Block 详情</span>
+                  <span className="text-xs font-mono theme-text-muted">{t('analysis.blockDetail')}</span>
                 </div>
                 <button
                   onClick={() => setSelectedBlock(null)}
@@ -713,13 +715,13 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 <h3 className="text-base font-bold theme-text-main">{selectedBlock.title}</h3>
                 {selectedBlock.start_date && (
                   <p className="text-xs theme-text-muted font-mono mt-1">
-                    研发时段: {selectedBlock.start_date} {selectedBlock.end_date ? `~ ${selectedBlock.end_date}` : ''}
+                    {t('analysis.period', { range: `${selectedBlock.start_date} ${selectedBlock.end_date ? `~ ${selectedBlock.end_date}` : ''}` })}
                   </p>
                 )}
               </div>
 
               <div className="space-y-1.5">
-                <div className="text-xs font-semibold theme-text-muted">研发要点总结</div>
+                <div className="text-xs font-semibold theme-text-muted">{t('analysis.summary')}</div>
                 <div className="p-3 rounded-xl theme-bg-sub border theme-border text-xs theme-text-main leading-relaxed">
                   {selectedBlock.summary}
                 </div>
@@ -727,7 +729,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
               {selectedBlock.keywords && selectedBlock.keywords.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="text-xs font-semibold theme-text-muted">关键词与技术栈</div>
+                  <div className="text-xs font-semibold theme-text-muted">{t('analysis.keywords')}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {selectedBlock.keywords.map((kw, i) => (
                       <span
@@ -743,7 +745,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
 
               {selectedBlock.evidence && selectedBlock.evidence.length > 0 && (
                 <div className="space-y-1.5">
-                  <div className="text-xs font-semibold theme-text-muted">对话证据与原话摘录</div>
+                  <div className="text-xs font-semibold theme-text-muted">{t('analysis.evidence')}</div>
                   <div className="space-y-2">
                     {selectedBlock.evidence.map((ev, i) => (
                       <div key={i} className="p-2.5 rounded-lg theme-bg-sub border theme-border text-[11px] space-y-1">
@@ -768,7 +770,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
                 onClick={() => setSelectedBlock(null)}
                 className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-xl transition-colors cursor-pointer shadow-xs"
               >
-                关闭抽屉
+                {t('analysis.closeDrawer')}
               </button>
             </div>
           </div>

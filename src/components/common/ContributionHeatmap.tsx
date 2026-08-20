@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import type { HeatmapCell } from '../../types';
 import { Crown, Bot } from 'lucide-react';
+import { translate, useI18n, weekdayLabel } from '../../i18n';
 
 interface ContributionHeatmapProps {
   title?: React.ReactNode;
@@ -20,14 +21,12 @@ interface ContributionHeatmapProps {
   autoScrollToEnd?: boolean;
 }
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
 const getWeekday = (dateStr: string) => {
   if (!dateStr) return '';
   const parts = dateStr.split('-').map(Number);
   if (parts.length < 3) return '';
   const d = new Date(parts[0], parts[1] - 1, parts[2]);
-  return WEEKDAYS[d.getDay()] || '';
+  return weekdayLabel(d.getDay());
 };
 
 export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
@@ -47,6 +46,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
   extraHeaderChips,
   autoScrollToEnd = false,
 }) => {
+  const { t, locale } = useI18n();
   const [tab, setTab] = useState<'user' | 'msgs' | 'convs'>(() => {
     if (defaultTab === 'user' && cellsUserMsgs && cellsUserMsgs.length > 0) return 'user';
     return defaultTab;
@@ -122,7 +122,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
         const m = parts[1] - 1;
         if (m !== lastMonth) {
           labels.push({
-            month: `${m + 1}月`,
+            month: translate('heatmap.month', { n: m + 1 }),
             colIndex: colIdx,
           });
           lastMonth = m;
@@ -131,7 +131,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
     });
 
     return { weeks: weeksList, monthLabels: labels };
-  }, [currentData]);
+  }, [currentData, locale]);
 
   const handleMouseEnterCell = (cell: HeatmapCell, e: React.MouseEvent<HTMLDivElement>) => {
     if (!containerRef.current) return;
@@ -181,23 +181,23 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
             {activeDays !== undefined && (
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                <span>活跃天数:</span>
-                <strong className="theme-text-main font-mono">{activeDays} 天</strong>
+                <span>{t('heatmap.activeDays')}</span>
+                <strong className="theme-text-main font-mono">{t('heatmap.activeDaysUnit', { n: activeDays })}</strong>
               </div>
             )}
             {longestStreak !== undefined && (
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-blue-500" />
-                <span>连续活跃:</span>
-                <strong className="theme-text-main font-mono">{longestStreak} 天</strong>
+                <span>{t('heatmap.streak')}</span>
+                <strong className="theme-text-main font-mono">{t('heatmap.activeDaysUnit', { n: longestStreak })}</strong>
               </div>
             )}
             {peakDay && peakCount !== undefined && (
               <div className="flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-amber-500" />
-                <span>单日最高:</span>
+                <span>{t('heatmap.peakDay')}</span>
                 <strong className="theme-text-main font-mono">
-                  {peakCount.toLocaleString()} 条
+                  {peakCount.toLocaleString()} {t('heatmap.unitTiao')}
                 </strong>
                 <span className="text-[10px] opacity-75">({peakDay})</span>
               </div>
@@ -217,7 +217,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  按用户消息
+                  {t('heatmap.byUser')}
                 </button>
               )}
               <button
@@ -229,7 +229,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                按全部消息
+                {t('heatmap.byAll')}
               </button>
               <button
                 type="button"
@@ -240,7 +240,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                按会话数
+                {t('heatmap.byConv')}
               </button>
             </div>
           )}
@@ -270,10 +270,10 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
           <div className="flex gap-1.5">
             {/* 左侧星期标签 */}
             <div className="flex flex-col justify-between text-[9px] theme-text-muted pr-1 py-0.5 h-[104px] select-none sticky left-0 z-10 theme-bg-card">
-              <span>周日</span>
-              <span>周二</span>
-              <span>周四</span>
-              <span>周六</span>
+              <span>{t('heatmap.sun')}</span>
+              <span>{t('heatmap.tue')}</span>
+              <span>{t('heatmap.thu')}</span>
+              <span>{t('heatmap.sat')}</span>
             </div>
 
             {/* 52 周列 */}
@@ -313,17 +313,16 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
       {/* 底部 Legend 与说明 */}
       <div className="flex items-center justify-between text-[11px] theme-text-muted mt-3 pt-2.5 border-t theme-border-sub">
         <span className="text-[11px]">
-          过去 365 天共活跃{' '}
-          <strong className="theme-text-main font-mono">{activeDays ?? 0}</strong> 天
+          {t('heatmap.footer', { n: activeDays ?? 0 })}
         </span>
         <div className="flex items-center gap-1.5 select-none">
-          <span>少</span>
+          <span>{t('heatmap.less')}</span>
           <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
           <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
           <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
           <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
           <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
-          <span>多</span>
+          <span>{t('heatmap.more')}</span>
         </div>
       </div>
 
@@ -356,6 +355,7 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
   containerWidth,
   isPeak,
 }) => {
+  const { t } = useI18n();
   const weekday = getWeekday(cell.date);
   const userCount = cell.user_count ?? 0;
   const totalMsgs = cell.total_messages ?? (cell.user_count !== undefined ? cell.count : cell.count);
@@ -414,15 +414,15 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
           {isPeak ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
               <Crown className="h-3 w-3 text-amber-400" />
-              <span>峰值</span>
+              <span>{t('heatmap.peak')}</span>
             </span>
           ) : !hasActivity ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
-              休息
+              {t('heatmap.rest')}
             </span>
           ) : cell.level === 4 ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-              极度活跃
+              {t('heatmap.hyper')}
             </span>
           ) : null}
         </div>
@@ -434,10 +434,10 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                用户提问
+                {t('heatmap.userQ')}
               </span>
               <span className="font-mono font-semibold text-cyan-300">
-                {userCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">条</span>
+                {userCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitTiao')}</span>
               </span>
             </div>
 
@@ -445,10 +445,10 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                全部消息
+                {t('heatmap.allMsg')}
               </span>
               <span className="font-mono font-semibold text-emerald-300">
-                {totalMsgs.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">条</span>
+                {totalMsgs.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitTiao')}</span>
               </span>
             </div>
 
@@ -456,10 +456,10 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                会话批次
+                {t('heatmap.batches')}
               </span>
               <span className="font-mono font-semibold text-blue-300">
-                {convCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">个</span>
+                {convCount.toLocaleString()} <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitGe')}</span>
               </span>
             </div>
 
@@ -468,17 +468,17 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
               <div className="pt-1.5 mt-1.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
                 <span className="flex items-center gap-1 text-neutral-300">
                   <Bot className="h-3.5 w-3.5 text-purple-400" />
-                  <span>交互杠杆:</span>
+                  <span>{t('heatmap.leverage')}</span>
                 </span>
                 <span className="font-mono text-purple-300 font-medium">
-                  1 : {multiplier} 轮
+                  {t('heatmap.rounds', { n: multiplier })}
                 </span>
               </div>
             )}
           </div>
         ) : (
           <div className="py-1 text-center text-neutral-400 text-[11px]">
-            暂无智能体交互记录
+            {t('heatmap.empty')}
           </div>
         )}
       </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Crown, Bot } from 'lucide-react';
+import { useI18n, weekdayLabel } from '../../i18n';
 
 export interface ActivityBarItem {
   key: string;
@@ -23,15 +24,13 @@ interface Props {
 const BAR_GAP = 3;
 const LINE_LIFT = 16;
 const LINE_BAR_SCALE = 0.72;
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
 function parseTitleContext(title: string) {
   const match = title.match(/(\d{4})-(\d{2})-(\d{2})/);
   if (match) {
     const dateStr = match[0];
     const parts = dateStr.split('-').map(Number);
     const d = new Date(parts[0], parts[1] - 1, parts[2]);
-    const weekday = WEEKDAYS[d.getDay()] || '';
+    const weekday = weekdayLabel(d.getDay());
     if (title.includes(':')) {
       const timePart = title.split(' ')[1] || '';
       const hour = timePart.split(':')[0];
@@ -57,6 +56,7 @@ export const ActivityBarChart: React.FC<Props> = ({
   onBarClick,
   showLine = false,
 }) => {
+  const { t } = useI18n();
   const containerRef = useRef<HTMLDivElement>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const [plotSize, setPlotSize] = useState({ width: 0, height: 0 });
@@ -111,7 +111,7 @@ export const ActivityBarChart: React.FC<Props> = ({
   if (items.length === 0 || total === 0) {
     return (
       <div className="h-40 flex items-center justify-center text-xs theme-text-muted border border-dashed theme-border rounded-lg">
-        {emptyHint || '暂无数据'}
+        {emptyHint || t('bar.empty')}
       </div>
     );
   }
@@ -247,6 +247,7 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
   containerWidth,
   isPeak,
 }) => {
+  const { t } = useI18n();
   const { main, sub } = parseTitleContext(item.tooltipTitle);
   const userCount = item.userMessageCount;
   const totalMsgs = item.messageCount;
@@ -293,15 +294,15 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
           {isPeak ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1">
               <Crown className="h-3 w-3 text-amber-400" />
-              <span>峰值</span>
+              <span>{t('bar.peak')}</span>
             </span>
           ) : !hasActivity ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
-              休息
+              {t('bar.rest')}
             </span>
           ) : item.emphasize ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/20 text-blue-300 border border-blue-500/30">
-              当前/选中
+              {t('bar.current')}
             </span>
           ) : null}
         </div>
@@ -313,11 +314,11 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-                用户提问
+                {t('heatmap.userQ')}
               </span>
               <span className="font-mono font-semibold text-cyan-300">
                 {userCount.toLocaleString()}{' '}
-                <span className="text-[10px] font-normal text-neutral-400">条</span>
+                <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitTiao')}</span>
               </span>
             </div>
 
@@ -325,11 +326,11 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                全部消息
+                {t('heatmap.allMsg')}
               </span>
               <span className="font-mono font-semibold text-emerald-300">
                 {totalMsgs.toLocaleString()}{' '}
-                <span className="text-[10px] font-normal text-neutral-400">条</span>
+                <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitTiao')}</span>
               </span>
             </div>
 
@@ -337,11 +338,11 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
             <div className="flex items-center justify-between text-neutral-300">
               <span className="flex items-center gap-1.5 text-neutral-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                会话批次
+                {t('heatmap.batches')}
               </span>
               <span className="font-mono font-semibold text-blue-300">
                 {convCount.toLocaleString()}{' '}
-                <span className="text-[10px] font-normal text-neutral-400">个</span>
+                <span className="text-[10px] font-normal text-neutral-400">{t('heatmap.unitGe')}</span>
               </span>
             </div>
 
@@ -350,17 +351,17 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
               <div className="pt-1.5 mt-1.5 border-t border-white/10 flex items-center justify-between text-[11px] text-neutral-400">
                 <span className="flex items-center gap-1 text-neutral-300">
                   <Bot className="h-3.5 w-3.5 text-purple-400" />
-                  <span>交互杠杆:</span>
+                  <span>{t('heatmap.leverage')}</span>
                 </span>
                 <span className="font-mono text-purple-300 font-medium">
-                  1 : {multiplier} 轮
+                  {t('heatmap.rounds', { n: multiplier })}
                 </span>
               </div>
             )}
           </div>
         ) : (
           <div className="py-1 text-center text-neutral-400 text-[11px]">
-            暂无交互记录
+            {t('bar.noRecord')}
           </div>
         )}
       </div>
