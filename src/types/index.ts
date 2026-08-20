@@ -295,6 +295,13 @@ export interface CloudPreset {
   available: boolean;
 }
 
+export interface IdeAppStatus {
+  id: 'cursor' | 'antigravity' | 'claude' | 'codex' | string;
+  label: string;
+  kind: 'app' | 'cli' | string;
+  installed: boolean;
+}
+
 export interface BackupProgress {
   stage: string;
   percent: number;

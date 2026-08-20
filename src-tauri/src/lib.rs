@@ -727,6 +727,121 @@ fn open_url_cmd(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct IdeAppStatus {
+    id: String,
+    label: String,
+    kind: String,
+    installed: bool,
+}
+
+fn macos_app_exists(app_name: &str) -> bool {
+    let app_path = format!("/Applications/{}.app", app_name);
+    std::path::Path::new(&app_path).exists()
+}
+
+fn command_on_path(bin: &str) -> bool {
+    std::process::Command::new("which")
+        .arg(bin)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn ide_installed(id: &str) -> bool {
+    match id {
+        "cursor" => macos_app_exists("Cursor") || command_on_path("cursor"),
+        "antigravity" => macos_app_exists("Antigravity") || command_on_path("antigravity"),
+        "claude" => command_on_path("claude"),
+        "codex" => command_on_path("codex"),
+        _ => false,
+    }
+}
+
+#[tauri::command]
+fn list_ide_apps_cmd() -> Result<Vec<IdeAppStatus>, String> {
+    Ok(vec![
+        IdeAppStatus {
+            id: "cursor".into(),
+            label: "Cursor".into(),
+            kind: "app".into(),
+            installed: ide_installed("cursor"),
+        },
+        IdeAppStatus {
+            id: "antigravity".into(),
+            label: "Antigravity".into(),
+            kind: "app".into(),
+            installed: ide_installed("antigravity"),
+        },
+        IdeAppStatus {
+            id: "claude".into(),
+            label: "Claude Code".into(),
+            kind: "cli".into(),
+            installed: ide_installed("claude"),
+        },
+        IdeAppStatus {
+            id: "codex".into(),
+            label: "Codex".into(),
+            kind: "cli".into(),
+            installed: ide_installed("codex"),
+        },
+    ])
+}
+
+fn spawn_checked(cmd: &mut std::process::Command, fail: &str) -> Result<(), String> {
+    cmd.spawn().map(|_| ()).map_err(|e| format!("{}: {}", fail, e))
+}
+
+fn open_in_macos_app(app_name: &str, workspace: &str) -> Result<(), String> {
+    spawn_checked(
+        std::process::Command::new("open")
+            .arg("-a")
+            .arg(app_name)
+            .arg(workspace),
+        &format!("无法打开 {}", app_name),
+    )
+}
+
+fn open_in_terminal_cli(bin: &str, workspace: &str) -> Result<(), String> {
+    let escaped_ws = workspace.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_bin = bin.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        r#"tell application "Terminal"
+  activate
+  do script "cd \"{escaped_ws}\" && {escaped_bin}"
+end tell"#
+    );
+    spawn_checked(
+        std::process::Command::new("osascript").arg("-e").arg(script),
+        &format!("无法在终端启动 {}", bin),
+    )
+}
+
+#[tauri::command]
+fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), String> {
+    let path = std::path::Path::new(&workspace_path);
+    if !path.is_dir() {
+        return Err("工作区路径不存在或不是目录".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        match ide.as_str() {
+            "cursor" => open_in_macos_app("Cursor", &workspace_path),
+            "antigravity" => open_in_macos_app("Antigravity", &workspace_path),
+            "claude" => open_in_terminal_cli("claude", &workspace_path),
+            "codex" => open_in_terminal_cli("codex", &workspace_path),
+            _ => Err(format!("不支持的 IDE: {}", ide)),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (ide, workspace_path);
+        Err("当前仅支持在 macOS 上打开 AI IDE".into())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let db_state = DbState::new().expect("Failed to initialize SQLite database");
@@ -767,7 +882,9 @@ pub fn run() {
             select_folder_dialog_cmd,
             get_app_config_cmd,
             save_app_config_cmd,
-            open_url_cmd
+            open_url_cmd,
+            list_ide_apps_cmd,
+            open_workspace_in_ide_cmd
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

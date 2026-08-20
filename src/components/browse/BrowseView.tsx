@@ -3,6 +3,7 @@ import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats } fro
 import { api, isTauri } from '../../api/tauriBridge';
 import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
+import { OpenInIdeMenu } from './OpenInIdeMenu';
 import { DashboardView } from '../dashboard/DashboardView';
 import { PromptLibraryView } from '../prompts/PromptLibraryView';
 import ReactMarkdown from 'react-markdown';
@@ -496,13 +497,16 @@ export const BrowseView: React.FC<Props> = ({
                 </div>
 
                 {selectedWorkspace && !isStarredView && (
-                  <button
-                    onClick={() => onSelectConversation('')}
-                    className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
-                  >
-                    <BarChart3 className="h-3 w-3" />
-                    <span>查看项目分析</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => onSelectConversation('')}
+                      className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <BarChart3 className="h-3 w-3" />
+                      <span>查看项目分析</span>
+                    </button>
+                    <OpenInIdeMenu workspacePath={selectedWorkspace} />
+                  </div>
                 )}
               </div>
 

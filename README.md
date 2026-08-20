@@ -1,51 +1,67 @@
-# AgentDeck 🛸
+# AgentDeck
 
-> **The Command Deck for Your AI Coding Agents.**
-> 专为 AI 时代开发者打造的全平台 AI 编程智能体全景驾驶舱与资产管理桌面应用。
+本地 AI 编程智能体的驾驶舱：把 Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 等历史会话同步进 SQLite，用桌面端浏览、检索、复盘，并提供本机 REST API 给外部 Agent 调用。
 
----
+当前版本 **0.2.6**，基于 Tauri 2 + React + TypeScript，数据目录默认在 `~/.agentdeck/`。
 
-## ✨ 核心特性
+## 功能
 
-- 🛸 **全景数据驾驶舱 (Dashboard)**：
-  - **4 大核心 KPI**：全量会话数、用户提问 Prompt 数、交互总消息数、工具调用执行数。
-  - **Agent 平台分布占比**：支持「按会话数」与「按消息数」双维秒级平滑切换（Cursor、Antigravity、Claude、Hermes、Codex、WorkBuddy）。
-  - **24 小时活跃时段 (Hourly Punchcard)**：支持双维切换，5 级科技蓝热力色阶，直观洞察高频编码时段。
-  - **深度会话排行榜 Top 10**：按全部消息/用户提问双模式排行，一键直达深度复盘。
-  - **热门项目工作区分布 Top 8**：掌握每个工程项目的 AI 辅助投入占比。
-  - **Agent 工具调用分布 (Tool Usage)**：细分文件阅读、代码编辑、终端命令、搜索检索等 7 大类别。
-- 🔍 **Raycast 风格 Spotlight 搜索 (`⌘K`)**：
-  - 全局极速搜索 1,000+ 会话与代码片段，支持用户提问与全部消息筛选，键盘无缝上下导航与回车直达。
-- 📑 **三栏高效会话浏览器**：
-  - 左栏工作区与收藏夹导航、中栏多 Agent 状态徽标与会话卡片、右栏 Markdown 会话流与代码高亮。
-- ⭐ **星标收藏体系**：
-  - 深度精华会话一键收藏，专属视图集中沉淀。
-- ⚡️ **极致性能与质感 (Tauri 2.0)**：
-  - 启动 < 100ms，常驻内存仅 ~25MB，macOS 原生窗口与现代暗色极简美学。
+- **全景数据大盘**：会话数、用户提问、消息量、工具调用；按来源 / 时段 / 项目分布。
+- **三栏会话浏览**：工作区导航、会话卡片、Markdown 消息流；支持星标收藏与 Spotlight（`⌘K`）。
+- **提示词库**：独立收藏外部 prompt（分类、标签、来源备注），不绑定某一条会话。
+- **项目分析**：按工作区生成复盘报告与功能模块。
+- **在 AI IDE 中打开**：选中项目后，可从会话列表用 Cursor / Antigravity 打开目录，或在终端启动 Claude Code / Codex。
+- **本机 REST API**：`127.0.0.1:8788`，免 Token，仅回环网卡。交互文档见 `/docs`。
+- **备份与媒体归档**：SQLite 热快照、媒体镜像到 `~/.agentdeck/media/`。
 
----
+## 技术栈
 
-## 🛠️ 技术栈
+- 桌面：Tauri 2（Rust）
+- 前端：React + TypeScript + Vite + Tailwind CSS
+- 存储：SQLite（rusqlite）+ FTS5
 
-- **桌面框架**：Tauri 2.0 (Rust)
-- **前端核心**：React 18/19 + TypeScript + Vite
-- **UI & 样式**：Tailwind CSS + Lucide Icons + Framer Motion
-- **本地存储**：SQLite (rusqlite) + FTS5
+## 开发
 
----
+需要 Node.js、Rust 与 Tauri 的系统依赖（macOS 需 Xcode Command Line Tools）。
 
-## 🚀 快速启动
-
-### 开发模式
 ```bash
-# 安装依赖
 npm install
-
-# 启动桌面端调试
 npm run tauri dev
 ```
 
-### 生产打包
+REST API 随应用启动，默认：
+
+- 健康检查：`http://127.0.0.1:8788/health`
+- 接口文档：`http://127.0.0.1:8788/docs`
+
+## 打包
+
 ```bash
 npm run tauri build
 ```
+
+产物在 `src-tauri/target/release/bundle/`。发版时同步改这三处版本号（其余从 Cargo / `package.json` 读取）：
+
+1. `package.json`
+2. `src-tauri/Cargo.toml`
+3. `src-tauri/tauri.conf.json`
+
+并更新 `CHANGELOG.md`。打包前会执行 `npm run generate:api-docs`，生成 `src-tauri/src/api_docs.generated.md`。
+
+## 本机 API（Agent）
+
+服务只监听 `127.0.0.1:8788`。提示词库主流程：
+
+1. `GET /api/prompts/categories` — 分类候选（`category` 必须用返回的 `value`）
+2. `GET /api/prompts` — 搜索查重（列表只有 `content_preview`）
+3. `POST /api/prompts` — 插入（`title` 必填）
+4. `DELETE /api/prompts/:id` — 删除
+
+完整说明与在线调试见 `/docs`，Markdown 规范：`GET /api/docs/markdown`。
+
+会话检索（只读）还包括 `/api/stats`、`/api/workspaces`、`/api/conversations`、`/api/user-messages`、`/api/search` 等。
+
+## 数据
+
+- 配置与库：`~/.agentdeck/`
+- 不要把本地数据库、备份包或绝对用户路径提交进仓库

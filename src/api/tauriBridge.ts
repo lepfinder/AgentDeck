@@ -16,6 +16,7 @@ import type {
   AppConfig,
   PromptItem,
   PromptInput,
+  IdeAppStatus,
 } from '../types';
 
 export const isTauri = () => {
@@ -361,6 +362,26 @@ export const api = {
       }
     }
     window.open(url, '_blank');
+  },
+
+  async listIdeApps(): Promise<IdeAppStatus[]> {
+    if (isTauri()) {
+      return await invoke<IdeAppStatus[]>('list_ide_apps_cmd');
+    }
+    return [
+      { id: 'cursor', label: 'Cursor', kind: 'app', installed: false },
+      { id: 'antigravity', label: 'Antigravity', kind: 'app', installed: false },
+      { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
+      { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
+    ];
+  },
+
+  async openWorkspaceInIde(ide: string, workspacePath: string): Promise<void> {
+    if (isTauri()) {
+      await invoke('open_workspace_in_ide_cmd', { ide, workspacePath });
+      return;
+    }
+    throw new Error('仅在客户端环境下支持打开 AI IDE');
   },
 
   async listPrompts(
