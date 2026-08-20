@@ -2,6 +2,15 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.2.7] - 2026-08-20
+
+### 新增
+- **GitHub Actions**：`main` 分支 CI 检查；推送 `v*` 标签自动构建 macOS 安装包并发布 Release
+- **README**：中英文文档、Star History、macOS 14+ 安装说明（含 `xattr` 去隔离）
+
+### 修复
+- **Release 构建**：CI 跳过不稳定的 DMG 打包，改为 zip 分发 `.app`（Apple Silicon + Intel）
+
 ## [0.2.6] - 2026-08-20
 
 ### 新增
