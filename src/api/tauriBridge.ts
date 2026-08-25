@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
   DashboardStats,
+  DailyTimelineStats,
   WorkspaceStat,
   ConversationItem,
   MessageItem,
@@ -29,6 +30,14 @@ export const api = {
       return await invoke<DashboardStats>('get_dashboard_stats');
     }
     const res = await fetch('/api/dashboard');
+    return await res.json();
+  },
+
+  async getDailyTimeline(date: string): Promise<DailyTimelineStats> {
+    if (isTauri()) {
+      return await invoke<DailyTimelineStats>('get_daily_timeline', { date });
+    }
+    const res = await fetch(`/api/daily-timeline?date=${encodeURIComponent(date)}`);
     return await res.json();
   },
 

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ActivityBarChart } from './ActivityBarChart';
 import type { ActivityBarItem } from './ActivityBarChart';
+import { DailyActivityGantt } from './DailyActivityGantt';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
 import { HourlyPunchcardCard } from './HourlyPunchcardCard';
 import { translate, useI18n } from '../../i18n';
@@ -334,6 +335,14 @@ export const DashboardView: React.FC<Props> = ({
           />
         </div>
       </div>
+
+      {/* 每日多项目并行活动甘特图 */}
+      <DailyActivityGantt
+        date={resolvedHourlyDate}
+        todayStr={todayStr}
+        onChangeDate={setHourlyDate}
+        onSelectConversation={onSelectConversation}
+      />
 
       {/* 中部第二排：GitHub 风格年度活跃全景热力图 (Annual Contribution Calendar) */}
       <ContributionHeatmap

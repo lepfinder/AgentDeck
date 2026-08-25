@@ -1,7 +1,7 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -134,6 +134,45 @@ pub struct TopWorkspaceItem {
     pub message_count: i64,
     pub user_message_count: i64,
     pub percent: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyTimelineItem {
+    pub message_id: i64,
+    pub id: String,
+    pub workspace_path: String,
+    pub workspace_short: String,
+    pub source_app: String,
+    pub source_label: String,
+    pub source_color: String,
+    pub conversation_title: String,
+    pub prompt_content: String,
+    pub prompt_preview: String,
+    pub time: String,
+    pub time_label: String,
+    pub minute: u32,
+    pub is_starred: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyConcurrencySlot {
+    pub hour: u32,
+    pub minute: u32,
+    pub time_label: String,
+    pub active_conversations: usize,
+    pub active_workspaces: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyTimelineStats {
+    pub date: String,
+    pub total_conversations: usize,
+    pub total_workspaces: usize,
+    pub total_messages: i64,
+    pub total_user_messages: i64,
+    pub peak_concurrency: usize,
+    pub items: Vec<DailyTimelineItem>,
+    pub concurrency_slots: Vec<DailyConcurrencySlot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2436,4 +2475,184 @@ pub fn record_prompt_use(conn: &Connection, id: i64) -> Result<PromptItem> {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
     get_prompt(conn, id)
+}
+
+fn parse_beijing_time_str(s: &str) -> (u32, String) {
+    let time_part = if let Some(pos) = s.find('T') {
+        &s[pos + 1..]
+    } else if let Some(pos) = s.find(' ') {
+        &s[pos + 1..]
+    } else {
+        s
+    };
+    let parts: Vec<&str> = time_part.split(':').collect();
+    if parts.len() >= 2 {
+        let h: u32 = parts[0].parse().unwrap_or(0);
+        let m: u32 = parts[1].parse().unwrap_or(0);
+        let h = h.min(23);
+        let m = m.min(59);
+        let total_minutes = h * 60 + m;
+        (total_minutes, format!("{:02}:{:02}", h, m))
+    } else {
+        (0, "00:00".to_string())
+    }
+}
+
+pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimelineStats> {
+    let trimmed_date = date.trim();
+    if trimmed_date.is_empty() {
+        return Ok(DailyTimelineStats {
+            date: date.to_string(),
+            total_conversations: 0,
+            total_workspaces: 0,
+            total_messages: 0,
+            total_user_messages: 0,
+            peak_concurrency: 0,
+            items: Vec::new(),
+            concurrency_slots: Vec::new(),
+        });
+    }
+
+    // 1. 查询当天所有的用户提示词 (User Prompts)
+    let sql_prompts = r#"
+        SELECT
+            m.id,
+            m.conversation_id,
+            c.workspace_path,
+            CASE
+                WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                ELSE 'antigravity'
+            END as source_app,
+            c.title as conv_title,
+            datetime(m.created_at, '+8 hours') as prompt_time,
+            m.content as prompt_content,
+            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) = ?1
+          AND m.role = 'user'
+        ORDER BY datetime(m.created_at, '+8 hours') ASC
+    "#;
+
+    let mut stmt = conn.prepare(sql_prompts)?;
+    let rows = stmt.query_map(params![trimmed_date], |row| {
+        let message_id: i64 = row.get(0)?;
+        let id: String = row.get(1)?;
+        let workspace_path: String = row.get(2)?;
+        let source_app: String = row.get(3)?;
+        let conversation_title: String = row.get(4)?;
+        let prompt_time: Option<String> = row.get(5)?;
+        let prompt_content: String = row.get(6)?;
+        let is_starred_cnt: i64 = row.get(7)?;
+
+        let raw_time = prompt_time.unwrap_or_else(|| format!("{} 00:00:00", trimmed_date));
+        let (minute, time_label) = parse_beijing_time_str(&raw_time);
+        let (source_label, source_color) = source_to_label_and_color(&source_app);
+        let workspace_short = get_short_workspace(&workspace_path);
+
+        let prompt_preview = prompt_content
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or(&prompt_content)
+            .trim()
+            .chars()
+            .take(60)
+            .collect::<String>();
+
+        Ok(DailyTimelineItem {
+            message_id,
+            id,
+            workspace_path,
+            workspace_short,
+            source_app,
+            source_label: source_label.to_string(),
+            source_color: source_color.to_string(),
+            conversation_title: if conversation_title.is_empty() {
+                "未命名会话".to_string()
+            } else {
+                conversation_title
+            },
+            prompt_content,
+            prompt_preview,
+            time: raw_time,
+            time_label,
+            minute,
+            is_starred: is_starred_cnt > 0,
+        })
+    })?;
+
+    let mut items = Vec::new();
+    let mut unique_conv_ids = HashSet::new();
+    let mut unique_workspaces = HashSet::new();
+
+    for r in rows.flatten() {
+        unique_conv_ids.insert(r.id.clone());
+        unique_workspaces.insert(r.workspace_path.clone());
+        items.push(r);
+    }
+
+    // 2. 统计当天全局总消息数与总用户消息数
+    let (total_messages, total_user_messages): (i64, i64) = conn
+        .query_row(
+            r#"
+            SELECT
+                COUNT(*),
+                SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END)
+            FROM messages
+            WHERE strftime('%Y-%m-%d', datetime(created_at, '+8 hours')) = ?1
+            "#,
+            params![trimmed_date],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap_or((items.len() as i64, items.len() as i64));
+
+    // 3. 计算 96 个 15 分钟切片的并发度指标
+    let mut concurrency_slots = Vec::with_capacity(96);
+    let mut peak_concurrency = 0usize;
+
+    for slot_idx in 0..96 {
+        let slot_start_minute = (slot_idx * 15) as u32;
+        let slot_end_minute = slot_start_minute + 15;
+        let hour = slot_start_minute / 60;
+        let minute = slot_start_minute % 60;
+        let time_label = format!("{:02}:{:02}", hour, minute);
+
+        let mut slot_workspaces = HashSet::new();
+        let mut active_convs = HashSet::new();
+
+        for item in &items {
+            if item.minute >= slot_start_minute && item.minute < slot_end_minute {
+                active_convs.insert(&item.id);
+                slot_workspaces.insert(&item.workspace_path);
+            }
+        }
+
+        let active_ws_count = slot_workspaces.len();
+        if active_ws_count > peak_concurrency {
+            peak_concurrency = active_ws_count;
+        }
+
+        concurrency_slots.push(DailyConcurrencySlot {
+            hour,
+            minute,
+            time_label,
+            active_conversations: active_convs.len(),
+            active_workspaces: active_ws_count,
+        });
+    }
+
+    Ok(DailyTimelineStats {
+        date: trimmed_date.to_string(),
+        total_conversations: unique_conv_ids.len(),
+        total_workspaces: unique_workspaces.len(),
+        total_messages,
+        total_user_messages,
+        peak_concurrency,
+        items,
+        concurrency_slots,
+    })
 }

@@ -107,6 +107,42 @@ export interface TopWorkspaceItem {
   percent: number;
 }
 
+export interface DailyTimelineItem {
+  message_id: number;
+  id: string;
+  workspace_path: string;
+  workspace_short: string;
+  source_app: string;
+  source_label: string;
+  source_color: string;
+  conversation_title: string;
+  prompt_content: string;
+  prompt_preview: string;
+  time: string;
+  time_label: string;
+  minute: number;
+  is_starred: boolean;
+}
+
+export interface DailyConcurrencySlot {
+  hour: number;
+  minute: number;
+  time_label: string;
+  active_conversations: number;
+  active_workspaces: number;
+}
+
+export interface DailyTimelineStats {
+  date: string;
+  total_conversations: number;
+  total_workspaces: number;
+  total_messages: number;
+  total_user_messages: number;
+  peak_concurrency: number;
+  items: DailyTimelineItem[];
+  concurrency_slots: DailyConcurrencySlot[];
+}
+
 export interface DashboardStats {
   total_conversations: number;
   total_messages: number;

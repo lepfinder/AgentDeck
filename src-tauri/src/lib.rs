@@ -8,13 +8,13 @@ pub mod sync;
 
 use db::{
     clear_workspace_analysis, create_prompt, delete_prompt, fetch_conversation_messages,
-    fetch_conversations, fetch_dashboard_stats, fetch_workspace_analysis_messages,
+    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_analysis_messages,
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, record_prompt_use,
     save_workspace_fine_blocks, save_workspace_module_blocks, save_workspace_report,
     search_global_messages, toggle_prompt_star, toggle_star_session, update_prompt,
-    AnalysisUserMessage, ConversationItem, DashboardStats, DbState, MessageItem, PromptInput,
-    PromptItem, SearchResultItem, WorkspaceDetailStats, WorkspaceFineBlock, WorkspaceModuleBlock,
-    WorkspaceStat,
+    AnalysisUserMessage, ConversationItem, DailyTimelineStats, DashboardStats, DbState,
+    MessageItem, PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats,
+    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -90,6 +90,12 @@ fn clear_workspace_analysis_cmd(
 fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     fetch_dashboard_stats(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_daily_timeline(date: String, state: State<'_, DbState>) -> Result<DailyTimelineStats, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    fetch_daily_timeline(&conn, &date).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -851,6 +857,7 @@ pub fn run() {
         .manage(db_state)
         .invoke_handler(tauri::generate_handler![
             get_dashboard_stats,
+            get_daily_timeline,
             list_prompts_cmd,
             get_prompt_cmd,
             create_prompt_cmd,

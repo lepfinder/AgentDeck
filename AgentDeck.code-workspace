@@ -11,18 +11,6 @@
 		},
 		{
 			"path": "../../../.agentdeck"
-		},
-		{
-			"path": "../../../.xiaonuan"
-		},
-		{
-			"path": "../HomeCore"
-		},
-		{
-			"path": "../../github/CodePilot"
-		},
-		{
-			"path": "../../github/Wake"
 		}
 	],
 	"settings": {}

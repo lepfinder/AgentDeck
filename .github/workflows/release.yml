@@ -147,7 +147,7 @@ jobs:
                -o -name "checksums-*.sha256" -o -name "SHA256SUMS.txt" \) | sort)
 
           gh release create "${TAG}" \
-            --title "AgentDeck v${VERSION}" \
+            --title "v${VERSION}" \
             --notes-file release-notes.md \
             --latest \
             "${FILES[@]}"

@@ -1,8 +1,8 @@
 use crate::db::{
     allowed_prompt_category_values, create_prompt, delete_prompt, fetch_conversation_messages,
-    fetch_conversations, fetch_dashboard_stats, fetch_workspace_detail_stats, fetch_workspaces,
-    get_database_path, get_prompt, list_prompts, prompt_category_options, search_global_messages,
-    update_prompt, PromptAgentItem, PromptInput,
+    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_detail_stats,
+    fetch_workspaces, get_database_path, get_prompt, list_prompts, prompt_category_options,
+    search_global_messages, update_prompt, PromptAgentItem, PromptInput,
 };
 use crate::sync::execute_sync;
 use rusqlite::Connection;
@@ -439,6 +439,19 @@ fn route_get(
                 }),
             ),
             Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+        },
+
+        "/api/daily-timeline" | "/api/timeline" => {
+            let date = query_params.get("date").cloned().unwrap_or_else(|| {
+                chrono::Utc::now()
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .format("%Y-%m-%d")
+                    .to_string()
+            });
+            match fetch_daily_timeline(conn, &date) {
+                Ok(timeline) => send_json(stream, 200, json!(timeline)),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
         },
 
         "/api/workspaces" => {
