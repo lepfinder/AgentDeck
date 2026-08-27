@@ -170,7 +170,7 @@ fn list_workspaces(
     state: State<'_, DbState>,
 ) -> Result<Vec<WorkspaceStat>, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_workspaces(&conn, search.as_deref()).map_err(|e| e.to_string())
+    fetch_workspaces(&conn, search.as_deref(), None).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

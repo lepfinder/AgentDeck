@@ -456,7 +456,8 @@ fn route_get(
 
         "/api/workspaces" => {
             let q = query_params.get("q").map(|s| s.as_str());
-            match fetch_workspaces(conn, q) {
+            let date = query_params.get("date").map(|s| s.as_str());
+            match fetch_workspaces(conn, q, date) {
                 Ok(workspaces) => {
                     let total = workspaces.len();
                     let mapped_workspaces: Vec<serde_json::Value> = workspaces

@@ -1349,7 +1349,22 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     })
 }
 
-pub fn fetch_workspaces(conn: &Connection, search: Option<&str>) -> Result<Vec<WorkspaceStat>> {
+pub fn fetch_workspaces(
+    conn: &Connection,
+    search: Option<&str>,
+    date: Option<&str>,
+) -> Result<Vec<WorkspaceStat>> {
+    let target_date = match date {
+        Some("today") => Some(
+            chrono::Utc::now()
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
+        Some(d) if !d.trim().is_empty() => Some(d.trim().to_string()),
+        _ => None,
+    };
+
     let mut list = Vec::new();
     let sql = r#"
         SELECT
@@ -1366,26 +1381,30 @@ pub fn fetch_workspaces(conn: &Connection, search: Option<&str>) -> Result<Vec<W
             MAX(updated_at) as last_updated
         FROM conversations
         WHERE (?1 IS NULL OR ?1 = '' OR workspace_path LIKE '%' || ?1 || '%')
+          AND (?2 IS NULL OR ?2 = '' OR strftime('%Y-%m-%d', datetime(COALESCE(created_at, updated_at), '+8 hours')) = ?2)
         GROUP BY workspace_path
         ORDER BY last_updated DESC
     "#;
 
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![search.unwrap_or("")], |row| {
-        Ok(WorkspaceStat {
-            workspace_path: row.get(0)?,
-            cnt: row.get(1)?,
-            ag_cnt: row.get(2).unwrap_or(0),
-            cursor_cnt: row.get(3).unwrap_or(0),
-            claude_cnt: row.get(4).unwrap_or(0),
-            codex_cnt: row.get(5).unwrap_or(0),
-            wb_cnt: row.get(6).unwrap_or(0),
-            hermes_cnt: row.get(7).unwrap_or(0),
-            message_count: row.get(8).unwrap_or(0),
-            user_message_count: row.get(9).unwrap_or(0),
-            last_updated: to_beijing_iso(row.get(10)?),
-        })
-    })?;
+    let rows = stmt.query_map(
+        params![search.unwrap_or(""), target_date.as_deref().unwrap_or("")],
+        |row| {
+            Ok(WorkspaceStat {
+                workspace_path: row.get(0)?,
+                cnt: row.get(1)?,
+                ag_cnt: row.get(2).unwrap_or(0),
+                cursor_cnt: row.get(3).unwrap_or(0),
+                claude_cnt: row.get(4).unwrap_or(0),
+                codex_cnt: row.get(5).unwrap_or(0),
+                wb_cnt: row.get(6).unwrap_or(0),
+                hermes_cnt: row.get(7).unwrap_or(0),
+                message_count: row.get(8).unwrap_or(0),
+                user_message_count: row.get(9).unwrap_or(0),
+                last_updated: to_beijing_iso(row.get(10)?),
+            })
+        },
+    )?;
 
     for r in rows.flatten() {
         list.push(r);
