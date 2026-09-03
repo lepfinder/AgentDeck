@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::time::Instant;
@@ -306,14 +307,55 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
         ],
     )?;
 
-    // 删除并重建消息
-    tx.execute(
-        "DELETE FROM messages WHERE conversation_id = ?",
-        params![&conv.id],
-    )?;
+    // 增量同步消息：保留已有消息的创建时间，避免后续聊天导致历史时间漂移
+    struct ExistingMsgSnapshot {
+        id: i64,
+        created_at: Option<String>,
+        role: String,
+        message_type: String,
+        content: String,
+        thinking: Option<String>,
+        tool_name: Option<String>,
+        tool_args: Option<String>,
+        images: Option<String>,
+    }
+
+    let mut existing_map: HashMap<i64, ExistingMsgSnapshot> = HashMap::new();
+    {
+        let mut stmt = tx.prepare_cached(
+            r#"
+            SELECT id, step_index, created_at, role, message_type, content,
+                   thinking, tool_name, tool_args, images
+            FROM messages
+            WHERE conversation_id = ?
+            "#,
+        )?;
+        let rows = stmt.query_map(params![&conv.id], |r| {
+            Ok((
+                r.get::<_, i64>(1)?, // step_index
+                ExistingMsgSnapshot {
+                    id: r.get(0)?,
+                    created_at: r.get(2).ok(),
+                    role: r.get(3).unwrap_or_default(),
+                    message_type: r.get(4).unwrap_or_default(),
+                    content: r.get(5).unwrap_or_default(),
+                    thinking: r.get(6).ok(),
+                    tool_name: r.get(7).ok(),
+                    tool_args: r.get(8).ok(),
+                    images: r.get(9).ok(),
+                },
+            ))
+        })?;
+        for item in rows.flatten() {
+            existing_map.insert(item.0, item.1);
+        }
+    }
+
+    let mut max_incoming_step: i64 = -1;
+    let now_iso = chrono::Utc::now().to_rfc3339();
 
     {
-        let mut msg_stmt = tx.prepare_cached(
+        let mut insert_stmt = tx.prepare_cached(
             r#"
             INSERT INTO messages (
                 conversation_id, step_index, role, message_type, content, thinking,
@@ -323,21 +365,89 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             "#,
         )?;
 
+        let mut update_stmt = tx.prepare_cached(
+            r#"
+            UPDATE messages
+            SET role = ?1, message_type = ?2, content = ?3, thinking = ?4,
+                tool_name = ?5, tool_args = ?6, images = ?7,
+                created_at = CASE WHEN created_at IS NOT NULL AND created_at != '' THEN created_at ELSE ?8 END
+            WHERE id = ?9
+            "#,
+        )?;
+
         for (idx, msg) in conv.messages.iter().enumerate() {
-            msg_stmt.execute(params![
-                &conv.id,
-                msg.step_index.max(idx as i64),
-                &msg.role,
-                &msg.message_type,
-                &msg.content,
-                &msg.thinking,
-                &msg.tool_name,
-                &msg.tool_args,
-                &msg.created_at,
-                &conv.source_app,
-                &msg.images,
-            ])?;
+            let step = msg.step_index.max(idx as i64);
+            if step > max_incoming_step {
+                max_incoming_step = step;
+            }
+
+            if let Some(existing) = existing_map.get(&step) {
+                let existing_time = existing
+                    .created_at
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let existing_created_empty = existing_time.is_none();
+
+                let needs_update = existing.role != msg.role
+                    || existing.message_type != msg.message_type
+                    || existing.content != msg.content
+                    || existing.thinking != msg.thinking
+                    || existing.tool_name != msg.tool_name
+                    || existing.tool_args != msg.tool_args
+                    || existing.images != msg.images
+                    || (existing_created_empty && msg.created_at.is_some());
+
+                if needs_update {
+                    let incoming_time = msg
+                        .created_at
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    let fallback_created = existing_time.or(incoming_time).unwrap_or(&now_iso);
+
+                    update_stmt.execute(params![
+                        &msg.role,
+                        &msg.message_type,
+                        &msg.content,
+                        &msg.thinking,
+                        &msg.tool_name,
+                        &msg.tool_args,
+                        &msg.images,
+                        fallback_created,
+                        existing.id,
+                    ])?;
+                }
+            } else {
+                let final_created = msg.created_at.as_deref().unwrap_or(&now_iso);
+                insert_stmt.execute(params![
+                    &conv.id,
+                    step,
+                    &msg.role,
+                    &msg.message_type,
+                    &msg.content,
+                    &msg.thinking,
+                    &msg.tool_name,
+                    &msg.tool_args,
+                    final_created,
+                    &conv.source_app,
+                    &msg.images,
+                ])?;
+            }
         }
+    }
+
+    // 若客户端截断或回滚了消息，清理多余的旧消息
+    if max_incoming_step >= 0 {
+        tx.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND step_index > ?",
+            params![&conv.id, max_incoming_step],
+        )?;
+    } else if conv.messages.is_empty() {
+        tx.execute(
+            "DELETE FROM messages WHERE conversation_id = ?",
+            params![&conv.id],
+        )?;
     }
 
     // 维护 workspaces 记录
@@ -431,3 +541,120 @@ impl SyncEngine {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_incremental_save_locks_created_at() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+
+        let conv_id = "test:conv1".to_string();
+        let old_time = "2026-09-01T10:00:00+00:00".to_string();
+        let new_time = "2026-09-03T10:00:00+00:00".to_string();
+
+        let make_msg = |idx: i64, content: &str, time: Option<String>| RawMessage {
+            step_index: idx,
+            role: "user".to_string(),
+            message_type: "text".to_string(),
+            content: content.to_string(),
+            thinking: None,
+            created_at: time,
+            model_name: None,
+            tool_name: None,
+            tool_args: None,
+            duration_ms: None,
+            token_count: None,
+            images: None,
+        };
+
+        // 1. 首次保存 2 条历史消息
+        let conv_v1 = RawConversation {
+            id: conv_id.clone(),
+            title: "测试会话".to_string(),
+            workspace_path: "/test/ws".to_string(),
+            source_app: "cursor".to_string(),
+            created_at: Some(old_time.clone()),
+            updated_at: Some(old_time.clone()),
+            parse_status: "ok".to_string(),
+            source_types: vec!["cursor".to_string()],
+            messages: vec![
+                make_msg(0, "历史消息0", Some(old_time.clone())),
+                make_msg(1, "历史消息1", Some(old_time.clone())),
+            ],
+        };
+        let is_new = save_conversation_tx(&conn, &conv_v1).unwrap();
+        assert!(is_new);
+
+        // 2. 第二次保存：模拟两天后追加了一条消息，并且旧消息被传入了今天的时间（试图漂移）
+        let conv_v2 = RawConversation {
+            id: conv_id.clone(),
+            title: "测试会话".to_string(),
+            workspace_path: "/test/ws".to_string(),
+            source_app: "cursor".to_string(),
+            created_at: Some(old_time.clone()),
+            updated_at: Some(new_time.clone()),
+            parse_status: "ok".to_string(),
+            source_types: vec!["cursor".to_string()],
+            messages: vec![
+                make_msg(0, "历史消息0", Some(new_time.clone())), // 试图用新时间覆盖
+                make_msg(1, "历史消息1 (流式补全)", Some(new_time.clone())), // 模拟内容微调且带新时间
+                make_msg(2, "今天追加的新消息", Some(new_time.clone())),
+            ],
+        };
+        let is_new2 = save_conversation_tx(&conn, &conv_v2).unwrap();
+        assert!(!is_new2);
+
+        // 查询数据库验证时间戳
+        let mut stmt = conn
+            .prepare("SELECT step_index, content, created_at FROM messages WHERE conversation_id = ? ORDER BY step_index ASC")
+            .unwrap();
+        let rows: Vec<(i64, String, Option<String>)> = stmt
+            .query_map(params![&conv_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .flatten()
+            .collect();
+
+        assert_eq!(rows.len(), 3);
+        // step 0 时间必须严格锁定为 old_time
+        assert_eq!(rows[0].0, 0);
+        assert_eq!(rows[0].2.as_deref(), Some(old_time.as_str()));
+
+        // step 1 内容已更新，但时间必须依然严格锁定为 old_time
+        assert_eq!(rows[1].0, 1);
+        assert_eq!(rows[1].1, "历史消息1 (流式补全)");
+        assert_eq!(rows[1].2.as_deref(), Some(old_time.as_str()));
+
+        // step 2 为全新插入，时间为 new_time
+        assert_eq!(rows[2].0, 2);
+        assert_eq!(rows[2].2.as_deref(), Some(new_time.as_str()));
+
+        // 3. 第三次保存：测试截断/回滚，只剩 step 0
+        let conv_v3 = RawConversation {
+            id: conv_id.clone(),
+            title: "测试会话".to_string(),
+            workspace_path: "/test/ws".to_string(),
+            source_app: "cursor".to_string(),
+            created_at: Some(old_time.clone()),
+            updated_at: Some(new_time.clone()),
+            parse_status: "ok".to_string(),
+            source_types: vec!["cursor".to_string()],
+            messages: vec![make_msg(0, "历史消息0", Some(old_time.clone()))],
+        };
+        save_conversation_tx(&conn, &conv_v3).unwrap();
+
+        let remaining_cnt: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM messages WHERE conversation_id = ?",
+                params![&conv_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining_cnt, 1);
+    }
+}
+

@@ -299,7 +299,7 @@ fn process_cursor_composer(
         cursor_conn,
         composer_id,
         headers,
-        updated_at.clone(),
+        created_at.clone(),
         &mut title,
     );
     if messages.is_empty() {
@@ -541,7 +541,7 @@ fn extract_messages(
     cursor_conn: &Connection,
     composer_id: &str,
     headers: &[Value],
-    updated_at: Option<String>,
+    created_at: Option<String>,
     title: &mut String,
 ) -> Vec<RawMessage> {
     let mut bubble_map = HashMap::new();
@@ -567,6 +567,7 @@ fn extract_messages(
 
     let mut messages = Vec::new();
     let mut step_idx = 0i64;
+    let mut last_known_time = created_at;
 
     for header in headers {
         let bubble_id = header
@@ -616,6 +617,11 @@ fn extract_messages(
             *title = text.chars().take(60).collect();
         }
 
+        let msg_time = bubble_created_at(header, bubble).or_else(|| last_known_time.clone());
+        if let Some(ref t) = msg_time {
+            last_known_time = Some(t.clone());
+        }
+
         messages.push(RawMessage {
             step_index: step_idx,
             role: role.to_string(),
@@ -626,7 +632,7 @@ fn extract_messages(
             },
             content: text.to_string(),
             thinking,
-            created_at: bubble_created_at(header, bubble).or_else(|| updated_at.clone()),
+            created_at: msg_time,
             model_name: Some("Cursor".to_string()),
             tool_name: if tool_results.is_some() {
                 Some("tool".to_string())
@@ -707,9 +713,16 @@ fn bubble_created_at(header: &Value, bubble: &Value) -> Option<String> {
         .get("createdAt")
         .or_else(|| bubble.get("createdAt"))?;
     if let Some(s) = raw.as_str() {
-        return super::normalize_to_iso(Some(s.to_string()));
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return super::normalize_to_iso(Some(trimmed.to_string()));
     }
     let ms = raw.as_i64().or_else(|| raw.as_f64().map(|v| v as i64))?;
+    if ms <= 0 {
+        return None;
+    }
     chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
 }
 
