@@ -1,7 +1,7 @@
 use crate::db::{
     allowed_prompt_category_values, create_prompt, delete_prompt, fetch_conversation_messages,
     fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_detail_stats,
-    fetch_workspaces, get_database_path, get_prompt, list_prompts, prompt_category_options,
+    fetch_workspaces, get_database_path, get_prompt, get_short_workspace, list_prompts, prompt_category_options,
     search_global_messages, update_prompt, PromptAgentItem, PromptInput,
 };
 use crate::sync::execute_sync;
@@ -441,6 +441,11 @@ fn route_get(
             Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
         },
 
+        "/api/agent-sources" | "/api/sources" => {
+            let sources = crate::sync::collect_agent_sources(conn);
+            send_json(stream, 200, json!({ "ok": true, "sources": sources }))
+        },
+
         "/api/daily-timeline" | "/api/timeline" => {
             let date = query_params.get("date").cloned().unwrap_or_else(|| {
                 chrono::Utc::now()
@@ -452,7 +457,15 @@ fn route_get(
                 Ok(timeline) => send_json(stream, 200, json!(timeline)),
                 Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
             }
-        },
+        }
+
+        "/api/daily-summary" | "/api/daily-digest" => {
+            route_daily_summary(stream, query_params, conn);
+        }
+
+        "/api/recent-activity" | "/api/recent" | "/api/hourly-activity" => {
+            route_recent_activity(stream, query_params, conn);
+        }
 
         "/api/workspaces" => {
             let q = query_params.get("q").map(|s| s.as_str());
@@ -787,6 +800,566 @@ fn route_user_messages(
     }
 }
 
+fn route_daily_summary(
+    stream: &mut TcpStream,
+    query_params: &HashMap<String, String>,
+    conn: &Connection,
+) {
+    match build_daily_summary(query_params, conn) {
+        Ok(body) => send_json(stream, 200, body),
+        Err(e) => send_json(stream, 500, json!({"ok": false, "error": e})),
+    }
+}
+
+pub(crate) fn build_daily_summary(
+    query_params: &HashMap<String, String>,
+    conn: &Connection,
+) -> Result<serde_json::Value, String> {
+    let date = query_params
+        .get("date")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            chrono::Utc::now()
+                .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                .format("%Y-%m-%d")
+                .to_string()
+        });
+    let workspace = query_params
+        .get("workspace")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let role = query_params
+        .get("role")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "all".to_string());
+    let fmt = query_params
+        .get("format")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "compact".to_string());
+    let max_len = query_params
+        .get("max_len")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1000);
+    let order = query_params
+        .get("order")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "asc".to_string());
+
+    let role_filter = match role.as_str() {
+        "user" => "AND m.role = 'user'",
+        "assistant" => "AND m.role = 'assistant'",
+        _ => "AND m.role IN ('user', 'assistant')",
+    };
+
+    let order_clause = if order == "desc" { "DESC" } else { "ASC" };
+
+    let sql = format!(
+        r#"
+        SELECT
+            c.workspace_path,
+            m.conversation_id,
+            c.title,
+            CASE
+                WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                ELSE 'antigravity'
+            END as source_app,
+            m.role,
+            m.content,
+            m.created_at,
+            datetime(m.created_at, '+8 hours') as bj_created_at
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) = ?1
+          AND (?2 IS NULL OR ?2 = '' OR c.workspace_path = ?2 OR c.workspace_path LIKE '%' || ?2 || '%')
+          {}
+        ORDER BY c.workspace_path ASC, m.conversation_id ASC, datetime(m.created_at, '+8 hours') {}
+        "#,
+        role_filter, order_clause
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(rusqlite::params![date, workspace.unwrap_or("")], |row| {
+            let ws_path: String = row.get(0)?;
+            let conv_id: String = row.get(1)?;
+            let title: Option<String> = row.get(2)?;
+            let source_app: Option<String> = row.get(3)?;
+            let msg_role: String = row.get(4)?;
+            let content: String = row.get(5)?;
+            let raw_created: Option<String> = row.get(6)?;
+            let bj_created: Option<String> = row.get(7)?;
+
+            Ok((
+                ws_path,
+                conv_id,
+                title.unwrap_or_default(),
+                source_app.unwrap_or_else(|| "unknown".to_string()),
+                msg_role,
+                content,
+                raw_created,
+                bj_created,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    struct ConvEntry {
+        id: String,
+        title: String,
+        source: String,
+        created_at: Option<String>,
+        messages: Vec<serde_json::Value>,
+    }
+
+    struct WsEntry {
+        workspace_path: String,
+        workspace_short: String,
+        conv_order: Vec<String>,
+        conv_map: HashMap<String, ConvEntry>,
+    }
+
+    let mut ws_order: Vec<String> = Vec::new();
+    let mut ws_map: HashMap<String, WsEntry> = HashMap::new();
+    let mut total_messages = 0usize;
+    let mut total_conversations = 0usize;
+
+    for row_res in rows.filter_map(Result::ok) {
+        let (ws_path, conv_id, title, source, msg_role, content, raw_created, bj_created) = row_res;
+        total_messages += 1;
+
+        // 提取时间标签 [HH:MM:SS]
+        let time_label = if let Some(ref bj) = bj_created {
+            if let Some(t_part) = bj.split_whitespace().nth(1) {
+                t_part.to_string()
+            } else {
+                bj.clone()
+            }
+        } else if let Some(ref raw) = raw_created {
+            format_beijing_tag(Some(raw), true)
+                .trim()
+                .trim_matches('[')
+                .trim_matches(']')
+                .to_string()
+        } else {
+            "00:00:00".to_string()
+        };
+
+        // 消息文本截断，超出部分附带 ... [truncated]
+        let content_trimmed = content.trim();
+        let final_content = if max_len > 0 && content_trimmed.chars().count() > max_len {
+            let truncated: String = content_trimmed.chars().take(max_len).collect();
+            format!("{}... [truncated]", truncated)
+        } else {
+            content_trimmed.to_string()
+        };
+
+        // 格式化单条消息
+        let formatted_msg = if fmt == "json" {
+            json!({
+                "time": time_label,
+                "role": msg_role,
+                "content": final_content
+            })
+        } else {
+            json!(format!("[{}] [{}] {}", time_label, msg_role, final_content))
+        };
+
+        let ws_entry = ws_map.entry(ws_path.clone()).or_insert_with(|| {
+            ws_order.push(ws_path.clone());
+            WsEntry {
+                workspace_short: get_short_workspace(&ws_path),
+                workspace_path: ws_path.clone(),
+                conv_order: Vec::new(),
+                conv_map: HashMap::new(),
+            }
+        });
+
+        if !ws_entry.conv_map.contains_key(&conv_id) {
+            total_conversations += 1;
+            ws_entry.conv_order.push(conv_id.clone());
+            let beijing_conv_time = convert_to_beijing_iso(raw_created);
+            ws_entry.conv_map.insert(
+                conv_id.clone(),
+                ConvEntry {
+                    id: conv_id.clone(),
+                    title: if title.trim().is_empty() {
+                        "未命名会话".to_string()
+                    } else {
+                        title
+                    },
+                    source,
+                    created_at: beijing_conv_time,
+                    messages: vec![formatted_msg],
+                },
+            );
+        } else if let Some(conv) = ws_entry.conv_map.get_mut(&conv_id) {
+            conv.messages.push(formatted_msg);
+        }
+    }
+
+    let mut workspaces_json = Vec::new();
+    for ws_path in ws_order {
+        if let Some(mut ws) = ws_map.remove(&ws_path) {
+            let mut convs_json = Vec::new();
+            let mut ws_msg_count = 0usize;
+            for cid in ws.conv_order {
+                if let Some(c) = ws.conv_map.remove(&cid) {
+                    let count = c.messages.len();
+                    ws_msg_count += count;
+                    convs_json.push(json!({
+                        "id": c.id,
+                        "title": c.title,
+                        "source": c.source,
+                        "message_count": count,
+                        "created_at": c.created_at,
+                        "messages": c.messages
+                    }));
+                }
+            }
+            workspaces_json.push(json!({
+                "workspace_path": ws.workspace_path,
+                "workspace_short": ws.workspace_short,
+                "conversation_count": convs_json.len(),
+                "message_count": ws_msg_count,
+                "conversations": convs_json
+            }));
+        }
+    }
+
+    Ok(json!({
+        "ok": true,
+        "date": date,
+        "total_workspaces": workspaces_json.len(),
+        "total_conversations": total_conversations,
+        "total_messages": total_messages,
+        "workspaces": workspaces_json
+    }))
+}
+
+fn route_recent_activity(
+    stream: &mut TcpStream,
+    query_params: &HashMap<String, String>,
+    conn: &Connection,
+) {
+    match build_recent_activity(query_params, conn) {
+        Ok(body) => send_json(stream, 200, body),
+        Err(e) => send_json(stream, 500, json!({"ok": false, "error": e})),
+    }
+}
+
+pub(crate) fn build_recent_activity(
+    query_params: &HashMap<String, String>,
+    conn: &Connection,
+) -> Result<serde_json::Value, String> {
+    let minutes: i64 = if let Some(m) = query_params.get("minutes").and_then(|s| s.parse::<i64>().ok()) {
+        m.max(1)
+    } else if let Some(h) = query_params.get("hours").and_then(|s| s.parse::<f64>().ok()) {
+        ((h * 60.0).round() as i64).max(1)
+    } else {
+        60
+    };
+
+    let now_utc = chrono::Utc::now();
+    let since_utc = now_utc - chrono::Duration::minutes(minutes);
+    let beijing_offset = chrono::FixedOffset::east_opt(8 * 3600).unwrap();
+
+    let since_param = query_params
+        .get("since")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    let (since_sql_val, since_bj_str, since_utc_str) = if let Some(s) = since_param {
+        (s.to_string(), s.to_string(), s.to_string())
+    } else {
+        let utc_str = since_utc.format("%Y-%m-%d %H:%M:%S").to_string();
+        let bj_str = since_utc.with_timezone(&beijing_offset).format("%Y-%m-%d %H:%M:%S").to_string();
+        (utc_str.clone(), bj_str, utc_str)
+    };
+
+    let until_bj_str = now_utc.with_timezone(&beijing_offset).format("%Y-%m-%d %H:%M:%S").to_string();
+    let until_utc_str = now_utc.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let workspace = query_params
+        .get("workspace")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let source = query_params
+        .get("source")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+    let role = query_params
+        .get("role")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "all".to_string());
+    let fmt = query_params
+        .get("format")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "compact".to_string());
+    let max_len = query_params
+        .get("max_len")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1000);
+    let order = query_params
+        .get("order")
+        .map(|s| s.trim().to_lowercase())
+        .unwrap_or_else(|| "desc".to_string());
+    let limit = query_params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(200);
+
+    let role_filter = match role.as_str() {
+        "user" => "AND m.role = 'user'",
+        "assistant" => "AND m.role = 'assistant'",
+        _ => "AND m.role IN ('user', 'assistant')",
+    };
+
+    let order_clause = if order == "asc" { "ASC" } else { "DESC" };
+    let limit_clause = if limit > 0 {
+        format!("LIMIT {}", limit)
+    } else {
+        "".to_string()
+    };
+
+    let sql = format!(
+        r#"
+        SELECT
+            c.workspace_path,
+            m.conversation_id,
+            c.title,
+            CASE
+                WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                ELSE 'antigravity'
+            END as source_app,
+            m.role,
+            m.content,
+            m.created_at,
+            datetime(m.created_at, '+8 hours') as bj_created_at
+        FROM messages m
+        JOIN conversations c ON m.conversation_id = c.id
+        WHERE datetime(m.created_at) >= datetime(?1)
+          AND (?2 IS NULL OR ?2 = '' OR c.workspace_path = ?2 OR c.workspace_path LIKE '%' || ?2 || '%')
+          AND (?3 IS NULL OR ?3 = '' OR c.source_types LIKE '%' || ?3 || '%')
+          {}
+        ORDER BY datetime(m.created_at, '+8 hours') {}
+        {}
+        "#,
+        role_filter, order_clause, limit_clause
+    );
+
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map(
+            rusqlite::params![since_sql_val, workspace.unwrap_or(""), source.unwrap_or("")],
+            |row| {
+                let ws_path: String = row.get(0)?;
+                let conv_id: String = row.get(1)?;
+                let title: Option<String> = row.get(2)?;
+                let source_app: Option<String> = row.get(3)?;
+                let msg_role: String = row.get(4)?;
+                let content: String = row.get(5)?;
+                let raw_created: Option<String> = row.get(6)?;
+                let bj_created: Option<String> = row.get(7)?;
+
+                Ok((
+                    ws_path,
+                    conv_id,
+                    title.unwrap_or_default(),
+                    source_app.unwrap_or_else(|| "unknown".to_string()),
+                    msg_role,
+                    content,
+                    raw_created,
+                    bj_created,
+                ))
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let time_window = json!({
+        "minutes": minutes,
+        "since_beijing": since_bj_str,
+        "until_beijing": until_bj_str,
+        "since_utc": since_utc_str,
+        "until_utc": until_utc_str,
+    });
+
+    if fmt == "timeline" || fmt == "flat" {
+        let mut timeline = Vec::new();
+        for row_res in rows.filter_map(Result::ok) {
+            let (ws_path, conv_id, title, source, msg_role, content, raw_created, bj_created) = row_res;
+            let time_label = if let Some(ref bj) = bj_created {
+                if let Some(t_part) = bj.split_whitespace().nth(1) {
+                    t_part.to_string()
+                } else {
+                    bj.clone()
+                }
+            } else {
+                "00:00:00".to_string()
+            };
+
+            let content_trimmed = content.trim();
+            let final_content = if max_len > 0 && content_trimmed.chars().count() > max_len {
+                let truncated: String = content_trimmed.chars().take(max_len).collect();
+                format!("{}... [truncated]", truncated)
+            } else {
+                content_trimmed.to_string()
+            };
+
+            timeline.push(json!({
+                "time": time_label,
+                "workspace": get_short_workspace(&ws_path),
+                "workspace_path": ws_path,
+                "conversation_id": conv_id,
+                "conversation_title": if title.trim().is_empty() { "未命名会话".to_string() } else { title },
+                "source": source,
+                "role": msg_role,
+                "content": final_content,
+                "created_at": convert_to_beijing_iso(raw_created)
+            }));
+        }
+
+        return Ok(json!({
+            "ok": true,
+            "time_window": time_window,
+            "total_messages": timeline.len(),
+            "timeline": timeline
+        }));
+    }
+
+    struct RecentConvEntry {
+        id: String,
+        title: String,
+        source: String,
+        last_activity_at: Option<String>,
+        messages: Vec<serde_json::Value>,
+    }
+
+    struct RecentWsEntry {
+        workspace_path: String,
+        workspace_short: String,
+        conv_order: Vec<String>,
+        conv_map: HashMap<String, RecentConvEntry>,
+    }
+
+    let mut ws_order: Vec<String> = Vec::new();
+    let mut ws_map: HashMap<String, RecentWsEntry> = HashMap::new();
+    let mut total_messages = 0usize;
+    let mut total_conversations = 0usize;
+
+    for row_res in rows.filter_map(Result::ok) {
+        let (ws_path, conv_id, title, source, msg_role, content, raw_created, bj_created) = row_res;
+        total_messages += 1;
+
+        let time_label = if let Some(ref bj) = bj_created {
+            if let Some(t_part) = bj.split_whitespace().nth(1) {
+                t_part.to_string()
+            } else {
+                bj.clone()
+            }
+        } else {
+            "00:00:00".to_string()
+        };
+
+        let content_trimmed = content.trim();
+        let final_content = if max_len > 0 && content_trimmed.chars().count() > max_len {
+            let truncated: String = content_trimmed.chars().take(max_len).collect();
+            format!("{}... [truncated]", truncated)
+        } else {
+            content_trimmed.to_string()
+        };
+
+        let formatted_msg = if fmt == "json" {
+            json!({
+                "time": time_label,
+                "role": msg_role,
+                "content": final_content
+            })
+        } else {
+            json!(format!("[{}] [{}] {}", time_label, msg_role, final_content))
+        };
+
+        let ws_entry = ws_map.entry(ws_path.clone()).or_insert_with(|| {
+            ws_order.push(ws_path.clone());
+            RecentWsEntry {
+                workspace_short: get_short_workspace(&ws_path),
+                workspace_path: ws_path.clone(),
+                conv_order: Vec::new(),
+                conv_map: HashMap::new(),
+            }
+        });
+
+        if !ws_entry.conv_map.contains_key(&conv_id) {
+            total_conversations += 1;
+            ws_entry.conv_order.push(conv_id.clone());
+            let beijing_conv_time = convert_to_beijing_iso(raw_created);
+            ws_entry.conv_map.insert(
+                conv_id.clone(),
+                RecentConvEntry {
+                    id: conv_id.clone(),
+                    title: if title.trim().is_empty() {
+                        "未命名会话".to_string()
+                    } else {
+                        title
+                    },
+                    source,
+                    last_activity_at: beijing_conv_time,
+                    messages: vec![formatted_msg],
+                },
+            );
+        } else if let Some(conv) = ws_entry.conv_map.get_mut(&conv_id) {
+            conv.messages.push(formatted_msg);
+        }
+    }
+
+    let mut workspaces_json = Vec::new();
+    for ws_path in ws_order {
+        if let Some(mut ws) = ws_map.remove(&ws_path) {
+            let mut convs_json = Vec::new();
+            let mut ws_msg_count = 0usize;
+            for cid in ws.conv_order {
+                if let Some(c) = ws.conv_map.remove(&cid) {
+                    let count = c.messages.len();
+                    ws_msg_count += count;
+                    convs_json.push(json!({
+                        "id": c.id,
+                        "title": c.title,
+                        "source": c.source,
+                        "message_count": count,
+                        "last_activity_at": c.last_activity_at,
+                        "messages": c.messages
+                    }));
+                }
+            }
+            workspaces_json.push(json!({
+                "workspace_path": ws.workspace_path,
+                "workspace_short": ws.workspace_short,
+                "conversation_count": convs_json.len(),
+                "message_count": ws_msg_count,
+                "conversations": convs_json
+            }));
+        }
+    }
+
+    Ok(json!({
+        "ok": true,
+        "time_window": time_window,
+        "total_workspaces": workspaces_json.len(),
+        "total_conversations": total_conversations,
+        "total_messages": total_messages,
+        "workspaces": workspaces_json
+    }))
+}
+
 fn send_json(stream: &mut TcpStream, status_code: u16, body: serde_json::Value) {
     send_response(stream, status_code, "application/json", &body.to_string());
 }
@@ -981,3 +1554,163 @@ fn format_beijing_tag(raw: Option<&str>, is_single_date: bool) -> String {
         format!("[{}] ", s)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn test_daily_summary_empty() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+        let query_params = HashMap::new();
+        let res = build_daily_summary(&query_params, &conn).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["total_workspaces"], 0);
+        assert_eq!(res["total_conversations"], 0);
+        assert_eq!(res["total_messages"], 0);
+    }
+
+    #[test]
+    fn test_daily_summary_with_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO conversations (id, workspace_path, title, source_types) VALUES ('c1', '/Users/test/ws1', 'Test Conv 1', '[\"antigravity\"]')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ('c1', 'user', 'Hello Agent', '2026-09-05 02:00:00')",
+            [],
+        ).unwrap();
+
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ('c1', 'assistant', 'Hello User, how can I help you today?', '2026-09-05 02:01:00')",
+            [],
+        ).unwrap();
+
+        let mut query_params = HashMap::new();
+        query_params.insert("date".to_string(), "2026-09-05".to_string());
+
+        // 测试默认 compact 模式
+        let res = build_daily_summary(&query_params, &conn).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["total_workspaces"], 1);
+        assert_eq!(res["total_conversations"], 1);
+        assert_eq!(res["total_messages"], 2);
+
+        let ws = &res["workspaces"][0];
+        assert_eq!(ws["workspace_path"], "/Users/test/ws1");
+        assert_eq!(ws["workspace_short"], "test/ws1");
+        assert_eq!(ws["conversation_count"], 1);
+        assert_eq!(ws["message_count"], 2);
+
+        let conv = &ws["conversations"][0];
+        assert_eq!(conv["title"], "Test Conv 1");
+        assert_eq!(conv["messages"].as_array().unwrap().len(), 2);
+        let msg0 = conv["messages"][0].as_str().unwrap();
+        assert!(msg0.contains("[user] Hello Agent"));
+
+        // 测试 format=json 模式
+        query_params.insert("format".to_string(), "json".to_string());
+        let res_json = build_daily_summary(&query_params, &conn).unwrap();
+        let conv_json = &res_json["workspaces"][0]["conversations"][0];
+        let msg_obj0 = &conv_json["messages"][0];
+        assert_eq!(msg_obj0["role"], "user");
+        assert_eq!(msg_obj0["content"], "Hello Agent");
+
+        // 测试 max_len 截断
+        query_params.insert("max_len".to_string(), "10".to_string());
+        let res_trunc = build_daily_summary(&query_params, &conn).unwrap();
+        let conv_trunc = &res_trunc["workspaces"][0]["conversations"][0];
+        let msg_obj1 = &conv_trunc["messages"][1];
+        assert!(msg_obj1["content"].as_str().unwrap().ends_with("... [truncated]"));
+
+        // 测试 role=user 过滤
+        query_params.insert("role".to_string(), "user".to_string());
+        let res_user_only = build_daily_summary(&query_params, &conn).unwrap();
+        assert_eq!(res_user_only["total_messages"], 1);
+        let conv_user_only = &res_user_only["workspaces"][0]["conversations"][0];
+        assert_eq!(conv_user_only["messages"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_recent_activity_empty() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+        let query_params = HashMap::new();
+        let res = build_recent_activity(&query_params, &conn).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["total_workspaces"], 0);
+        assert_eq!(res["total_conversations"], 0);
+        assert_eq!(res["total_messages"], 0);
+    }
+
+    #[test]
+    fn test_recent_activity_with_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO conversations (id, workspace_path, title, source_types) VALUES ('c1', '/Users/test/ws1', 'Recent Conv 1', '[\"antigravity\"]')",
+            [],
+        ).unwrap();
+
+        let now = chrono::Utc::now();
+        let min_20_ago = (now - chrono::Duration::minutes(20)).format("%Y-%m-%d %H:%M:%S").to_string();
+        let min_10_ago = (now - chrono::Duration::minutes(10)).format("%Y-%m-%d %H:%M:%S").to_string();
+        let hours_3_ago = (now - chrono::Duration::hours(3)).format("%Y-%m-%d %H:%M:%S").to_string();
+
+        // 20 分钟前 user 消息
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ('c1', 'user', 'What are you doing?', ?1)",
+            rusqlite::params![min_20_ago],
+        ).unwrap();
+
+        // 10 分钟前 assistant 消息
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ('c1', 'assistant', 'I am coding right now.', ?1)",
+            rusqlite::params![min_10_ago],
+        ).unwrap();
+
+        // 3 小时前旧消息
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ('c1', 'user', 'An old question from 3 hours ago', ?1)",
+            rusqlite::params![hours_3_ago],
+        ).unwrap();
+
+        // 1. 默认查询最近 60 分钟 (minutes=60)，应该只返回 2 条新消息
+        let mut query_params = HashMap::new();
+        let res = build_recent_activity(&query_params, &conn).unwrap();
+        assert_eq!(res["ok"], true);
+        assert_eq!(res["total_workspaces"], 1);
+        assert_eq!(res["total_conversations"], 1);
+        assert_eq!(res["total_messages"], 2);
+
+        let ws = &res["workspaces"][0];
+        assert_eq!(ws["workspace_short"], "test/ws1");
+        let conv = &ws["conversations"][0];
+        assert_eq!(conv["title"], "Recent Conv 1");
+        assert_eq!(conv["message_count"], 2);
+        let msg0 = conv["messages"][0].as_str().unwrap();
+        assert!(msg0.contains("I am coding right now.") || msg0.contains("What are you doing?"));
+
+        // 2. 测试 format=timeline
+        query_params.insert("format".to_string(), "timeline".to_string());
+        let res_timeline = build_recent_activity(&query_params, &conn).unwrap();
+        assert_eq!(res_timeline["total_messages"], 2);
+        let timeline_arr = res_timeline["timeline"].as_array().unwrap();
+        assert_eq!(timeline_arr.len(), 2);
+        assert_eq!(timeline_arr[0]["workspace"], "test/ws1");
+
+        // 3. 扩大时间窗口到 240 分钟，应该能获取全部 3 条消息
+        query_params.insert("format".to_string(), "compact".to_string());
+        query_params.insert("minutes".to_string(), "240".to_string());
+        let res_expanded = build_recent_activity(&query_params, &conn).unwrap();
+        assert_eq!(res_expanded["total_messages"], 3);
+    }
+}
+

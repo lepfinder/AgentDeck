@@ -1,5 +1,6 @@
 import React from 'react';
 import { siClaudecode, siCursor } from 'simple-icons';
+import { Bot, Briefcase } from 'lucide-react';
 
 /** Simple Icons 尚未收录 Antigravity；路径来自官方投稿 PR（source: antigravity.google/press） */
 const SI_ANTIGRAVITY_PATH =
@@ -68,6 +69,10 @@ export const IdeIcon: React.FC<{ id: string; className?: string }> = ({
       return (
         <SimpleIconPath title="OpenAI" path={SI_OPENAI_PATH} className={className} />
       );
+    case 'hermes':
+      return <Bot className={className} />;
+    case 'workbuddy':
+      return <Briefcase className={className} />;
     default:
       return (
         <SimpleIconPath

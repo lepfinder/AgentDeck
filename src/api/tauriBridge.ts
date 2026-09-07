@@ -18,6 +18,7 @@ import type {
   PromptItem,
   PromptInput,
   IdeAppStatus,
+  AgentSourceInfo,
 } from '../types';
 
 export const isTauri = () => {
@@ -230,6 +231,23 @@ export const api = {
       }
     }
     return '~/.agentdeck/agentdeck.db';
+  },
+
+  async getAgentSources(): Promise<AgentSourceInfo[]> {
+    if (isTauri()) {
+      try {
+        return await invoke<AgentSourceInfo[]>('get_agent_sources_cmd');
+      } catch (e) {
+        console.error('Failed to get agent sources via Tauri invoke:', e);
+      }
+    }
+    try {
+      const res = await fetch('/api/agent-sources');
+      const data = await res.json();
+      return data.sources || [];
+    } catch {
+      return [];
+    }
   },
 
   // 研发分析相关 API

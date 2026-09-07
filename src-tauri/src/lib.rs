@@ -19,7 +19,10 @@ use db::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use sync::{execute_sync, get_agent_source_paths, SyncResultInfo};
+use sync::{
+    collect_agent_sources, execute_sync, get_agent_source_paths, AgentSourceInfo,
+    SyncResultInfo,
+};
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 
 static AUTO_SYNC_INTERVAL_SECS: AtomicU64 = AtomicU64::new(60);
@@ -661,6 +664,12 @@ fn get_database_path_info() -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_agent_sources_cmd(state: State<'_, DbState>) -> Result<Vec<AgentSourceInfo>, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    Ok(collect_agent_sources(&conn))
+}
+
+#[tauri::command]
 async fn create_backup_cmd(
     target_dir: String,
     max_snapshots: Option<usize>,
@@ -757,7 +766,11 @@ fn command_on_path(bin: &str) -> bool {
 fn ide_installed(id: &str) -> bool {
     match id {
         "cursor" => macos_app_exists("Cursor") || command_on_path("cursor"),
-        "antigravity" => macos_app_exists("Antigravity") || command_on_path("antigravity"),
+        "antigravity" => {
+            macos_app_exists("Antigravity")
+                || macos_app_exists("Antigravity IDE")
+                || command_on_path("antigravity")
+        }
         "claude" => command_on_path("claude"),
         "codex" => command_on_path("codex"),
         _ => false,
@@ -834,7 +847,15 @@ fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), 
     {
         match ide.as_str() {
             "cursor" => open_in_macos_app("Cursor", &workspace_path),
-            "antigravity" => open_in_macos_app("Antigravity", &workspace_path),
+            "antigravity" => {
+                if macos_app_exists("Antigravity") {
+                    open_in_macos_app("Antigravity", &workspace_path)
+                } else if macos_app_exists("Antigravity IDE") {
+                    open_in_macos_app("Antigravity IDE", &workspace_path)
+                } else {
+                    open_in_macos_app("Antigravity", &workspace_path)
+                }
+            }
             "claude" => open_in_terminal_cli("claude", &workspace_path),
             "codex" => open_in_terminal_cli("codex", &workspace_path),
             _ => Err(format!("不支持的 IDE: {}", ide)),
@@ -877,6 +898,7 @@ pub fn run() {
             test_llm_pipeline,
             call_llm_with_fallback,
             get_database_path_info,
+            get_agent_sources_cmd,
             get_workspace_analysis_messages,
             save_workspace_fine_blocks_cmd,
             save_workspace_module_blocks_cmd,

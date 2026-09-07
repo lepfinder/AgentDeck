@@ -641,6 +641,14 @@
           <span class="badge-mini method-get">GET</span>
           <span>/api/workspaces</span>
         </a>
+        <a href="#endpoint-daily-summary" class="menu-item" data-path="/api/daily-summary">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/daily-summary</span>
+        </a>
+        <a href="#endpoint-recent-activity" class="menu-item" data-path="/api/recent-activity">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/recent-activity</span>
+        </a>
       </div>
 
       <div class="menu-group">
@@ -828,6 +836,153 @@
             <div class="curl-preview" id="curl-ws">curl http://127.0.0.1:8788/api/workspaces</div>
           </div>
           <div class="response-container" id="res-workspaces">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-daily-summary">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/daily-summary</span>
+          </div>
+          <span class="desc">今日活跃工作区与对话概括汇总（专为日报机器人与 LLM 总结深度压缩）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group">
+              <label>date (日期 YYYY-MM-DD)</label>
+              <input type="text" id="ds-date" placeholder="默认当天北京时间">
+            </div>
+            <div class="param-group">
+              <label>workspace (工作区过滤)</label>
+              <input type="text" id="ds-workspace" placeholder="可选: 路径或模糊名">
+            </div>
+            <div class="param-group">
+              <label>format (消息格式)</label>
+              <input type="text" id="ds-format" placeholder="compact (默认) 或 json">
+            </div>
+            <div class="param-group">
+              <label>max_len (单条截断字数)</label>
+              <input type="number" id="ds-maxlen" placeholder="默认 1000, 0 为不截断">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK - compact 格式)</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "date": "2026-09-05",
+  "total_workspaces": 1,
+  "total_conversations": 1,
+  "total_messages": 2,
+  "workspaces": [
+    {
+      "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+      "workspace_short": "personal/AgentDeck",
+      "conversation_count": 1,
+      "message_count": 2,
+      "conversations": [
+        {
+          "id": "conv-12345678",
+          "title": "添加今日概括与工作区对话接口",
+          "source": "antigravity",
+          "message_count": 2,
+          "messages": [
+            "[10:15:20] [user] 看一下现在对外的 API 有没有获取今天概括的接口 API",
+            "[10:15:35] [assistant] 对目前系统中对外的 API 进行了全面梳理..."
+          ]
+        }
+      ]
+    }
+  ]
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testDailySummary()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-ds">curl http://127.0.0.1:8788/api/daily-summary</div>
+          </div>
+          <div class="response-container" id="res-daily-summary">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-recent-activity">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/recent-activity</span>
+          </div>
+          <span class="desc">最近一小时（或指定窗口）各工作区活动记录（支持 compact/json/timeline 压缩）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="params-grid">
+            <div class="param-group">
+              <label>minutes (过去分钟数)</label>
+              <input type="number" id="ra-minutes" placeholder="默认 60 (1小时)">
+            </div>
+            <div class="param-group">
+              <label>workspace (工作区过滤)</label>
+              <input type="text" id="ra-workspace" placeholder="可选: 路径或关键词">
+            </div>
+            <div class="param-group">
+              <label>format (组织格式)</label>
+              <input type="text" id="ra-format" placeholder="compact (默认) / timeline / json">
+            </div>
+            <div class="param-group">
+              <label>max_len (单条截断)</label>
+              <input type="number" id="ra-maxlen" placeholder="默认 1000, 0 为不截断">
+            </div>
+          </div>
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例 (Response 200 OK - compact 格式)</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "time_window": {
+    "minutes": 60,
+    "since_beijing": "2026-09-05 10:45:00",
+    "until_beijing": "2026-09-05 11:45:00"
+  },
+  "total_workspaces": 1,
+  "total_conversations": 1,
+  "total_messages": 2,
+  "workspaces": [
+    {
+      "workspace_path": "/Users/xiyangxie/workspace/personal/AgentDeck",
+      "workspace_short": "personal/AgentDeck",
+      "conversation_count": 1,
+      "message_count": 2,
+      "conversations": [
+        {
+          "id": "workbuddy:a396779f-...",
+          "title": "Excel 转网页方便打印",
+          "source": "workbuddy",
+          "message_count": 2,
+          "last_activity_at": "2026-09-05 11:34:28",
+          "messages": [
+            "[11:34:28] [assistant] 已更新。已生成可打印网页...",
+            "[11:34:20] [user] 好像一行三个也可以，哪些没有人名的把手机号也列出来放到后面吧"
+          ]
+        }
+      ]
+    }
+  ]
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testRecentActivity()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-ra">curl http://127.0.0.1:8788/api/recent-activity</div>
+          </div>
+          <div class="response-container" id="res-recent-activity">
             <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
             <pre class="response-body"></pre>
           </div>
@@ -1309,6 +1464,38 @@
       const path = q ? `/api/workspaces?q=${encodeURIComponent(q)}` : '/api/workspaces';
       document.getElementById('curl-ws').textContent = `curl "http://127.0.0.1:8788${path}"`;
       sendReq('GET', path, null, 'res-workspaces');
+    }
+
+    function testDailySummary() {
+      const date = document.getElementById('ds-date').value.trim();
+      const ws = document.getElementById('ds-workspace').value.trim();
+      const fmt = document.getElementById('ds-format').value.trim();
+      const maxLen = document.getElementById('ds-maxlen').value.trim();
+      const params = new URLSearchParams();
+      if (date) params.set('date', date);
+      if (ws) params.set('workspace', ws);
+      if (fmt) params.set('format', fmt);
+      if (maxLen) params.set('max_len', maxLen);
+      const queryStr = params.toString();
+      const path = queryStr ? `/api/daily-summary?${queryStr}` : '/api/daily-summary';
+      document.getElementById('curl-ds').textContent = `curl "http://127.0.0.1:8788${path}"`;
+      sendReq('GET', path, null, 'res-daily-summary');
+    }
+
+    function testRecentActivity() {
+      const minutes = document.getElementById('ra-minutes').value.trim();
+      const ws = document.getElementById('ra-workspace').value.trim();
+      const fmt = document.getElementById('ra-format').value.trim();
+      const maxLen = document.getElementById('ra-maxlen').value.trim();
+      const params = new URLSearchParams();
+      if (minutes) params.set('minutes', minutes);
+      if (ws) params.set('workspace', ws);
+      if (fmt) params.set('format', fmt);
+      if (maxLen) params.set('max_len', maxLen);
+      const queryStr = params.toString();
+      const path = queryStr ? `/api/recent-activity?${queryStr}` : '/api/recent-activity';
+      document.getElementById('curl-ra').textContent = `curl "http://127.0.0.1:8788${path}"`;
+      sendReq('GET', path, null, 'res-recent-activity');
     }
 
     function testConversations() {

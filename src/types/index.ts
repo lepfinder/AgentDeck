@@ -356,3 +356,20 @@ export interface AppConfig {
   theme?: string;
   ai_config?: Record<string, any>;
 }
+
+export interface AgentPathInfo {
+  path: string;
+  display_path: string;
+  description: string;
+  exists: boolean;
+  is_dir: boolean;
+}
+
+export interface AgentSourceInfo {
+  id: string;
+  name: string;
+  detected: boolean;
+  session_count: number;
+  paths: AgentPathInfo[];
+}
+

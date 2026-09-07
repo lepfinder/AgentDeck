@@ -9,8 +9,18 @@ use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
 };
 
-const AG_PARSER_REV: &str = "ag-media-v3";
+const AG_PARSER_REV: &str = "ag-dual-dir-v1";
 const AG_PARSER_REV_KEY: &str = "agentdeck:ag_parser_rev";
+
+struct SessionCandidate {
+    cid: String,
+    session_dir: std::path::PathBuf,
+    transcript_path: std::path::PathBuf,
+    mtime: f64,
+    size: u64,
+    is_ide: bool,
+    shadowed_paths: Vec<std::path::PathBuf>,
+}
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -26,43 +36,112 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         None => return stats,
     };
 
-    let brain_dir = home.join(".gemini/antigravity-ide/brain");
-    if !brain_dir.is_dir() {
+    let brain_dirs = [
+        (home.join(".gemini/antigravity/brain"), false),
+        (home.join(".gemini/antigravity-ide/brain"), true),
+    ];
+
+    let mut candidates: std::collections::HashMap<String, SessionCandidate> =
+        std::collections::HashMap::new();
+
+    for (brain_dir, is_ide) in &brain_dirs {
+        if !brain_dir.is_dir() {
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(brain_dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let cid = match path.file_name().and_then(|n| n.to_str()) {
+                Some(name) if !name.starts_with('.') => name.to_string(),
+                _ => continue,
+            };
+
+            let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
+            if !transcript_path.is_file() {
+                continue;
+            }
+
+            let metadata = match transcript_path.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+            let size = metadata.len();
+
+            if let Some(existing) = candidates.get_mut(&cid) {
+                // 如果已存在同一 cid（跨目录重复），比较两者，择优选取更新/更大的
+                let is_newer =
+                    mtime > existing.mtime || (mtime == existing.mtime && size > existing.size);
+                if is_newer {
+                    let old_path = existing.transcript_path.clone();
+                    existing.session_dir = path;
+                    existing.transcript_path = transcript_path;
+                    existing.mtime = mtime;
+                    existing.size = size;
+                    existing.is_ide = *is_ide;
+                    existing.shadowed_paths.push(old_path);
+                } else {
+                    existing.shadowed_paths.push(transcript_path);
+                }
+            } else {
+                candidates.insert(
+                    cid.clone(),
+                    SessionCandidate {
+                        cid,
+                        session_dir: path,
+                        transcript_path,
+                        mtime,
+                        size,
+                        is_ide: *is_ide,
+                        shadowed_paths: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    if candidates.is_empty() {
         return stats;
     }
 
-    let entries = match std::fs::read_dir(&brain_dir) {
-        Ok(e) => e,
-        Err(_) => return stats,
-    };
-
     let force_reparse = ag_parser_rev_stale(conn);
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let cid = match path.file_name().and_then(|n| n.to_str()) {
-            Some(name) if !name.starts_with('.') => name.to_string(),
-            _ => continue,
-        };
-
-        let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
-        if !transcript_path.is_file() {
-            continue;
-        }
-
-        if incremental && !force_reparse && !needs_sync(conn, &transcript_path, true) {
+    for cand in candidates.into_values() {
+        if incremental && !force_reparse && !needs_sync(conn, &cand.transcript_path, true) {
             stats.skipped_count += 1;
+            for shadowed in &cand.shadowed_paths {
+                record_sync_state(conn, shadowed, &cand.cid, "antigravity_jsonl");
+            }
             continue;
         }
 
-        match parse_antigravity_session(&cid, &transcript_path, &path) {
+        match parse_antigravity_session(
+            &cand.cid,
+            &cand.transcript_path,
+            &cand.session_dir,
+            cand.is_ide,
+        ) {
             Ok(Some(conv)) => match save_conversation_tx(conn, &conv) {
                 Ok(is_new) => {
-                    record_sync_state(conn, &transcript_path, &cid, "antigravity_jsonl");
+                    record_sync_state(conn, &cand.transcript_path, &cand.cid, "antigravity_jsonl");
+                    for shadowed in &cand.shadowed_paths {
+                        record_sync_state(conn, shadowed, &cand.cid, "antigravity_jsonl");
+                    }
                     if is_new {
                         stats.new_count += 1;
                     } else {
@@ -70,7 +149,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                     }
                 }
                 Err(e) => {
-                    eprintln!("[Antigravity Importer] 保存失败 {}: {}", cid, e);
+                    eprintln!("[Antigravity Importer] 保存失败 {}: {}", cand.cid, e);
                     stats.error_count += 1;
                 }
             },
@@ -78,7 +157,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                 stats.skipped_count += 1;
             }
             Err(e) => {
-                eprintln!("[Antigravity Importer] 解析失败 {}: {}", cid, e);
+                eprintln!("[Antigravity Importer] 解析失败 {}: {}", cand.cid, e);
                 stats.error_count += 1;
             }
         }
@@ -114,11 +193,29 @@ fn mark_ag_synced(conn: &Connection) {
     );
 }
 
-fn load_antigravity_db_media(cid: &str, home: &Path) -> std::collections::HashMap<i64, Vec<String>> {
+fn load_antigravity_db_media(
+    cid: &str,
+    home: &Path,
+    is_ide: bool,
+) -> std::collections::HashMap<i64, Vec<String>> {
     let mut mapping = std::collections::HashMap::new();
-    let db_path = home.join(".gemini/antigravity-ide/conversations").join(format!("{}.db", cid));
+    let primary_dir = if is_ide {
+        home.join(".gemini/antigravity-ide/conversations")
+    } else {
+        home.join(".gemini/antigravity/conversations")
+    };
+    let fallback_dir = if is_ide {
+        home.join(".gemini/antigravity/conversations")
+    } else {
+        home.join(".gemini/antigravity-ide/conversations")
+    };
+
+    let mut db_path = primary_dir.join(format!("{}.db", cid));
     if !db_path.is_file() {
-        return mapping;
+        db_path = fallback_dir.join(format!("{}.db", cid));
+        if !db_path.is_file() {
+            return mapping;
+        }
     }
 
     let conn = match Connection::open_with_flags(
@@ -164,12 +261,13 @@ fn parse_antigravity_session(
     cid: &str,
     transcript_path: &Path,
     session_dir: &Path,
+    is_ide: bool,
 ) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(transcript_path)?;
     let reader = BufReader::new(file);
 
     let home = dirs::home_dir().unwrap_or_default();
-    let db_media = load_antigravity_db_media(cid, &home);
+    let db_media = load_antigravity_db_media(cid, &home, is_ide);
 
     let user_req_re = Regex::new(r"(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>")?;
     let workspace_re = Regex::new(r"(/[^\s\n\r]+)\s*->")?;
@@ -412,6 +510,12 @@ fn parse_antigravity_session(
         title = format!("Antigravity 会话 {}", &cid[..cid.len().min(8)]);
     }
 
+    let source_types = if is_ide {
+        vec!["antigravity".to_string(), "antigravity-ide".to_string()]
+    } else {
+        vec!["antigravity".to_string()]
+    };
+
     Ok(Some(RawConversation {
         id: cid.to_string(),
         title,
@@ -420,7 +524,100 @@ fn parse_antigravity_session(
         created_at,
         updated_at,
         parse_status: "ok".to_string(),
-        source_types: vec!["antigravity".to_string()],
+        source_types,
         messages,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_parse_antigravity_session() {
+        let tmp_dir = std::env::temp_dir().join(format!("test_ag_session_{}", std::process::id()));
+        let logs_dir = tmp_dir.join(".system_generated/logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+
+        let transcript_path = logs_dir.join("transcript.jsonl");
+        let mut file = File::create(&transcript_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"USER_INPUT","step_index":0,"content":"<USER_REQUEST>测试提问内容</USER_REQUEST>","timestamp":"2026-09-07T10:00:00Z"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"PLANNER_RESPONSE","step_index":1,"content":"这是助手的回答","timestamp":"2026-09-07T10:00:05Z"}}"#
+        )
+        .unwrap();
+        drop(file);
+
+        let conv = parse_antigravity_session("test-cid-123", &transcript_path, &tmp_dir, true)
+            .unwrap()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        assert_eq!(conv.id, "test-cid-123");
+        assert_eq!(conv.source_app, "antigravity");
+        assert!(conv.source_types.contains(&"antigravity-ide".to_string()));
+        assert_eq!(conv.messages.len(), 2);
+        assert_eq!(conv.messages[0].role, "user");
+        assert_eq!(conv.messages[0].content, "测试提问内容");
+        assert_eq!(conv.messages[1].role, "assistant");
+        assert_eq!(conv.messages[1].content, "这是助手的回答");
+    }
+
+    #[test]
+    fn test_dual_dir_candidate_deduplication() {
+        let mut candidates: std::collections::HashMap<String, SessionCandidate> =
+            std::collections::HashMap::new();
+
+        let cid = "shared-uuid-001".to_string();
+
+        // 模拟从 IDE 目录扫描到的旧版本
+        let ide_cand = SessionCandidate {
+            cid: cid.clone(),
+            session_dir: std::path::PathBuf::from("/mock/ide/brain/shared-uuid-001"),
+            transcript_path: std::path::PathBuf::from("/mock/ide/brain/shared-uuid-001/transcript.jsonl"),
+            mtime: 1000.0,
+            size: 500,
+            is_ide: true,
+            shadowed_paths: Vec::new(),
+        };
+        candidates.insert(cid.clone(), ide_cand);
+
+        // 模拟从桌面端目录扫描到的更新版本（mtime 更大）
+        let app_cand_mtime = 2000.0;
+        let app_cand_size = 800;
+        let app_transcript = std::path::PathBuf::from("/mock/app/brain/shared-uuid-001/transcript.jsonl");
+        let app_session = std::path::PathBuf::from("/mock/app/brain/shared-uuid-001");
+
+        let existing = candidates.get_mut(&cid).unwrap();
+        let is_newer = app_cand_mtime > existing.mtime
+            || (app_cand_mtime == existing.mtime && app_cand_size > existing.size);
+        assert!(is_newer);
+
+        let old_path = existing.transcript_path.clone();
+        existing.session_dir = app_session;
+        existing.transcript_path = app_transcript;
+        existing.mtime = app_cand_mtime;
+        existing.size = app_cand_size;
+        existing.is_ide = false;
+        existing.shadowed_paths.push(old_path);
+
+        // 验证去重结果：只有一个 candidate，指向更新的桌面端，且 shadowed_paths 包含 IDE 旧路径
+        assert_eq!(candidates.len(), 1);
+        let selected = candidates.get(&cid).unwrap();
+        assert_eq!(selected.mtime, 2000.0);
+        assert!(!selected.is_ide);
+        assert_eq!(selected.shadowed_paths.len(), 1);
+        assert_eq!(
+            selected.shadowed_paths[0],
+            std::path::PathBuf::from("/mock/ide/brain/shared-uuid-001/transcript.jsonl")
+        );
+    }
+}
+

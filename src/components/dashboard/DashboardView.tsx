@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { DashboardStats, DailyBarSlot, HourlyBarSlot, TopRankItem } from '../../types';
 import {
   Layers,
@@ -15,12 +15,14 @@ import {
   CalendarRange,
   ChevronLeft,
   ChevronRight,
+  Clock,
 } from 'lucide-react';
 import { ActivityBarChart } from './ActivityBarChart';
 import type { ActivityBarItem } from './ActivityBarChart';
 import { DailyActivityGantt } from './DailyActivityGantt';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
 import { HourlyPunchcardCard } from './HourlyPunchcardCard';
+import { CustomSelect } from '../common/CustomSelect';
 import { translate, useI18n } from '../../i18n';
 
 interface Props {
@@ -42,6 +44,58 @@ export const DashboardView: React.FC<Props> = ({
   const [last30Tab, setLast30Tab] = useState<'msgs' | 'convs'>('msgs');
   const [hourlyDate, setHourlyDate] = useState<string | null>(null);
   const [topRankTab, setTopRankTab] = useState<'all' | 'user'>('all');
+  const [autoRefreshSec, setAutoRefreshSec] = useState<number>(() => {
+    const saved = localStorage.getItem('agentdeck_dashboard_auto_refresh_interval');
+    return saved !== null ? Number(saved) : 0;
+  });
+  const [countdown, setCountdown] = useState<number>(autoRefreshSec);
+  const [ganttRefreshTrigger, setGanttRefreshTrigger] = useState<number>(0);
+
+  const handleManualRefresh = () => {
+    onRefresh();
+    setGanttRefreshTrigger((g) => g + 1);
+    if (autoRefreshSec > 0) {
+      setCountdown(autoRefreshSec);
+    }
+  };
+
+  useEffect(() => {
+    if (autoRefreshSec <= 0) {
+      setCountdown(0);
+      return;
+    }
+
+    setCountdown(autoRefreshSec);
+
+    const intervalId = setInterval(() => {
+      // 窗口被最小化或后台非激活时挂起倒数节约能耗
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          onRefresh();
+          setGanttRefreshTrigger((g) => g + 1);
+          return autoRefreshSec;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        onRefresh();
+        setGanttRefreshTrigger((g) => g + 1);
+        setCountdown(autoRefreshSec);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [autoRefreshSec, onRefresh]);
 
   if (loading && !stats) {
     return (
@@ -120,14 +174,52 @@ export const DashboardView: React.FC<Props> = ({
             {t('dashboard.subtitle')}
           </p>
         </div>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium theme-bg-sub hover:opacity-80 active:scale-95 theme-text-main rounded-lg border theme-border transition-all cursor-pointer shadow-sm"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-          {t('dashboard.refresh')}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* 自动刷新控制器 */}
+          <CustomSelect<number>
+            value={autoRefreshSec}
+            onChange={(sec) => {
+              setAutoRefreshSec(sec);
+              localStorage.setItem('agentdeck_dashboard_auto_refresh_interval', String(sec));
+            }}
+            options={[
+              { value: 0, label: t('dashboard.autoRefreshOff') },
+              { value: 10, label: '10s', subLabel: t('dashboard.autoRefresh10s') },
+              { value: 30, label: '30s', subLabel: t('dashboard.autoRefresh30s') },
+              { value: 60, label: '1m', subLabel: t('dashboard.autoRefresh60s') },
+              { value: 300, label: '5m', subLabel: t('dashboard.autoRefresh300s') },
+            ]}
+            className="text-xs"
+            triggerClassName="py-1.5 px-3 text-xs font-medium theme-bg-sub border theme-border rounded-lg shadow-xs hover:border-blue-500/50"
+            menuClassName="right-0 left-auto w-44"
+            renderTrigger={(selectedOption) => {
+              if (autoRefreshSec > 0) {
+                return (
+                  <span className="flex items-center gap-1.5 truncate select-none">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                    <span className="font-mono text-emerald-500 font-semibold">{countdown}s</span>
+                    <span className="theme-text-muted text-[11px]">/ {selectedOption?.label}</span>
+                  </span>
+                );
+              }
+              return (
+                <span className="flex items-center gap-1.5 truncate theme-text-sub select-none">
+                  <Clock className="h-3.5 w-3.5 theme-text-muted flex-shrink-0" />
+                  <span>{t('dashboard.autoRefreshOffShort')}</span>
+                </span>
+              );
+            }}
+          />
+
+          <button
+            onClick={handleManualRefresh}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium theme-bg-sub hover:opacity-80 active:scale-95 theme-text-main rounded-lg border theme-border transition-all cursor-pointer shadow-xs"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            {t('dashboard.refresh')}
+          </button>
+        </div>
       </div>
 
       {/* 4 大核心 KPI 指标卡片 */}
@@ -342,6 +434,7 @@ export const DashboardView: React.FC<Props> = ({
         todayStr={todayStr}
         onChangeDate={setHourlyDate}
         onSelectConversation={onSelectConversation}
+        refreshTrigger={ganttRefreshTrigger}
       />
 
       {/* 中部第二排：GitHub 风格年度活跃全景热力图 (Annual Contribution Calendar) */}

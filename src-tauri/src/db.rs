@@ -675,7 +675,7 @@ fn source_to_label_and_color(app: &str) -> (&'static str, &'static str) {
     }
 }
 
-fn get_short_workspace(path: &str) -> String {
+pub(crate) fn get_short_workspace(path: &str) -> String {
     if path.is_empty() {
         return "默认工作区".to_string();
     }

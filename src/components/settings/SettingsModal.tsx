@@ -33,7 +33,8 @@ import {
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
 import { useI18n } from '../../i18n';
-import type { CloudPreset, BackupInfo, BackupProgress } from '../../types';
+import type { CloudPreset, BackupInfo, BackupProgress, AgentSourceInfo } from '../../types';
+import { IdeIcon } from '../browse/ideIcons';
 import { AI_PROVIDERS } from '../../config/aiProviders';
 
 export type { AiProviderConfig } from '../../config/aiProviders';
@@ -114,6 +115,9 @@ export const SettingsModal: React.FC<Props> = ({
   });
 
   const [dbPath, setDbPath] = useState<string>('~/.agentdeck/agentdeck.db');
+  const [agentSources, setAgentSources] = useState<AgentSourceInfo[]>([]);
+  const [loadingSources, setLoadingSources] = useState<boolean>(false);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   // 备份相关状态
   const [backupTargetPath, setBackupTargetPath] = useState<string>(() => {
@@ -179,12 +183,28 @@ export const SettingsModal: React.FC<Props> = ({
     }
   };
 
+  const refreshAgentSources = () => {
+    setLoadingSources(true);
+    api
+      .getAgentSources()
+      .then((sources) => {
+        setAgentSources(sources);
+      })
+      .catch((e) => {
+        console.error('Failed to load agent sources:', e);
+      })
+      .finally(() => {
+        setLoadingSources(false);
+      });
+  };
+
   useEffect(() => {
     if (activeTab !== 'storage' || storageBootstrapped.current) return;
     storageBootstrapped.current = true;
     api.getDatabasePathInfo().then((p) => {
       if (p) setDbPath(p);
     });
+    refreshAgentSources();
   }, [activeTab]);
 
   useEffect(() => {
@@ -889,6 +909,148 @@ export const SettingsModal: React.FC<Props> = ({
                       {t('settings.syncDefaultHint')}
                     </span>
                   </div>
+                </div>
+
+                {/* 已接入的 Coding Agent 与监听文件路径列表 */}
+                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold theme-text-main flex items-center gap-2">
+                        <span>{t('settings.agentSourcesTitle')}</span>
+                        {agentSources.length > 0 && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 font-mono font-medium">
+                            {agentSources.filter((s) => s.detected).length} / {agentSources.length}{' '}
+                            {t('settings.activeAgents')}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] theme-text-muted mt-0.5">
+                        {t('settings.agentSourcesHint')}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={refreshAgentSources}
+                      disabled={loadingSources}
+                      className="p-1.5 rounded-lg theme-text-muted hover:theme-text-main hover:theme-bg-card border theme-border transition-colors cursor-pointer disabled:opacity-50"
+                      title={t('settings.refresh')}
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 ${loadingSources ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+
+                  {loadingSources && agentSources.length === 0 ? (
+                    <div className="flex items-center justify-center py-6 theme-text-muted text-xs gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span>{t('settings.loadingSources')}</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 pt-1">
+                      {agentSources.map((agent) => (
+                        <div
+                          key={agent.id}
+                          className="rounded-xl theme-bg-card border theme-border p-3.5 space-y-2.5 transition-all shadow-xs"
+                        >
+                          {/* Agent 头部 */}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-7 h-7 rounded-lg bg-black/5 dark:bg-white/5 flex items-center justify-center border theme-border shrink-0">
+                                <IdeIcon id={agent.id} className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <div className="text-xs font-semibold theme-text-main flex items-center gap-1.5">
+                                  <span>{agent.name}</span>
+                                  {agent.detected ? (
+                                    <span className="px-1.5 py-0.5 text-[9px] rounded font-medium bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+                                      {t('settings.agentDetected')}
+                                    </span>
+                                  ) : (
+                                    <span className="px-1.5 py-0.5 text-[9px] rounded font-medium bg-gray-500/10 text-gray-400 border border-gray-500/20">
+                                      {t('settings.agentNotDetected')}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="text-[11px] font-mono theme-text-sub flex items-center gap-1 bg-black/5 dark:bg-white/5 px-2 py-1 rounded-md border theme-border">
+                              <span className="font-bold theme-text-main">
+                                {agent.session_count.toLocaleString()}
+                              </span>
+                              <span className="theme-text-muted">{t('settings.sessionsCount')}</span>
+                            </div>
+                          </div>
+
+                          {/* 监听扫描路径列表 */}
+                          <div className="space-y-1.5 pt-1 border-t theme-border/60">
+                            {agent.paths.map((p, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center justify-between gap-2 text-[11px] py-1.5 px-2.5 rounded-lg bg-black/5 dark:bg-black/20 hover:bg-black/10 dark:hover:bg-black/30 transition-colors group"
+                              >
+                                <div className="flex items-center gap-2 min-w-0 flex-1">
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                      p.exists
+                                        ? 'bg-emerald-500 ring-2 ring-emerald-500/20'
+                                        : 'bg-gray-400/40'
+                                    }`}
+                                    title={
+                                      p.exists
+                                        ? t('settings.pathExists')
+                                        : t('settings.pathMissing')
+                                    }
+                                  />
+                                  <span
+                                    className="font-mono text-[10.5px] theme-text-main truncate select-all"
+                                    title={p.path}
+                                  >
+                                    {p.display_path}
+                                  </span>
+                                  <span className="text-[10px] theme-text-muted shrink-0 hidden sm:inline">
+                                    · {p.description}
+                                  </span>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <span
+                                    className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                                      p.exists
+                                        ? 'text-emerald-500 bg-emerald-500/10 border border-emerald-500/20'
+                                        : 'text-gray-400 bg-gray-500/10 border border-gray-500/20'
+                                    }`}
+                                  >
+                                    {p.exists
+                                      ? t('settings.pathExists')
+                                      : t('settings.pathMissing')}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(p.path);
+                                      setCopiedPath(p.path);
+                                      setTimeout(() => setCopiedPath(null), 1500);
+                                    }}
+                                    className="p-1 rounded hover:theme-bg-sub theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
+                                    title={
+                                      copiedPath === p.path
+                                        ? t('settings.pathCopied')
+                                        : t('settings.copyPath')
+                                    }
+                                  >
+                                    {copiedPath === p.path ? (
+                                      <Check className="h-3 w-3 text-emerald-500" />
+                                    ) : (
+                                      <Copy className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+                                    )}
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}

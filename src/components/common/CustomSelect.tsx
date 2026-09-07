@@ -18,6 +18,7 @@ interface CustomSelectProps<T = string | number> {
   triggerClassName?: string;
   menuClassName?: string;
   disabled?: boolean;
+  renderTrigger?: (selectedOption?: SelectOption<T>) => React.ReactNode;
 }
 
 export function CustomSelect<T extends string | number>({
@@ -29,6 +30,7 @@ export function CustomSelect<T extends string | number>({
   triggerClassName = '',
   menuClassName = '',
   disabled = false,
+  renderTrigger,
 }: CustomSelectProps<T>) {
   const { t } = useI18n();
   const resolvedPlaceholder = placeholder ?? t('settings.select');
@@ -70,12 +72,16 @@ export function CustomSelect<T extends string | number>({
           isOpen ? 'border-blue-500 ring-1 ring-blue-500/30' : ''
         } ${triggerClassName}`}
       >
-        <span className="flex items-center gap-2 truncate">
-          {selectedOption?.icon}
-          <span className="truncate">
-            {selectedOption ? selectedOption.label : resolvedPlaceholder}
+        {renderTrigger ? (
+          renderTrigger(selectedOption)
+        ) : (
+          <span className="flex items-center gap-2 truncate">
+            {selectedOption?.icon}
+            <span className="truncate">
+              {selectedOption ? selectedOption.label : resolvedPlaceholder}
+            </span>
           </span>
-        </span>
+        )}
         <ChevronDown
           className={`h-3.5 w-3.5 theme-text-muted transition-transform duration-200 flex-shrink-0 ${
             isOpen ? 'rotate-180 text-blue-500' : ''

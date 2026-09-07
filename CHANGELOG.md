@@ -2,6 +2,42 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.3.1] - 2026-09-07
+
+### 新增与优化
+- **Antigravity 与 Antigravity IDE 双目录适配与去重**：
+  - 同时扫描 `~/.gemini/antigravity/brain` 与 `~/.gemini/antigravity-ide/brain`，完整兼容桌面端与 IDE 两个不同产品形态的会话数据
+  - 针对安装迁移导致的跨目录相同 UUID (`cid`) 会话，引入修改时间与文件大小比对机制，自动择优选取最新副本，并将历史落后副本标记同步状态，杜绝会话重复、数据震荡以及大盘统计翻倍
+  - 兼容双目录 `conversations/<cid>.db` 附图媒体提取，并在 IDE 唤起检测中同时支持 `Antigravity.app` 与 `Antigravity IDE.app`
+- **设置页面数据源与监听路径全景展示**：
+  - 在应用设置「数据存储与源」页面中，全景呈现所有已接入的 Coding Agent（Cursor、Google Antigravity、Claude Code、Codex、Hermes、WorkBuddy）
+  - 动态探测本机各 Agent 数据源的就绪状态，展示已归档的历史会话条数统计
+  - 详细罗列 AgentDeck 在本机监听与扫描的每一个配置文件、数据库和日志目录路径（包含语义说明、路径有效性指示器及一键复制绝对路径功能）
+  - 新增 Tauri 内部指令 `get_agent_sources_cmd` 与本机 REST API 端点 `GET /api/agent-sources`，供前端界面与外部脚本无缝获取
+- **全景驾驶舱大盘自动刷新与紧凑化 UI**：
+  - 在首页「Agent 全景数据驾驶舱」顶部控制栏新增自动刷新频率切换器，支持关闭、10s、30s、1m、5m 多档位灵活配置
+  - 一体化自适应下拉触发器，直接在按钮内部集成动态脉冲绿点与实时倒数（如 `[ 🟢 57s / 1m ▾ ]`），彻底消除多余空白与控件割裂感
+  - 下拉菜单靠右对齐展开（`right-0 left-auto w-44`），选项完整展示且不遮挡标题或溢出屏幕
+  - 本地记忆用户的刷新频率偏好（`localStorage` 持久化），并在窗口最小化或后台非激活状态下智能挂起倒计时节约 CPU 与能耗
+  - 自动刷新时全面联动 4 大核心 KPI 指标卡片、24 小时活跃柱状图、近 30 天趋势图与每日并行活动甘特图
+
+## [0.3.0] - 2026-09-05
+
+### 新增与优化
+- **WorkBuddy 解析器全面重构**：
+  - 适配 WorkBuddy 原生 `.jsonl` 的结构化数组消息格式（`input_text` 与 `output_text`），彻底修复用户提问和模型正文被误判为空而丢失的问题
+  - 支持毫秒级数字时间戳提取与 RFC3339 转换
+  - 自动剥离前置系统注入的 `<system-reminder>`，精准提取 `<user_query>` 用户提问
+  - 智能关联并聚合轮次中的 `reasoning`（思考过程）与 `function_call`（工具调用），使前端完整展示“用户提问 → 思考折叠框 + 工具调用 + 正文回复”
+- **今日工作区概括汇总接口 (Daily Summary)**：
+  - 新增 `GET /api/daily-summary`（别名 `/api/daily-digest`），汇总当天各项目活跃工作区与对话
+  - 默认提供 `compact` 高密度紧凑文本格式 `[HH:MM:SS] [role] content`，极大幅度节约 LLM 输入 Token 消耗，支持 `format=json`、`max_len` 截断及多维过滤
+- **最近活动记录接口 (Recent Activity)**：
+  - 新增 `GET /api/recent-activity`（别名 `/api/recent`、`/api/hourly-activity`），查询最近 1 小时（或自定义 `minutes`/`hours`）的活跃交互
+  - 新增 `format=timeline`（时间轴流）模式，直接按时间输出动态事件流，便于外部自动化看板与通知直连
+- **开发端口调整**：
+  - 默认开发端口调整为 `1421`，杜绝与同机其他 Tauri 应用端口冲突
+
 ## [0.2.9] - 2026-09-03
 
 ### 修复与优化

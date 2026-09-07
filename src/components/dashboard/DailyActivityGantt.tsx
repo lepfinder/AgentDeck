@@ -24,6 +24,7 @@ interface Props {
   todayStr: string;
   onChangeDate?: (date: string) => void;
   onSelectConversation: (convId: string, workspacePath: string) => void;
+  refreshTrigger?: number;
 }
 
 export interface PromptCluster {
@@ -50,6 +51,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
   todayStr,
   onChangeDate,
   onSelectConversation,
+  refreshTrigger,
 }) => {
   const { t } = useI18n();
   const [stats, setStats] = useState<DailyTimelineStats | null>(null);
@@ -96,7 +98,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
     return () => {
       active = false;
     };
-  }, [date]);
+  }, [date, refreshTrigger]);
 
   // ESC 键关闭弹窗
   useEffect(() => {

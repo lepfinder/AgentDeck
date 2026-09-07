@@ -30,15 +30,20 @@ pub fn get_agent_source_paths() -> Vec<PathBuf> {
             paths.push(cursor_wal);
         }
 
-        // 2. Antigravity: 探测 brain 目录及其最新的活跃 transcript.jsonl
-        let brain_dir = home.join(".gemini/antigravity-ide/brain");
-        if brain_dir.is_dir() {
-            paths.push(brain_dir.clone());
-            if let Ok(entries) = std::fs::read_dir(&brain_dir) {
-                for e in entries.flatten().take(50) {
-                    let transcript = e.path().join(".system_generated/logs/transcript.jsonl");
-                    if transcript.is_file() {
-                        paths.push(transcript);
+        // 2. Antigravity: 探测 Antigravity (桌面端) 与 Antigravity IDE 的 brain 目录及最新活跃 transcript.jsonl
+        let ag_brain_dirs = [
+            home.join(".gemini/antigravity/brain"),
+            home.join(".gemini/antigravity-ide/brain"),
+        ];
+        for brain_dir in ag_brain_dirs {
+            if brain_dir.is_dir() {
+                paths.push(brain_dir.clone());
+                if let Ok(entries) = std::fs::read_dir(&brain_dir) {
+                    for e in entries.flatten().take(50) {
+                        let transcript = e.path().join(".system_generated/logs/transcript.jsonl");
+                        if transcript.is_file() {
+                            paths.push(transcript);
+                        }
                     }
                 }
             }
@@ -73,6 +78,123 @@ pub fn get_agent_source_paths() -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentPathInfo {
+    pub path: String,
+    pub display_path: String,
+    pub description: String,
+    pub exists: bool,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSourceInfo {
+    pub id: String,
+    pub name: String,
+    pub detected: bool,
+    pub session_count: i64,
+    pub paths: Vec<AgentPathInfo>,
+}
+
+/// 收集所有受支持的 Coding Agent、扫描路径及本机存在与会话统计
+pub fn collect_agent_sources(conn: &rusqlite::Connection) -> Vec<AgentSourceInfo> {
+    let mut session_counts = std::collections::HashMap::new();
+    if let Ok(mut stmt) =
+        conn.prepare("SELECT source_app, COUNT(*) FROM conversations GROUP BY source_app")
+    {
+        if let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        {
+            for item in rows.flatten() {
+                session_counts.insert(item.0, item.1);
+            }
+        }
+    }
+
+    let home = dirs::home_dir();
+
+    let make_info = |rel: &str, desc: &str| -> AgentPathInfo {
+        let full = match &home {
+            Some(h) => h.join(rel),
+            None => std::path::PathBuf::from(format!("/{}", rel)),
+        };
+        let exists = full.exists();
+        let is_dir = full.is_dir();
+        AgentPathInfo {
+            path: full.to_string_lossy().to_string(),
+            display_path: format!("~/{}", rel),
+            description: desc.to_string(),
+            exists,
+            is_dir,
+        }
+    };
+
+    let agents = vec![
+        (
+            "cursor",
+            "Cursor",
+            vec![
+                make_info(
+                    "Library/Application Support/Cursor/User/globalStorage/state.vscdb",
+                    "全局对话数据库 (SQLite)",
+                ),
+                make_info(
+                    "Library/Application Support/Cursor/User/workspaceStorage",
+                    "工作区状态与元数据缓存",
+                ),
+                make_info(".cursor/projects", "项目会话索引"),
+            ],
+        ),
+        (
+            "antigravity",
+            "Google Antigravity",
+            vec![
+                make_info(".gemini/antigravity/brain", "桌面端会话记录 (brain)"),
+                make_info(".gemini/antigravity-ide/brain", "IDE 会话记录 (brain)"),
+                make_info(".gemini/antigravity/conversations", "桌面端媒体与步进数据"),
+                make_info(".gemini/antigravity-ide/conversations", "IDE 媒体与步进数据"),
+            ],
+        ),
+        (
+            "claude",
+            "Claude Code",
+            vec![make_info(".claude/projects", "项目与会话历史 (JSONL)")],
+        ),
+        (
+            "codex",
+            "Codex",
+            vec![make_info(".codex/sessions", "CLI 交互会话存储")],
+        ),
+        (
+            "hermes",
+            "Hermes",
+            vec![
+                make_info(".hermes", "Hermes Agent 会话主目录"),
+                make_info(".hermes/state.db", "SQLite 状态数据库"),
+            ],
+        ),
+        (
+            "workbuddy",
+            "WorkBuddy",
+            vec![make_info(".workbuddy/projects", "任务与交互会话 (.jsonl)")],
+        ),
+    ];
+
+    agents
+        .into_iter()
+        .map(|(id, name, paths)| {
+            let detected = paths.iter().any(|p| p.exists);
+            let session_count = *session_counts.get(id).unwrap_or(&0);
+            AgentSourceInfo {
+                id: id.to_string(),
+                name: name.to_string(),
+                detected,
+                session_count,
+                paths,
+            }
+        })
+        .collect()
 }
 
 static IS_SYNCING: AtomicBool = AtomicBool::new(false);
@@ -221,3 +343,47 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
 
     aggregate.unwrap_or_else(queued_result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn test_collect_agent_sources_counts_and_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute(
+            r#"
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                source_app TEXT
+            );
+            "#,
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO conversations (id, source_app) VALUES ('c1', 'cursor'), ('c2', 'cursor'), ('ag1', 'antigravity');",
+            [],
+        )
+        .unwrap();
+
+        let sources = collect_agent_sources(&conn);
+        assert_eq!(sources.len(), 6);
+
+        let cursor_info = sources.iter().find(|s| s.id == "cursor").unwrap();
+        assert_eq!(cursor_info.name, "Cursor");
+        assert_eq!(cursor_info.session_count, 2);
+        assert!(!cursor_info.paths.is_empty());
+
+        let ag_info = sources.iter().find(|s| s.id == "antigravity").unwrap();
+        assert_eq!(ag_info.name, "Google Antigravity");
+        assert_eq!(ag_info.session_count, 1);
+        assert_eq!(ag_info.paths.len(), 4);
+
+        let claude_info = sources.iter().find(|s| s.id == "claude").unwrap();
+        assert_eq!(claude_info.session_count, 0);
+    }
+}
+
