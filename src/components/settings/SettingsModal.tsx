@@ -983,7 +983,7 @@ export const SettingsModal: React.FC<Props> = ({
                       <div className="theme-bg-sub border theme-border rounded-xl p-3">
                         <div className="text-[11px] theme-text-muted">{t('settings.llmAvgLatency')}</div>
                         <div className="text-lg font-bold theme-text-main mt-0.5">
-                          {llmSummary.avg_latency_ms} <span className="text-xs font-normal theme-text-muted">ms</span>
+                          {Math.round(llmSummary.avg_latency_ms).toLocaleString()} <span className="text-xs font-normal theme-text-muted">ms</span>
                         </div>
                         <div className="text-[10px] theme-text-muted mt-0.5">
                           {llmSummary.total_calls > 0 ? `${(llmSummary.avg_latency_ms / 1000).toFixed(1)}s / call` : '-'}
@@ -1074,12 +1074,14 @@ export const SettingsModal: React.FC<Props> = ({
                                   )}
                                 </div>
 
-                                <div className="flex items-center gap-4 text-[11px] theme-text-muted shrink-0 ml-2">
+                                <div className="flex items-center gap-4 text-[11px] theme-text-muted shrink-0 ml-2 font-mono">
                                   <span title={`Prompt: ${log.prompt_tokens} / Completion: ${log.completion_tokens}`}>
                                     {log.total_tokens > 0 ? `${log.total_tokens.toLocaleString()} tokens` : '-'}
                                   </span>
-                                  <span className="w-16 text-right">{log.latency_ms}ms</span>
-                                  <span className="w-28 text-right hidden sm:inline">{log.created_at.slice(5, 19)}</span>
+                                  <span className="w-16 text-right">
+                                    {log.latency_ms >= 1000 ? `${(log.latency_ms / 1000).toFixed(1)}s` : `${log.latency_ms}ms`}
+                                  </span>
+                                  <span className="w-28 text-right hidden sm:inline">{log.created_at.slice(5, 19).replace('T', ' ')}</span>
                                 </div>
                               </div>
 
