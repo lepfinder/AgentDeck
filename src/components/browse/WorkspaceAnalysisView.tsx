@@ -344,10 +344,19 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
       <div className="theme-bg-card border theme-border rounded-xl p-5 shadow-xs space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-purple-500" />
-              {t('analysis.rdTitle')}
-            </h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-purple-500" />
+                {t('analysis.rdTitle')}
+              </h2>
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-500/10 text-amber-500 border border-amber-500/20 select-none shadow-2xs"
+                title="已自动注入禁用思考指令（Gemini/百炼/DeepSeek等），大幅提速并杜绝超时"
+              >
+                <Zap className="h-2.5 w-2.5" />
+                <span>{t('analysis.fastModeBadge')}</span>
+              </span>
+            </div>
             <p className="text-xs theme-text-muted mt-0.5">
               {t('analysis.pipeline')}
             </p>

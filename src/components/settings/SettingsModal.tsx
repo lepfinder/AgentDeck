@@ -30,10 +30,22 @@ import {
   Server,
   Copy,
   Lock,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
+  FileText,
+  BarChart3,
 } from 'lucide-react';
 import { CustomSelect } from '../common/CustomSelect';
 import { useI18n } from '../../i18n';
-import type { CloudPreset, BackupInfo, BackupProgress, AgentSourceInfo } from '../../types';
+import type {
+  CloudPreset,
+  BackupInfo,
+  BackupProgress,
+  AgentSourceInfo,
+  LlmCallLogItem,
+  LlmUsageSummary,
+} from '../../types';
 import { IdeIcon } from '../browse/ideIcons';
 import { AI_PROVIDERS } from '../../config/aiProviders';
 
@@ -109,6 +121,9 @@ export const SettingsModal: React.FC<Props> = ({
   const [autoFallbackEnabled, setAutoFallbackEnabled] = useState<boolean>(() => {
     return localStorage.getItem('agentdeck_auto_fallback') !== 'false';
   });
+  const [disableThinking, setDisableThinking] = useState<boolean>(() => {
+    return localStorage.getItem('agentdeck_ai_disable_thinking') !== 'false';
+  });
 
   const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
     return localStorage.getItem('agentdeck_primary_ai_provider') || 'bailian';
@@ -135,6 +150,38 @@ export const SettingsModal: React.FC<Props> = ({
   const [isRestoring, setIsRestoring] = useState<boolean>(false);
   const [confirmRestoreFile, setConfirmRestoreFile] = useState<string | null>(null);
   const [restoreFeedback, setRestoreFeedback] = useState<{ success: boolean; msg: string } | null>(null);
+
+  // LLM 调用统计与审计日志状态
+  const [llmLogs, setLlmLogs] = useState<LlmCallLogItem[]>([]);
+  const [llmSummary, setLlmSummary] = useState<LlmUsageSummary | null>(null);
+  const [loadingLlmLogs, setLoadingLlmLogs] = useState<boolean>(false);
+  const [expandedLogId, setExpandedLogId] = useState<number | null>(null);
+
+  const refreshLlmLogs = async () => {
+    setLoadingLlmLogs(true);
+    try {
+      const [logs, summary] = await Promise.all([
+        api.getLlmCallLogs(50, 0),
+        api.getLlmUsageSummary(),
+      ]);
+      setLlmLogs(logs);
+      setLlmSummary(summary);
+    } catch (e) {
+      console.error('Failed to load LLM call logs:', e);
+    } finally {
+      setLoadingLlmLogs(false);
+    }
+  };
+
+  const handleClearLlmLogs = async () => {
+    if (!window.confirm(t('settings.llmClearConfirm'))) return;
+    try {
+      await api.clearLlmCallLogs();
+      await refreshLlmLogs();
+    } catch (e) {
+      console.error('Failed to clear LLM call logs:', e);
+    }
+  };
 
   const refreshBackups = async (targetPath: string) => {
     if (!targetPath) return;
@@ -205,6 +252,12 @@ export const SettingsModal: React.FC<Props> = ({
       if (p) setDbPath(p);
     });
     refreshAgentSources();
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'ai') {
+      refreshLlmLogs();
+    }
   }, [activeTab]);
 
   useEffect(() => {
@@ -337,6 +390,12 @@ export const SettingsModal: React.FC<Props> = ({
     const next = !autoFallbackEnabled;
     setAutoFallbackEnabled(next);
     localStorage.setItem('agentdeck_auto_fallback', String(next));
+  };
+
+  const handleToggleDisableThinking = () => {
+    const next = !disableThinking;
+    setDisableThinking(next);
+    localStorage.setItem('agentdeck_ai_disable_thinking', String(next));
   };
 
   // 单个模型测试连接（通过 Rust 原生端点发起，彻底避免 WebKit/浏览器 CORS 拦截）
@@ -585,15 +644,27 @@ export const SettingsModal: React.FC<Props> = ({
                       <Sparkles className="h-4 w-4 text-blue-500" />
                       <span className="font-bold text-xs theme-text-main">{t('settings.haTitle')}</span>
                     </div>
-                    <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                      <span className="theme-text-muted text-[11px]">{t('settings.failover')}</span>
-                      <input
-                        type="checkbox"
-                        checked={autoFallbackEnabled}
-                        onChange={handleToggleAutoFallback}
-                        className="rounded border-slate-600 text-blue-600 focus:ring-0 cursor-pointer"
-                      />
-                    </label>
+                    <div className="flex items-center gap-3">
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none" title={t('settings.disableThinkingHint')}>
+                        <Zap className={`h-3.5 w-3.5 ${disableThinking ? 'text-amber-500' : 'theme-text-muted'}`} />
+                        <span className="theme-text-muted text-[11px]">{t('settings.disableThinking')}</span>
+                        <input
+                          type="checkbox"
+                          checked={disableThinking}
+                          onChange={handleToggleDisableThinking}
+                          className="rounded border-slate-600 text-blue-600 focus:ring-0 cursor-pointer"
+                        />
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                        <span className="theme-text-muted text-[11px]">{t('settings.failover')}</span>
+                        <input
+                          type="checkbox"
+                          checked={autoFallbackEnabled}
+                          onChange={handleToggleAutoFallback}
+                          className="rounded border-slate-600 text-blue-600 focus:ring-0 cursor-pointer"
+                        />
+                      </label>
+                    </div>
                   </div>
 
                   <div className="grid grid-cols-2 gap-3 text-xs">
@@ -841,6 +912,216 @@ export const SettingsModal: React.FC<Props> = ({
                         <span>
                           {testResult.msg} {testResult.latency ? `(${testResult.latency}ms)` : ''}
                         </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* LLM 调用统计与审计日志 */}
+                <div className="pt-4 border-t theme-border space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold theme-text-main flex items-center gap-2">
+                        <BarChart3 className="h-4 w-4 text-blue-500" />
+                        <span>{t('settings.llmLogsTitle')}</span>
+                      </h4>
+                      <p className="text-xs theme-text-muted mt-0.5">
+                        {t('settings.llmLogsHint')}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={refreshLlmLogs}
+                        disabled={loadingLlmLogs}
+                        className="flex items-center gap-1.5 px-2.5 py-1 text-xs theme-bg-sub hover:opacity-80 border theme-border theme-text-main rounded-lg transition-all cursor-pointer disabled:opacity-50"
+                        title={t('common.refresh')}
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${loadingLlmLogs ? 'animate-spin' : ''}`} />
+                        <span>{t('common.refresh')}</span>
+                      </button>
+                      {llmLogs.length > 0 && (
+                        <button
+                          onClick={handleClearLlmLogs}
+                          className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-red-500 hover:bg-red-500/10 border border-red-500/20 rounded-lg transition-all cursor-pointer"
+                          title={t('settings.llmClearLogs')}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>{t('settings.llmClearLogs')}</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 统计指标小卡片 */}
+                  {llmSummary && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="theme-bg-sub border theme-border rounded-xl p-3">
+                        <div className="text-[11px] theme-text-muted">{t('settings.llmTotalCalls')}</div>
+                        <div className="text-lg font-bold theme-text-main mt-0.5 flex items-baseline gap-1.5">
+                          <span>{llmSummary.total_calls}</span>
+                          <span className="text-[11px] font-normal text-emerald-500">
+                            {llmSummary.total_calls > 0
+                              ? `${Math.round((llmSummary.success_calls / llmSummary.total_calls) * 100)}%`
+                              : '-'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] theme-text-muted mt-0.5">
+                          {t('settings.llmSuccessRate')}
+                        </div>
+                      </div>
+
+                      <div className="theme-bg-sub border theme-border rounded-xl p-3">
+                        <div className="text-[11px] theme-text-muted">{t('settings.llmTotalTokens')}</div>
+                        <div className="text-lg font-bold theme-text-main mt-0.5">
+                          {llmSummary.total_tokens.toLocaleString()}
+                        </div>
+                        <div className="text-[10px] theme-text-muted mt-0.5 truncate" title={`Prompt: ${llmSummary.total_prompt_tokens.toLocaleString()} / Completion: ${llmSummary.total_completion_tokens.toLocaleString()}`}>
+                          in: {llmSummary.total_prompt_tokens.toLocaleString()} / out: {llmSummary.total_completion_tokens.toLocaleString()}
+                        </div>
+                      </div>
+
+                      <div className="theme-bg-sub border theme-border rounded-xl p-3">
+                        <div className="text-[11px] theme-text-muted">{t('settings.llmAvgLatency')}</div>
+                        <div className="text-lg font-bold theme-text-main mt-0.5">
+                          {llmSummary.avg_latency_ms} <span className="text-xs font-normal theme-text-muted">ms</span>
+                        </div>
+                        <div className="text-[10px] theme-text-muted mt-0.5">
+                          {llmSummary.total_calls > 0 ? `${(llmSummary.avg_latency_ms / 1000).toFixed(1)}s / call` : '-'}
+                        </div>
+                      </div>
+
+                      <div className="theme-bg-sub border theme-border rounded-xl p-3">
+                        <div className="text-[11px] theme-text-muted">{t('settings.llmFallbackCalls')}</div>
+                        <div className="text-lg font-bold theme-text-main mt-0.5 flex items-baseline gap-1">
+                          <span className={llmSummary.fallback_calls > 0 ? 'text-amber-500' : 'theme-text-main'}>
+                            {llmSummary.fallback_calls}
+                          </span>
+                          <span className="text-xs font-normal theme-text-muted">{t('settings.llmTimes')}</span>
+                        </div>
+                        <div className="text-[10px] theme-text-muted mt-0.5">
+                          {llmSummary.total_calls - llmSummary.success_calls > 0
+                            ? `${llmSummary.total_calls - llmSummary.success_calls} ${t('settings.llmFailed')}`
+                            : t('settings.llmNormal')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 调用审计流水列表 */}
+                  <div className="theme-bg-sub border theme-border rounded-xl overflow-hidden">
+                    <div className="px-4 py-2.5 border-b theme-border flex items-center justify-between text-xs font-medium theme-text-muted">
+                      <span>{t('settings.llmRecentCalls')} ({llmLogs.length})</span>
+                      <span className="text-[11px] theme-text-muted">{t('settings.llmExpandHint')}</span>
+                    </div>
+
+                    {loadingLlmLogs && llmLogs.length === 0 ? (
+                      <div className="p-8 text-center theme-text-muted flex flex-col items-center gap-2">
+                        <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                        <span className="text-xs">{t('common.loading')}</span>
+                      </div>
+                    ) : llmLogs.length === 0 ? (
+                      <div className="p-8 text-center text-xs theme-text-muted">
+                        {t('settings.llmNoLogs')}
+                      </div>
+                    ) : (
+                      <div className="divide-y theme-border max-h-80 overflow-y-auto">
+                        {llmLogs.map((log) => {
+                          const isExpanded = expandedLogId === log.id;
+                          const sceneName =
+                            log.scene === 'fine_blocks'
+                              ? t('settings.llmSceneFine')
+                              : log.scene === 'merge_modules'
+                              ? t('settings.llmSceneMerge')
+                              : log.scene === 'generate_report'
+                              ? t('settings.llmSceneReport')
+                              : log.scene || t('settings.llmSceneGeneral');
+
+                          return (
+                            <div key={log.id} className="transition-colors hover:bg-black/5 dark:hover:bg-white/5">
+                              <div
+                                onClick={() => setExpandedLogId(isExpanded ? null : log.id)}
+                                className="px-4 py-2.5 flex items-center justify-between cursor-pointer text-xs"
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  {isExpanded ? (
+                                    <ChevronDown className="h-3.5 w-3.5 theme-text-muted shrink-0" />
+                                  ) : (
+                                    <ChevronRight className="h-3.5 w-3.5 theme-text-muted shrink-0" />
+                                  )}
+
+                                  <span
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 ${
+                                      log.status === 'success'
+                                        ? 'bg-emerald-500/15 text-emerald-500'
+                                        : 'bg-red-500/15 text-red-500'
+                                    }`}
+                                  >
+                                    {log.status === 'success' ? 'OK' : 'ERR'}
+                                  </span>
+
+                                  <span className="font-medium theme-text-main truncate max-w-[140px]" title={log.model}>
+                                    {log.model}
+                                  </span>
+
+                                  <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 text-[10px] shrink-0 font-medium">
+                                    {sceneName}
+                                  </span>
+
+                                  {log.is_fallback && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 text-[10px] shrink-0 font-medium">
+                                      {t('settings.llmFallbackBadge')}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center gap-4 text-[11px] theme-text-muted shrink-0 ml-2">
+                                  <span title={`Prompt: ${log.prompt_tokens} / Completion: ${log.completion_tokens}`}>
+                                    {log.total_tokens > 0 ? `${log.total_tokens.toLocaleString()} tokens` : '-'}
+                                  </span>
+                                  <span className="w-16 text-right">{log.latency_ms}ms</span>
+                                  <span className="w-28 text-right hidden sm:inline">{log.created_at.slice(5, 19)}</span>
+                                </div>
+                              </div>
+
+                              {isExpanded && (
+                                <div className="px-4 pb-3 pt-1 border-t theme-border bg-black/5 dark:bg-white/5 space-y-2 text-xs">
+                                  {log.error_msg && (
+                                    <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 text-xs">
+                                      <span className="font-semibold">Error: </span>
+                                      {log.error_msg}
+                                    </div>
+                                  )}
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                                    <div className="theme-bg-sub border theme-border rounded-lg p-2.5">
+                                      <div className="flex items-center justify-between font-semibold theme-text-main mb-1 text-[11px]">
+                                        <span className="flex items-center gap-1">
+                                          <FileText className="h-3 w-3 text-blue-500" />
+                                          {t('settings.llmSystemPrompt')}
+                                        </span>
+                                      </div>
+                                      <pre className="text-[11px] theme-text-muted font-mono whitespace-pre-wrap break-all max-h-36 overflow-y-auto bg-black/10 dark:bg-black/30 p-2 rounded">
+                                        {log.system_prompt || '(None)'}
+                                      </pre>
+                                    </div>
+
+                                    <div className="theme-bg-sub border theme-border rounded-lg p-2.5">
+                                      <div className="flex items-center justify-between font-semibold theme-text-main mb-1 text-[11px]">
+                                        <span className="flex items-center gap-1">
+                                          <FileText className="h-3 w-3 text-emerald-500" />
+                                          {t('settings.llmUserPrompt')}
+                                        </span>
+                                      </div>
+                                      <pre className="text-[11px] theme-text-muted font-mono whitespace-pre-wrap break-all max-h-36 overflow-y-auto bg-black/10 dark:bg-black/30 p-2 rounded">
+                                        {log.user_prompt_snippet || '(None)'}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

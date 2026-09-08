@@ -318,6 +318,9 @@ pub struct LlmCompletionResult {
     pub provider_used: String,
     pub is_fallback: bool,
     pub latency_ms: u64,
+    pub prompt_tokens: Option<i64>,
+    pub completion_tokens: Option<i64>,
+    pub total_tokens: Option<i64>,
     pub error: Option<String>,
 }
 
@@ -335,6 +338,9 @@ async fn call_llm_with_fallback(
     fallback: Option<LlmEndpointConfig>,
     messages: Vec<serde_json::Value>,
     max_tokens: Option<u32>,
+    disable_thinking: Option<bool>,
+    scene: Option<String>,
+    state: State<'_, DbState>,
 ) -> Result<LlmCompletionResult, String> {
     let start = std::time::Instant::now();
     let client = match reqwest::Client::builder()
@@ -352,23 +358,55 @@ async fn call_llm_with_fallback(
                 provider_used: primary.provider_name,
                 is_fallback: false,
                 latency_ms: 0,
+                prompt_tokens: None,
+                completion_tokens: None,
+                total_tokens: None,
                 error: Some(format!("HTTP客户端构建失败: {}", e)),
             });
         }
     };
 
-    // 辅助闭包：发送单次 LLM 请求
-    let send_request = |endpoint: &LlmEndpointConfig, attempt_idx: usize| {
+    let should_disable_thinking = disable_thinking.unwrap_or(true);
+    let scene_str = scene.unwrap_or_else(|| "general".to_string());
+
+    // 提取系统提示词和用户输入片段用于审计
+    let mut system_prompt = String::new();
+    let mut user_prompt_snippet = String::new();
+    for msg in &messages {
+        let role = msg.get("role").and_then(|r| r.as_str()).unwrap_or("");
+        let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("");
+        if role == "system" && system_prompt.is_empty() {
+            system_prompt = content.to_string();
+        } else if role == "user" && user_prompt_snippet.is_empty() {
+            user_prompt_snippet = content.chars().take(800).collect();
+        }
+    }
+
+    let parse_usage = |data: &serde_json::Value| -> (i64, i64, i64) {
+        if let Some(usage) = data.get("usage") {
+            let pt = usage.get("prompt_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+            let ct = usage.get("completion_tokens").and_then(|t| t.as_i64()).unwrap_or(0);
+            let tt = usage.get("total_tokens").and_then(|t| t.as_i64()).unwrap_or(pt + ct);
+            (pt, ct, tt)
+        } else {
+            (0, 0, 0)
+        }
+    };
+
+    // 辅助闭包：发送单次 LLM 请求（支持注入关闭思考参数）
+    let send_request = |endpoint: &LlmEndpointConfig, attempt_idx: usize, include_thinking_params: bool| {
         let url = format!(
             "{}/chat/completions",
             endpoint.base_url.trim_end_matches('/')
         );
         println!(
-            "[AgentDeck LLM] 🚀 [{}] POST {} (model: {}, attempt: {})",
+            "[AgentDeck LLM] 🚀 [{}] POST {} (model: {}, attempt: {}, disable_thinking: {}, scene: {})",
             endpoint.provider_name,
             url,
             endpoint.model,
-            attempt_idx + 1
+            attempt_idx + 1,
+            include_thinking_params,
+            scene_str
         );
         let mut payload = serde_json::json!({
             "model": endpoint.model,
@@ -377,6 +415,13 @@ async fn call_llm_with_fallback(
         });
         if let Some(mt) = max_tokens {
             payload["max_tokens"] = serde_json::json!(mt);
+        }
+
+        if include_thinking_params {
+            payload["enable_thinking"] = serde_json::json!(false);
+            payload["thinking_config"] = serde_json::json!({ "thinking_budget": 0 });
+            payload["reasoning_effort"] = serde_json::json!("none");
+            payload["thinking"] = serde_json::json!({ "type": "disabled" });
         }
 
         let mut req = client
@@ -397,12 +442,14 @@ async fn call_llm_with_fallback(
     // 1. 先尝试主力模型 (支持 1 次自动重试)
     let mut primary_err_msg = String::new();
     for attempt in 0..2 {
-        let req = send_request(&primary, attempt);
+        let req = send_request(&primary, attempt, should_disable_thinking);
         let call_start = std::time::Instant::now();
         match req.send().await {
             Ok(res) if res.status().is_success() => {
                 let latency_ms = call_start.elapsed().as_millis() as u64;
                 if let Ok(data) = res.json::<serde_json::Value>().await {
+                    let (prompt_tokens, completion_tokens, total_tokens) = parse_usage(&data);
+
                     if let Some(content) = data
                         .get("choices")
                         .and_then(|c| c.get(0))
@@ -412,17 +459,39 @@ async fn call_llm_with_fallback(
                     {
                         if !content.trim().is_empty() {
                             println!(
-                                "[AgentDeck LLM] ✅ [{}] HTTP 200 ({}ms, content_len: {})",
+                                "[AgentDeck LLM] ✅ [{}] HTTP 200 ({}ms, content_len: {}, tokens: {}/{})",
                                 primary.provider_name,
                                 latency_ms,
-                                content.len()
+                                content.len(),
+                                prompt_tokens,
+                                completion_tokens
                             );
+                            if let Ok(conn) = state.conn_mutex.lock() {
+                                let _ = db::save_llm_call_log(
+                                    &conn,
+                                    &scene_str,
+                                    &primary.provider_name,
+                                    &primary.model,
+                                    &system_prompt,
+                                    &user_prompt_snippet,
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    total_tokens,
+                                    latency_ms as i64,
+                                    false,
+                                    "success",
+                                    None,
+                                );
+                            }
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: content.to_string(),
                                 provider_used: primary.provider_name,
                                 is_fallback: false,
                                 latency_ms,
+                                prompt_tokens: Some(prompt_tokens),
+                                completion_tokens: Some(completion_tokens),
+                                total_tokens: Some(total_tokens),
                                 error: None,
                             });
                         }
@@ -436,12 +505,32 @@ async fn call_llm_with_fallback(
                     {
                         if !reasoning.trim().is_empty() {
                             println!("[AgentDeck LLM] ✅ [{}] HTTP 200 via reasoning ({}ms, reasoning_len: {})", primary.provider_name, latency_ms, reasoning.len());
+                            if let Ok(conn) = state.conn_mutex.lock() {
+                                let _ = db::save_llm_call_log(
+                                    &conn,
+                                    &scene_str,
+                                    &primary.provider_name,
+                                    &primary.model,
+                                    &system_prompt,
+                                    &user_prompt_snippet,
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    total_tokens,
+                                    latency_ms as i64,
+                                    false,
+                                    "success",
+                                    None,
+                                );
+                            }
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: reasoning.to_string(),
                                 provider_used: primary.provider_name,
                                 is_fallback: false,
                                 latency_ms,
+                                prompt_tokens: Some(prompt_tokens),
+                                completion_tokens: Some(completion_tokens),
+                                total_tokens: Some(total_tokens),
                                 error: None,
                             });
                         }
@@ -475,8 +564,60 @@ async fn call_llm_with_fallback(
                     msg,
                     err_txt.chars().take(200).collect::<String>()
                 );
+
+                // 若由于严格校验未知字段导致 400，自动剥离 thinking 参数降级重发一次
+                if status.as_u16() == 400 && should_disable_thinking {
+                    println!("[AgentDeck LLM] ⚠️ [{}] 检测到 400 错误，剥离 thinking 参数降级重发...", primary.provider_name);
+                    let fallback_req = send_request(&primary, attempt, false);
+                    if let Ok(fallback_res) = fallback_req.send().await {
+                        if fallback_res.status().is_success() {
+                            let latency_ms = call_start.elapsed().as_millis() as u64;
+                            if let Ok(data) = fallback_res.json::<serde_json::Value>().await {
+                                let (prompt_tokens, completion_tokens, total_tokens) = parse_usage(&data);
+                                if let Some(content) = data
+                                    .get("choices")
+                                    .and_then(|c| c.get(0))
+                                    .and_then(|c| c.get("message"))
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|s| s.as_str())
+                                {
+                                    if !content.trim().is_empty() {
+                                        if let Ok(conn) = state.conn_mutex.lock() {
+                                            let _ = db::save_llm_call_log(
+                                                &conn,
+                                                &scene_str,
+                                                &primary.provider_name,
+                                                &primary.model,
+                                                &system_prompt,
+                                                &user_prompt_snippet,
+                                                prompt_tokens,
+                                                completion_tokens,
+                                                total_tokens,
+                                                latency_ms as i64,
+                                                false,
+                                                "success",
+                                                None,
+                                            );
+                                        }
+                                        return Ok(LlmCompletionResult {
+                                            success: true,
+                                            content: content.to_string(),
+                                            provider_used: primary.provider_name,
+                                            is_fallback: false,
+                                            latency_ms,
+                                            prompt_tokens: Some(prompt_tokens),
+                                            completion_tokens: Some(completion_tokens),
+                                            total_tokens: Some(total_tokens),
+                                            error: None,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 primary_err_msg = msg;
-                // 鉴权或参数错误不重试
                 if status.as_u16() == 401 || status.as_u16() == 403 || status.as_u16() == 404 {
                     break;
                 }
@@ -500,12 +641,14 @@ async fn call_llm_with_fallback(
     // 2. 如果主力模型失败且配置了备用模型，无缝故障转移至备用模型 (Fallback)
     if let Some(fb) = fallback {
         let fb_start = std::time::Instant::now();
-        let req = send_request(&fb, 0);
+        let req = send_request(&fb, 0, should_disable_thinking);
 
         match req.send().await {
             Ok(res) if res.status().is_success() => {
                 let latency_ms = fb_start.elapsed().as_millis() as u64;
                 if let Ok(data) = res.json::<serde_json::Value>().await {
+                    let (prompt_tokens, completion_tokens, total_tokens) = parse_usage(&data);
+
                     if let Some(content) = data
                         .get("choices")
                         .and_then(|c| c.get(0))
@@ -514,12 +657,32 @@ async fn call_llm_with_fallback(
                         .and_then(|s| s.as_str())
                     {
                         if !content.trim().is_empty() {
+                            if let Ok(conn) = state.conn_mutex.lock() {
+                                let _ = db::save_llm_call_log(
+                                    &conn,
+                                    &scene_str,
+                                    &fb.provider_name,
+                                    &fb.model,
+                                    &system_prompt,
+                                    &user_prompt_snippet,
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    total_tokens,
+                                    latency_ms as i64,
+                                    true,
+                                    "success",
+                                    None,
+                                );
+                            }
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: content.to_string(),
                                 provider_used: fb.provider_name,
                                 is_fallback: true,
                                 latency_ms,
+                                prompt_tokens: Some(prompt_tokens),
+                                completion_tokens: Some(completion_tokens),
+                                total_tokens: Some(total_tokens),
                                 error: Some(format!(
                                     "主力模型失败（{}），已自动故障转移至备用模型",
                                     primary_err_msg
@@ -535,12 +698,32 @@ async fn call_llm_with_fallback(
                         .and_then(|s| s.as_str())
                     {
                         if !reasoning.trim().is_empty() {
+                            if let Ok(conn) = state.conn_mutex.lock() {
+                                let _ = db::save_llm_call_log(
+                                    &conn,
+                                    &scene_str,
+                                    &fb.provider_name,
+                                    &fb.model,
+                                    &system_prompt,
+                                    &user_prompt_snippet,
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    total_tokens,
+                                    latency_ms as i64,
+                                    true,
+                                    "success",
+                                    None,
+                                );
+                            }
                             return Ok(LlmCompletionResult {
                                 success: true,
                                 content: reasoning.to_string(),
                                 provider_used: fb.provider_name,
                                 is_fallback: true,
                                 latency_ms,
+                                prompt_tokens: Some(prompt_tokens),
+                                completion_tokens: Some(completion_tokens),
+                                total_tokens: Some(total_tokens),
                                 error: Some(format!(
                                     "主力模型失败（{}），已自动故障转移至备用模型",
                                     primary_err_msg
@@ -552,7 +735,64 @@ async fn call_llm_with_fallback(
             }
             Ok(res) => {
                 let status = res.status();
+                if status.as_u16() == 400 && should_disable_thinking {
+                    let fallback_req = send_request(&fb, 0, false);
+                    if let Ok(fallback_res) = fallback_req.send().await {
+                        if fallback_res.status().is_success() {
+                            let latency_ms = fb_start.elapsed().as_millis() as u64;
+                            if let Ok(data) = fallback_res.json::<serde_json::Value>().await {
+                                let (prompt_tokens, completion_tokens, total_tokens) = parse_usage(&data);
+                                if let Some(content) = data
+                                    .get("choices")
+                                    .and_then(|c| c.get(0))
+                                    .and_then(|c| c.get("message"))
+                                    .and_then(|m| m.get("content"))
+                                    .and_then(|s| s.as_str())
+                                {
+                                    if !content.trim().is_empty() {
+                                        if let Ok(conn) = state.conn_mutex.lock() {
+                                            let _ = db::save_llm_call_log(
+                                                &conn,
+                                                &scene_str,
+                                                &fb.provider_name,
+                                                &fb.model,
+                                                &system_prompt,
+                                                &user_prompt_snippet,
+                                                prompt_tokens,
+                                                completion_tokens,
+                                                total_tokens,
+                                                latency_ms as i64,
+                                                true,
+                                                "success",
+                                                None,
+                                            );
+                                        }
+                                        return Ok(LlmCompletionResult {
+                                            success: true,
+                                            content: content.to_string(),
+                                            provider_used: fb.provider_name,
+                                            is_fallback: true,
+                                            latency_ms,
+                                            prompt_tokens: Some(prompt_tokens),
+                                            completion_tokens: Some(completion_tokens),
+                                            total_tokens: Some(total_tokens),
+                                            error: Some(format!(
+                                                "主力模型失败（{}），已自动故障转移至备用模型",
+                                                primary_err_msg
+                                            )),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 let err_txt = res.text().await.unwrap_or_default();
+                println!(
+                    "[AgentDeck LLM] ❌ Fallback model failed: HTTP {} ({})",
+                    status,
+                    err_txt.chars().take(200).collect::<String>()
+                );
                 let mut msg = format!("HTTP {}", status);
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&err_txt) {
                     if let Some(m) = val
@@ -563,29 +803,90 @@ async fn call_llm_with_fallback(
                         msg = m.to_string();
                     }
                 }
+                let final_err = format!("主力失败: {}; 备用失败: {}", primary_err_msg, msg);
+                if let Ok(conn) = state.conn_mutex.lock() {
+                    let _ = db::save_llm_call_log(
+                        &conn,
+                        &scene_str,
+                        &fb.provider_name,
+                        &fb.model,
+                        &system_prompt,
+                        &user_prompt_snippet,
+                        0,
+                        0,
+                        0,
+                        fb_start.elapsed().as_millis() as i64,
+                        true,
+                        "error",
+                        Some(&final_err),
+                    );
+                }
                 return Ok(LlmCompletionResult {
                     success: false,
                     content: String::new(),
                     provider_used: fb.provider_name,
                     is_fallback: true,
                     latency_ms: fb_start.elapsed().as_millis() as u64,
-                    error: Some(format!("主力失败: {}; 备用失败: {}", primary_err_msg, msg)),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    total_tokens: None,
+                    error: Some(final_err),
                 });
             }
             Err(e) => {
+                let final_err = format!("主力失败: {}; 备用网络错误: {}", primary_err_msg, e);
+                if let Ok(conn) = state.conn_mutex.lock() {
+                    let _ = db::save_llm_call_log(
+                        &conn,
+                        &scene_str,
+                        &fb.provider_name,
+                        &fb.model,
+                        &system_prompt,
+                        &user_prompt_snippet,
+                        0,
+                        0,
+                        0,
+                        fb_start.elapsed().as_millis() as i64,
+                        true,
+                        "error",
+                        Some(&final_err),
+                    );
+                }
                 return Ok(LlmCompletionResult {
                     success: false,
                     content: String::new(),
                     provider_used: fb.provider_name,
                     is_fallback: true,
                     latency_ms: fb_start.elapsed().as_millis() as u64,
-                    error: Some(format!(
-                        "主力失败: {}; 备用网络错误: {}",
-                        primary_err_msg, e
-                    )),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    total_tokens: None,
+                    error: Some(final_err),
                 });
             }
         }
+    }
+
+    let final_err = format!(
+        "主力模型调用失败（{}），未配置或未启用备用模型",
+        primary_err_msg
+    );
+    if let Ok(conn) = state.conn_mutex.lock() {
+        let _ = db::save_llm_call_log(
+            &conn,
+            &scene_str,
+            &primary.provider_name,
+            &primary.model,
+            &system_prompt,
+            &user_prompt_snippet,
+            0,
+            0,
+            0,
+            start.elapsed().as_millis() as i64,
+            false,
+            "error",
+            Some(&final_err),
+        );
     }
 
     Ok(LlmCompletionResult {
@@ -594,11 +895,39 @@ async fn call_llm_with_fallback(
         provider_used: primary.provider_name,
         is_fallback: false,
         latency_ms: start.elapsed().as_millis() as u64,
-        error: Some(format!(
-            "主力模型调用失败（{}），未配置或未启用备用模型",
-            primary_err_msg
-        )),
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
+        error: Some(final_err),
     })
+}
+
+#[tauri::command]
+fn get_llm_call_logs_cmd(
+    limit: Option<i64>,
+    offset: Option<i64>,
+    state: State<'_, DbState>,
+) -> Result<Vec<db::LlmCallLogItem>, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    db::get_llm_call_logs(&conn, limit.unwrap_or(50), offset.unwrap_or(0))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_llm_usage_summary_cmd(
+    state: State<'_, DbState>,
+) -> Result<db::LlmUsageSummary, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    db::get_llm_usage_summary(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_llm_call_logs_cmd(
+    state: State<'_, DbState>,
+) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    db::clear_llm_call_logs(&conn).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 #[tauri::command]
@@ -897,6 +1226,9 @@ pub fn run() {
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
+            get_llm_call_logs_cmd,
+            get_llm_usage_summary_cmd,
+            clear_llm_call_logs_cmd,
             get_database_path_info,
             get_agent_sources_cmd,
             get_workspace_analysis_messages,

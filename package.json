@@ -1,7 +1,7 @@
 {
   "name": "agentdeck",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "install:local": "pkill -f AgentDeck || true && rm -rf /Applications/AgentDeck.app && cp -R src-tauri/target/release/bundle/macos/AgentDeck.app /Applications/ && xattr -cr /Applications/AgentDeck.app && open /Applications/AgentDeck.app",
+    "release:local": "npm run tauri:build && npm run install:local"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

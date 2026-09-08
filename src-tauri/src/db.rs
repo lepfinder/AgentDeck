@@ -307,6 +307,35 @@ pub struct WorkspaceDetailStats {
     pub report_md: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmCallLogItem {
+    pub id: i64,
+    pub created_at: String,
+    pub scene: String,
+    pub provider_name: String,
+    pub model: String,
+    pub system_prompt: String,
+    pub user_prompt_snippet: String,
+    pub prompt_tokens: i64,
+    pub completion_tokens: i64,
+    pub total_tokens: i64,
+    pub latency_ms: i64,
+    pub is_fallback: bool,
+    pub status: String,
+    pub error_msg: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmUsageSummary {
+    pub total_calls: i64,
+    pub success_calls: i64,
+    pub total_prompt_tokens: i64,
+    pub total_completion_tokens: i64,
+    pub total_tokens: i64,
+    pub avg_latency_ms: f64,
+    pub fallback_calls: i64,
+}
+
 pub struct DbState {
     pub conn_mutex: Mutex<Connection>,
 }
@@ -449,7 +478,8 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS workspace_reports (
             workspace_path TEXT PRIMARY KEY,
             report_md TEXT NOT NULL DEFAULT '',
-            updated_at TEXT
+            updated_at TEXT,
+            generated_at TEXT
         );
 
         CREATE TABLE IF NOT EXISTS sync_state (
@@ -501,6 +531,25 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
         CREATE INDEX IF NOT EXISTS idx_prompts_starred ON prompts(is_starred);
         CREATE INDEX IF NOT EXISTS idx_prompts_updated ON prompts(updated_at);
+
+        CREATE TABLE IF NOT EXISTS llm_call_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            scene TEXT NOT NULL DEFAULT '',
+            provider_name TEXT NOT NULL DEFAULT '',
+            model TEXT NOT NULL DEFAULT '',
+            system_prompt TEXT NOT NULL DEFAULT '',
+            user_prompt_snippet TEXT NOT NULL DEFAULT '',
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            latency_ms INTEGER DEFAULT 0,
+            is_fallback INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'success',
+            error_msg TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_llm_call_logs_created_at ON llm_call_logs(created_at);
+        CREATE INDEX IF NOT EXISTS idx_llm_call_logs_scene ON llm_call_logs(scene);
         "#
     )?;
 
@@ -559,6 +608,10 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 
     let _ = conn.execute(
         "ALTER TABLE workspace_reports ADD COLUMN updated_at TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_reports ADD COLUMN generated_at TEXT",
         [],
     );
 
@@ -2116,7 +2169,8 @@ pub fn save_workspace_report(
         CREATE TABLE IF NOT EXISTS workspace_reports (
             workspace_path TEXT PRIMARY KEY,
             report_md TEXT NOT NULL DEFAULT '',
-            updated_at TEXT
+            updated_at TEXT,
+            generated_at TEXT
         );
         "#,
     )?;
@@ -2124,15 +2178,20 @@ pub fn save_workspace_report(
         "ALTER TABLE workspace_reports ADD COLUMN updated_at TEXT",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE workspace_reports ADD COLUMN generated_at TEXT",
+        [],
+    );
 
     let now = Utc::now().to_rfc3339();
     conn.execute(
         r#"
-        INSERT INTO workspace_reports (workspace_path, report_md, updated_at)
-        VALUES (?1, ?2, ?3)
+        INSERT INTO workspace_reports (workspace_path, report_md, updated_at, generated_at)
+        VALUES (?1, ?2, ?3, ?3)
         ON CONFLICT(workspace_path) DO UPDATE SET
             report_md = excluded.report_md,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            generated_at = excluded.generated_at
         "#,
         params![workspace_path, report_md, now],
     )?;
@@ -2675,3 +2734,123 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
         concurrency_slots,
     })
 }
+
+pub fn save_llm_call_log(
+    conn: &Connection,
+    scene: &str,
+    provider_name: &str,
+    model: &str,
+    system_prompt: &str,
+    user_prompt_snippet: &str,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+    total_tokens: i64,
+    latency_ms: i64,
+    is_fallback: bool,
+    status: &str,
+    error_msg: Option<&str>,
+) -> Result<i64> {
+    let now = chrono::Local::now().to_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO llm_call_logs (
+            created_at, scene, provider_name, model, system_prompt, user_prompt_snippet,
+            prompt_tokens, completion_tokens, total_tokens, latency_ms, is_fallback, status, error_msg
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "#,
+        params![
+            now,
+            scene,
+            provider_name,
+            model,
+            system_prompt,
+            user_prompt_snippet,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            latency_ms,
+            if is_fallback { 1 } else { 0 },
+            status,
+            error_msg,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn get_llm_call_logs(
+    conn: &Connection,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<LlmCallLogItem>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, created_at, scene, provider_name, model, system_prompt, user_prompt_snippet,
+               prompt_tokens, completion_tokens, total_tokens, latency_ms, is_fallback, status, error_msg
+        FROM llm_call_logs
+        ORDER BY id DESC
+        LIMIT ?1 OFFSET ?2
+        "#,
+    )?;
+
+    let rows = stmt.query_map(params![limit, offset], |row| {
+        let is_fb: i64 = row.get(11)?;
+        Ok(LlmCallLogItem {
+            id: row.get(0)?,
+            created_at: row.get(1)?,
+            scene: row.get(2)?,
+            provider_name: row.get(3)?,
+            model: row.get(4)?,
+            system_prompt: row.get(5)?,
+            user_prompt_snippet: row.get(6)?,
+            prompt_tokens: row.get(7)?,
+            completion_tokens: row.get(8)?,
+            total_tokens: row.get(9)?,
+            latency_ms: row.get(10)?,
+            is_fallback: is_fb != 0,
+            status: row.get(12)?,
+            error_msg: row.get(13)?,
+        })
+    })?;
+
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
+}
+
+pub fn get_llm_usage_summary(conn: &Connection) -> Result<LlmUsageSummary> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT 
+            COUNT(*) as total_calls,
+            SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_calls,
+            COALESCE(SUM(prompt_tokens), 0) as total_prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) as total_completion_tokens,
+            COALESCE(SUM(total_tokens), 0) as total_tokens,
+            COALESCE(AVG(latency_ms), 0.0) as avg_latency_ms,
+            SUM(CASE WHEN is_fallback = 1 THEN 1 ELSE 0 END) as fallback_calls
+        FROM llm_call_logs
+        "#,
+    )?;
+
+    let summary = stmt.query_row([], |row| {
+        Ok(LlmUsageSummary {
+            total_calls: row.get(0)?,
+            success_calls: row.get(1)?,
+            total_prompt_tokens: row.get(2)?,
+            total_completion_tokens: row.get(3)?,
+            total_tokens: row.get(4)?,
+            avg_latency_ms: row.get(5)?,
+            fallback_calls: row.get(6)?,
+        })
+    })?;
+
+    Ok(summary)
+}
+
+pub fn clear_llm_call_logs(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM llm_call_logs", [])?;
+    Ok(())
+}
+

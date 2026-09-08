@@ -15,7 +15,7 @@ export interface PipelineProgress {
   fineBlocksCount?: number;
 }
 
-const BATCH_SIZE = 40;
+const BATCH_SIZE = 25;
 
 /** 智能截断超长消息：保留前 300 字符 + 后 200 字符（上限 500 字符） */
 function truncateUserMessage(rawContent: string, headLen = 300, tailLen = 200): string {
@@ -29,11 +29,17 @@ function truncateUserMessage(rawContent: string, headLen = 300, tailLen = 200): 
   return `${head} …[省略超长中间内容]… ${tail}`;
 }
 
-/** 获取当前配置的主力与备用 AI 节点 */
+/** 获取当前配置的主力与备用 AI 节点及思考模式设置 */
 export function getAiEndpoints() {
-  const activeProviderId = localStorage.getItem('agentdeck_active_ai_provider') || 'bailian';
+  const activeProviderId =
+    localStorage.getItem('agentdeck_primary_ai_provider') ||
+    localStorage.getItem('agentdeck_active_ai_provider') ||
+    'bailian';
   const fallbackProviderId = localStorage.getItem('agentdeck_fallback_ai_provider') || 'deepseek';
-  const enableFallback = localStorage.getItem('agentdeck_enable_fallback') === 'true';
+  const enableFallback =
+    localStorage.getItem('agentdeck_auto_fallback') !== 'false' &&
+    localStorage.getItem('agentdeck_enable_fallback') !== 'false';
+  const disableThinking = localStorage.getItem('agentdeck_ai_disable_thinking') !== 'false';
 
   const apiKeys = JSON.parse(localStorage.getItem('agentdeck_ai_api_keys') || '{}');
   const baseUrls = JSON.parse(localStorage.getItem('agentdeck_ai_base_urls') || '{}');
@@ -55,6 +61,7 @@ export function getAiEndpoints() {
     hasKey: Boolean(primary.api_key),
     primary,
     fallback,
+    disableThinking,
   };
 }
 
@@ -303,9 +310,16 @@ ${JSON.stringify(formattedMsgs, null, 2)}`;
       endpoints.primary,
       endpoints.fallback,
       [
-        { role: 'system', content: '你只输出合法的 JSON 对象，包含 blocks 数组。禁止输出任何其他分析文字。' },
+        {
+          role: 'system',
+          content:
+            '你只输出合法的 JSON 对象，包含 blocks 数组。严格直接输出 JSON，禁止输出任何其他分析文字、思维链或 <think> 思考过程。',
+        },
         { role: 'user', content: prompt },
-      ]
+      ],
+      undefined,
+      endpoints.disableThinking,
+      'fine_blocks'
     );
 
     if (llmRes.success && llmRes.content) {
@@ -451,9 +465,16 @@ ${JSON.stringify(blocksToMerge, null, 1)}`;
       endpoints.primary,
       endpoints.fallback,
       [
-        { role: 'system', content: '你只输出合法的 JSON 对象，包含 modules 数组。严禁输出任何 markdown 解释或多余文字。' },
+        {
+          role: 'system',
+          content:
+            '你只输出合法的 JSON 对象，包含 modules 数组。严禁输出任何 markdown 解释、思考过程、<think> 标签或多余文字，严格直接输出 JSON。',
+        },
         { role: 'user', content: prompt },
-      ]
+      ],
+      undefined,
+      endpoints.disableThinking,
+      'merge_modules'
     );
   };
 
@@ -845,10 +866,15 @@ ${fineLines || '（无）'}`;
     endpoints.primary,
     endpoints.fallback,
     [
-      { role: 'system', content: `你输出结构严谨的 Markdown 技术架构报告，全文不超过 ${REPORT_MAX_CHARS} 字。不要逐条复述输入的一句话列表。` },
+      {
+        role: 'system',
+        content: `你输出结构严谨的 Markdown 技术架构报告，全文不超过 ${REPORT_MAX_CHARS} 字。不要逐条复述输入的一句话列表。直接输出 Markdown 正文，严禁输出任何思维链、思考过程或 <think> 标签。`,
+      },
       { role: 'user', content: prompt },
     ],
-    REPORT_MAX_TOKENS
+    REPORT_MAX_TOKENS,
+    endpoints.disableThinking,
+    'generate_report'
   );
 
   let reportMd = '';

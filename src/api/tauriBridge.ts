@@ -19,6 +19,8 @@ import type {
   PromptInput,
   IdeAppStatus,
   AgentSourceInfo,
+  LlmCallLogItem,
+  LlmUsageSummary,
 } from '../types';
 
 export const isTauri = () => {
@@ -195,13 +197,18 @@ export const api = {
     primary: { provider_name: string; base_url: string; api_key: string; model: string },
     fallback?: { provider_name: string; base_url: string; api_key: string; model: string },
     messages: Array<{ role: string; content: string }> = [],
-    maxTokens?: number
+    maxTokens?: number,
+    disableThinking?: boolean,
+    scene?: string
   ): Promise<{
     success: boolean;
     content: string;
     provider_used: string;
     is_fallback: boolean;
     latency_ms: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
     error?: string;
   }> {
     if (isTauri()) {
@@ -210,6 +217,8 @@ export const api = {
         fallback: fallback || null,
         messages,
         maxTokens: maxTokens ?? null,
+        disableThinking: disableThinking ?? true,
+        scene: scene || 'general',
       });
     }
     return {
@@ -220,6 +229,49 @@ export const api = {
       latency_ms: 0,
       error: 'Web mode fallback not implemented',
     };
+  },
+
+  async getLlmCallLogs(limit = 50, offset = 0): Promise<LlmCallLogItem[]> {
+    if (isTauri()) {
+      try {
+        return await invoke<LlmCallLogItem[]>('get_llm_call_logs_cmd', { limit, offset });
+      } catch (e) {
+        console.error('Failed to get LLM call logs:', e);
+        return [];
+      }
+    }
+    return [];
+  },
+
+  async getLlmUsageSummary(): Promise<LlmUsageSummary> {
+    if (isTauri()) {
+      try {
+        return await invoke<LlmUsageSummary>('get_llm_usage_summary_cmd');
+      } catch (e) {
+        console.error('Failed to get LLM usage summary:', e);
+      }
+    }
+    return {
+      total_calls: 0,
+      success_calls: 0,
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_tokens: 0,
+      avg_latency_ms: 0,
+      fallback_calls: 0,
+    };
+  },
+
+  async clearLlmCallLogs(): Promise<boolean> {
+    if (isTauri()) {
+      try {
+        return await invoke<boolean>('clear_llm_call_logs_cmd');
+      } catch (e) {
+        console.error('Failed to clear LLM call logs:', e);
+        return false;
+      }
+    }
+    return true;
   },
 
   async getDatabasePathInfo(): Promise<string> {

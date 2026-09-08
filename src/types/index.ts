@@ -373,3 +373,31 @@ export interface AgentSourceInfo {
   paths: AgentPathInfo[];
 }
 
+export interface LlmCallLogItem {
+  id: number;
+  created_at: string;
+  scene: string;
+  provider_name: string;
+  model: string;
+  system_prompt: string;
+  user_prompt_snippet: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  latency_ms: number;
+  is_fallback: boolean;
+  status: 'success' | 'error' | string;
+  error_msg?: string | null;
+}
+
+export interface LlmUsageSummary {
+  total_calls: number;
+  success_calls: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  avg_latency_ms: number;
+  fallback_calls: number;
+}
+
+
