@@ -249,6 +249,7 @@ fn sync_hermes_state_db(
             parse_status: "ok".to_string(),
             source_types: vec!["hermes".to_string()],
             messages,
+            artifacts: Vec::new(),
         };
 
         if save_conversation_tx(conn, &conv)? {
@@ -362,5 +363,6 @@ fn parse_hermes_jsonl(
         parse_status: "ok".to_string(),
         source_types: vec!["hermes".to_string()],
         messages,
+        artifacts: Vec::new(),
     }))
 }

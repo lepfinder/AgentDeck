@@ -12,9 +12,10 @@ use db::{
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, record_prompt_use,
     save_workspace_fine_blocks, save_workspace_module_blocks, save_workspace_report,
     search_global_messages, toggle_prompt_star, toggle_star_session, update_prompt,
-    AnalysisUserMessage, ConversationItem, DailyTimelineStats, DashboardStats, DbState,
+    AnalysisUserMessage, ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState,
     MessageItem, PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats,
-    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat,
+    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat, get_conversation_artifacts,
+    get_workspace_artifacts, WorkspaceArtifactItem,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -28,12 +29,15 @@ use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 static AUTO_SYNC_INTERVAL_SECS: AtomicU64 = AtomicU64::new(60);
 
 #[tauri::command]
-fn get_workspace_analysis_messages(
+async fn get_workspace_analysis_messages(
     workspace_path: String,
-    state: State<'_, DbState>,
 ) -> Result<Vec<AnalysisUserMessage>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_workspace_analysis_messages(&conn, &workspace_path).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_workspace_analysis_messages(&conn, &workspace_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -90,38 +94,53 @@ fn clear_workspace_analysis_cmd(
 }
 
 #[tauri::command]
-fn get_dashboard_stats(state: State<'_, DbState>) -> Result<DashboardStats, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_dashboard_stats(&conn).map_err(|e| e.to_string())
+async fn get_dashboard_stats() -> Result<DashboardStats, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_dashboard_stats(&conn).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_daily_timeline(date: String, state: State<'_, DbState>) -> Result<DailyTimelineStats, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_daily_timeline(&conn, &date).map_err(|e| e.to_string())
+async fn get_daily_timeline(date: String) -> Result<DailyTimelineStats, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_daily_timeline(&conn, &date).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_prompts_cmd(
+async fn list_prompts_cmd(
     search: Option<String>,
     category: Option<String>,
     starred_only: Option<bool>,
-    state: State<'_, DbState>,
 ) -> Result<Vec<PromptItem>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    list_prompts(
-        &conn,
-        search.as_deref(),
-        category.as_deref(),
-        starred_only.unwrap_or(false),
-    )
-    .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        list_prompts(
+            &conn,
+            search.as_deref(),
+            category.as_deref(),
+            starred_only.unwrap_or(false),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_prompt_cmd(id: i64, state: State<'_, DbState>) -> Result<PromptItem, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    get_prompt(&conn, id).map_err(|e| e.to_string())
+async fn get_prompt_cmd(id: i64) -> Result<PromptItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        get_prompt(&conn, id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -159,47 +178,83 @@ fn record_prompt_use_cmd(id: i64, state: State<'_, DbState>) -> Result<PromptIte
 }
 
 #[tauri::command]
-fn get_workspace_detail(
+async fn get_workspace_detail(
     workspace_path: String,
-    state: State<'_, DbState>,
 ) -> Result<WorkspaceDetailStats, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_workspace_detail_stats(&conn, &workspace_path).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_workspace_detail_stats(&conn, &workspace_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_workspaces(
+async fn list_workspaces(
     search: Option<String>,
-    state: State<'_, DbState>,
 ) -> Result<Vec<WorkspaceStat>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_workspaces(&conn, search.as_deref(), None).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_workspaces(&conn, search.as_deref(), None).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_conversations(
+async fn list_conversations(
     workspace: Option<String>,
     search: Option<String>,
     starred_only: Option<bool>,
-    state: State<'_, DbState>,
 ) -> Result<Vec<ConversationItem>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_conversations(
-        &conn,
-        workspace.as_deref(),
-        search.as_deref(),
-        starred_only.unwrap_or(false),
-    )
-    .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_conversations(
+            &conn,
+            workspace.as_deref(),
+            search.as_deref(),
+            starred_only.unwrap_or(false),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_conversation_messages(
+async fn get_conversation_messages(
     conversation_id: String,
-    state: State<'_, DbState>,
 ) -> Result<Vec<MessageItem>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    fetch_conversation_messages(&conn, &conversation_id).map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_conversation_messages(&conn, &conversation_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_conversation_artifacts_cmd(
+    conversation_id: String,
+) -> Result<Vec<ArtifactItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        get_conversation_artifacts(&conn, &conversation_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_workspace_artifacts_cmd(
+    workspace_path: String,
+) -> Result<Vec<WorkspaceArtifactItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        get_workspace_artifacts(&conn, &workspace_path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -209,15 +264,18 @@ fn toggle_star(conversation_id: String, state: State<'_, DbState>) -> Result<boo
 }
 
 #[tauri::command]
-fn search_messages(
+async fn search_messages(
     query: String,
     role: Option<String>,
     limit: Option<usize>,
-    state: State<'_, DbState>,
 ) -> Result<Vec<SearchResultItem>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    search_global_messages(&conn, &query, role.as_deref(), limit.unwrap_or(30))
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        search_global_messages(&conn, &query, role.as_deref(), limit.unwrap_or(30))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -903,22 +961,27 @@ async fn call_llm_with_fallback(
 }
 
 #[tauri::command]
-fn get_llm_call_logs_cmd(
+async fn get_llm_call_logs_cmd(
     limit: Option<i64>,
     offset: Option<i64>,
-    state: State<'_, DbState>,
 ) -> Result<Vec<db::LlmCallLogItem>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    db::get_llm_call_logs(&conn, limit.unwrap_or(50), offset.unwrap_or(0))
-        .map_err(|e| e.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        db::get_llm_call_logs(&conn, limit.unwrap_or(50), offset.unwrap_or(0))
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn get_llm_usage_summary_cmd(
-    state: State<'_, DbState>,
-) -> Result<db::LlmUsageSummary, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    db::get_llm_usage_summary(&conn).map_err(|e| e.to_string())
+async fn get_llm_usage_summary_cmd() -> Result<db::LlmUsageSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        db::get_llm_usage_summary(&conn).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -993,9 +1056,13 @@ fn get_database_path_info() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_agent_sources_cmd(state: State<'_, DbState>) -> Result<Vec<AgentSourceInfo>, String> {
-    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
-    Ok(collect_agent_sources(&conn))
+async fn get_agent_sources_cmd() -> Result<Vec<AgentSourceInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        Ok(collect_agent_sources(&conn))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1102,6 +1169,7 @@ fn ide_installed(id: &str) -> bool {
         }
         "claude" => command_on_path("claude"),
         "codex" => command_on_path("codex"),
+        "mimo" => macos_app_exists("Xiaomi MiMo"),
         _ => false,
     }
 }
@@ -1132,6 +1200,12 @@ fn list_ide_apps_cmd() -> Result<Vec<IdeAppStatus>, String> {
             label: "Codex".into(),
             kind: "cli".into(),
             installed: ide_installed("codex"),
+        },
+        IdeAppStatus {
+            id: "mimo".into(),
+            label: "Xiaomi MiMo".into(),
+            kind: "app".into(),
+            installed: ide_installed("mimo"),
         },
     ])
 }
@@ -1187,6 +1261,7 @@ fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), 
             }
             "claude" => open_in_terminal_cli("claude", &workspace_path),
             "codex" => open_in_terminal_cli("codex", &workspace_path),
+            "mimo" => open_in_macos_app("Xiaomi MiMo", &workspace_path),
             _ => Err(format!("不支持的 IDE: {}", ide)),
         }
     }
@@ -1219,6 +1294,8 @@ pub fn run() {
             list_workspaces,
             list_conversations,
             get_conversation_messages,
+            get_conversation_artifacts_cmd,
+            get_workspace_artifacts_cmd,
             toggle_star,
             search_messages,
             trigger_sync,

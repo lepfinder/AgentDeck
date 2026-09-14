@@ -34,6 +34,7 @@ pub struct WorkspaceStat {
     pub codex_cnt: i64,
     pub wb_cnt: i64,
     pub hermes_cnt: i64,
+    pub mimo_cnt: i64,
     pub message_count: i64,
     pub user_message_count: i64,
     pub last_updated: Option<String>,
@@ -270,6 +271,21 @@ pub struct AnalysisUserMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactItem {
+    pub id: i64,
+    pub conversation_id: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub content: String,
+    pub user_facing: bool,
+    pub request_feedback: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeatmapCell {
     pub date: String,
     pub count: i64,
@@ -283,6 +299,23 @@ pub struct HeatmapCell {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceArtifactItem {
+    pub id: i64,
+    pub conversation_id: String,
+    pub conversation_title: String,
+    pub source_app: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub content: String,
+    pub user_facing: bool,
+    pub request_feedback: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceDetailStats {
     pub workspace_path: String,
     pub workspace_short: String,
@@ -293,6 +326,7 @@ pub struct WorkspaceDetailStats {
     pub codex_conversation_count: i64,
     pub wb_conversation_count: i64,
     pub hermes_conversation_count: i64,
+    pub mimo_conversation_count: i64,
     pub user_message_count: i64,
     pub message_count: i64,
     pub agent_breakdown: String,
@@ -305,6 +339,7 @@ pub struct WorkspaceDetailStats {
     pub fine_blocks: Vec<WorkspaceFineBlock>,
     pub module_blocks: Vec<WorkspaceModuleBlock>,
     pub report_md: Option<String>,
+    pub artifacts: Vec<WorkspaceArtifactItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,11 +400,24 @@ pub fn apply_write_pragmas(conn: &Connection) {
     let _ = conn.busy_timeout(std::time::Duration::from_secs(30));
 }
 
-/// 只读连接调优：避免与同步任务争锁时立即失败
+/// 只读连接调优：开启 query_only=ON，配置更合理的 busy_timeout，确保不抢写锁
 pub fn apply_read_pragmas(conn: &Connection) {
+    let _ = conn.pragma_update(None, "query_only", "ON");
     let _ = conn.pragma_update(None, "temp_store", "MEMORY");
     let _ = conn.pragma_update(None, "cache_size", -32768i64);
-    let _ = conn.busy_timeout(std::time::Duration::from_secs(15));
+    let _ = conn.pragma_update(None, "mmap_size", 268435456i64); // 256MB mmap 加速只读
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
+}
+
+/// 打开专属的无锁只读连接（专为 UI 查询服务，彻底解耦写锁与全局互斥锁）
+pub fn open_read_connection() -> Result<Connection> {
+    let db_path = get_database_path();
+    let conn = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    apply_read_pragmas(&conn);
+    Ok(conn)
 }
 
 pub fn get_database_path() -> PathBuf {
@@ -550,6 +598,23 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_llm_call_logs_created_at ON llm_call_logs(created_at);
         CREATE INDEX IF NOT EXISTS idx_llm_call_logs_scene ON llm_call_logs(scene);
+
+        CREATE TABLE IF NOT EXISTS conversation_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            summary TEXT,
+            content TEXT NOT NULL DEFAULT '',
+            user_facing INTEGER NOT NULL DEFAULT 1,
+            request_feedback INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT,
+            UNIQUE(conversation_id, file_name),
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifacts_conv_id ON conversation_artifacts(conversation_id);
         "#
     )?;
 
@@ -622,6 +687,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     );
 
     migrate_workspace_aliases(conn);
+    repair_dirty_workspace_paths(conn);
 
     Ok(())
 }
@@ -655,6 +721,55 @@ fn migrate_workspace_aliases(conn: &Connection) {
         let _ = conn.execute(
             "DELETE FROM workspaces WHERE workspace_path = ?1",
             rusqlite::params![&old],
+        );
+    }
+}
+
+/// 修复 AG 启发式误抽导致的脏路径（含引号、反斜杠、尾逗号、JSON 碎片、@[path] 尾括号）
+fn repair_dirty_workspace_paths(conn: &Connection) {
+    use crate::importers::canonicalize_workspace_path;
+
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT DISTINCT workspace_path FROM conversations WHERE \
+         instr(workspace_path, '\"') > 0 \
+         OR instr(workspace_path, char(92)) > 0 \
+         OR instr(workspace_path, ',') > 0 \
+         OR instr(workspace_path, '{') > 0 \
+         OR instr(workspace_path, '}') > 0 \
+         OR instr(workspace_path, '[') > 0 \
+         OR instr(workspace_path, ']') > 0 \
+         OR workspace_path LIKE '%toolAction%'",
+    ) else {
+        return;
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+        return;
+    };
+    let paths: Vec<String> = rows.flatten().collect();
+    drop(stmt);
+
+    for old in paths {
+        let new_path = canonicalize_workspace_path(&old);
+        // 无法洗成合理路径时清空，避免侧栏出现假工作区
+        let new_path = if new_path.is_empty() {
+            String::new()
+        } else {
+            new_path
+        };
+        if new_path == old {
+            continue;
+        }
+        let _ = conn.execute(
+            "UPDATE conversations SET workspace_path = ?1 WHERE workspace_path = ?2",
+            rusqlite::params![&new_path, &old],
+        );
+        let _ = conn.execute(
+            "DELETE FROM workspaces WHERE workspace_path = ?1",
+            rusqlite::params![&old],
+        );
+        println!(
+            "[AgentDeck] repaired dirty workspace_path: {:?} -> {:?}",
+            old, new_path
         );
     }
 }
@@ -752,8 +867,12 @@ fn collect_timestamp_volume(
     let end = (today + chrono::Duration::days(1))
         .format("%Y-%m-%d")
         .to_string();
+    // 利用 start_raw 对 created_at 做索引粗过滤，避免全表扫描数十万条历史消息
+    let start_raw = (start_30 - chrono::Duration::days(1))
+        .format("%Y-%m-%d")
+        .to_string();
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params![start, end], |row| {
+    let rows = stmt.query_map(params![start, end, start_raw], |row| {
         let date: String = row.get(0)?;
         let hour: i64 = row.get(1)?;
         let count: i64 = row.get(2)?;
@@ -1026,6 +1145,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             COUNT(*)
         FROM messages
         WHERE created_at IS NOT NULL AND created_at != ''
+          AND created_at >= ?3
           AND datetime(created_at, '+8 hours') >= ?1
           AND datetime(created_at, '+8 hours') < ?2
         GROUP BY 1, 2
@@ -1042,6 +1162,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             COUNT(DISTINCT conversation_id)
         FROM messages
         WHERE created_at IS NOT NULL AND created_at != ''
+          AND created_at >= ?3
           AND datetime(created_at, '+8 hours') >= ?1
           AND datetime(created_at, '+8 hours') < ?2
         GROUP BY 1, 2
@@ -1058,6 +1179,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             COUNT(*)
         FROM messages
         WHERE created_at IS NOT NULL AND created_at != ''
+          AND created_at >= ?3
           AND (role LIKE '%user%' OR role = 'user')
           AND datetime(created_at, '+8 hours') >= ?1
           AND datetime(created_at, '+8 hours') < ?2
@@ -1075,6 +1197,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
             COUNT(DISTINCT conversation_id)
         FROM messages
         WHERE created_at IS NOT NULL AND created_at != ''
+          AND created_at >= ?3
           AND datetime(created_at, '+8 hours') >= ?1
           AND datetime(created_at, '+8 hours') < ?2
         GROUP BY 1
@@ -1423,12 +1546,23 @@ pub fn fetch_workspaces(
         SELECT
             workspace_path,
             COUNT(*) as cnt,
-            SUM(CASE WHEN source_types LIKE '%transcript%' OR source_types LIKE '%sqlite_db%' OR source_types LIKE '%overview%' THEN 1 ELSE 0 END) as ag_cnt,
-            SUM(CASE WHEN source_types LIKE '%cursor%' THEN 1 ELSE 0 END) as cursor_cnt,
-            SUM(CASE WHEN source_types LIKE '%claude%' THEN 1 ELSE 0 END) as claude_cnt,
-            SUM(CASE WHEN source_types LIKE '%codex%' THEN 1 ELSE 0 END) as codex_cnt,
-            SUM(CASE WHEN source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END) as wb_cnt,
-            SUM(CASE WHEN source_types LIKE '%hermes%' THEN 1 ELSE 0 END) as hermes_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'antigravity'
+                OR source_types LIKE '%antigravity%'
+                OR source_types LIKE '%transcript%'
+                OR source_types LIKE '%sqlite_db%'
+                OR source_types LIKE '%overview%'
+                OR (
+                    (source_app IS NULL OR source_app = '')
+                    AND (source_types IS NULL OR source_types = '' OR source_types = '[]')
+                    AND id NOT LIKE '%:%'
+                )
+                THEN 1 ELSE 0 END) as ag_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'cursor' OR source_types LIKE '%cursor%' THEN 1 ELSE 0 END) as cursor_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'claude' OR source_types LIKE '%claude%' THEN 1 ELSE 0 END) as claude_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'codex' OR source_types LIKE '%codex%' THEN 1 ELSE 0 END) as codex_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'workbuddy' OR source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END) as wb_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END) as hermes_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END) as mimo_cnt,
             SUM(message_count) as message_count,
             SUM(user_message_count) as user_message_count,
             MAX(updated_at) as last_updated
@@ -1452,9 +1586,10 @@ pub fn fetch_workspaces(
                 codex_cnt: row.get(5).unwrap_or(0),
                 wb_cnt: row.get(6).unwrap_or(0),
                 hermes_cnt: row.get(7).unwrap_or(0),
-                message_count: row.get(8).unwrap_or(0),
-                user_message_count: row.get(9).unwrap_or(0),
-                last_updated: to_beijing_iso(row.get(10)?),
+                mimo_cnt: row.get(8).unwrap_or(0),
+                message_count: row.get(9).unwrap_or(0),
+                user_message_count: row.get(10).unwrap_or(0),
+                last_updated: to_beijing_iso(row.get(11)?),
             })
         },
     )?;
@@ -1704,20 +1839,32 @@ pub fn fetch_workspace_detail_stats(
         codex_cnt,
         wb_cnt,
         hermes_cnt,
+        mimo_cnt,
         user_message_count,
         message_count,
         first_active,
         last_active
-    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
+    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
         r#"
         SELECT
             COUNT(*),
-            SUM(CASE WHEN source_types LIKE '%transcript%' OR source_types LIKE '%sqlite_db%' OR source_types LIKE '%overview%' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN source_types LIKE '%cursor%' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN source_types LIKE '%claude%' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN source_types LIKE '%codex%' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END),
-            SUM(CASE WHEN source_types LIKE '%hermes%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'antigravity'
+                OR source_types LIKE '%antigravity%'
+                OR source_types LIKE '%transcript%'
+                OR source_types LIKE '%sqlite_db%'
+                OR source_types LIKE '%overview%'
+                OR (
+                    (source_app IS NULL OR source_app = '')
+                    AND (source_types IS NULL OR source_types = '' OR source_types = '[]')
+                    AND id NOT LIKE '%:%'
+                )
+                THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'cursor' OR source_types LIKE '%cursor%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'claude' OR source_types LIKE '%claude%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'codex' OR source_types LIKE '%codex%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'workbuddy' OR source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END),
             COALESCE(SUM(user_message_count), 0),
             COALESCE(SUM(message_count), 0),
             MIN(created_at),
@@ -1735,13 +1882,14 @@ pub fn fetch_workspace_detail_stats(
                 r.get(4).unwrap_or(0),
                 r.get(5).unwrap_or(0),
                 r.get(6).unwrap_or(0),
-                r.get(7)?,
+                r.get(7).unwrap_or(0),
                 r.get(8)?,
                 r.get(9)?,
                 r.get(10)?,
+                r.get(11)?,
             ))
         }
-    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
+    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
 
     let mut breakdown_parts = Vec::new();
     if ag_cnt > 0 {
@@ -1761,6 +1909,9 @@ pub fn fetch_workspace_detail_stats(
     }
     if codex_cnt > 0 {
         breakdown_parts.push(format!("Codex {}", codex_cnt));
+    }
+    if mimo_cnt > 0 {
+        breakdown_parts.push(format!("MiMo {}", mimo_cnt));
     }
     let agent_breakdown = if breakdown_parts.is_empty() {
         format!("共 {} 会话", conversation_count)
@@ -1956,6 +2107,8 @@ pub fn fetch_workspace_detail_stats(
         }
     }
 
+    let artifacts = get_workspace_artifacts(conn, workspace_path).unwrap_or_default();
+
     Ok(WorkspaceDetailStats {
         workspace_path: workspace_path.to_string(),
         workspace_short: ws_short,
@@ -1966,6 +2119,7 @@ pub fn fetch_workspace_detail_stats(
         codex_conversation_count: codex_cnt,
         wb_conversation_count: wb_cnt,
         hermes_conversation_count: hermes_cnt,
+        mimo_conversation_count: mimo_cnt,
         user_message_count,
         message_count,
         agent_breakdown,
@@ -1978,6 +2132,7 @@ pub fn fetch_workspace_detail_stats(
         fine_blocks,
         module_blocks,
         report_md,
+        artifacts,
     })
 }
 
@@ -2852,5 +3007,105 @@ pub fn get_llm_usage_summary(conn: &Connection) -> Result<LlmUsageSummary> {
 pub fn clear_llm_call_logs(conn: &Connection) -> Result<()> {
     conn.execute("DELETE FROM llm_call_logs", [])?;
     Ok(())
+}
+
+pub fn get_conversation_artifacts(
+    conn: &Connection,
+    conversation_id: &str,
+) -> Result<Vec<ArtifactItem>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, conversation_id, file_name, file_path, title, summary, content,
+               user_facing, request_feedback, created_at, updated_at
+        FROM conversation_artifacts
+        WHERE conversation_id = ?
+        ORDER BY 
+            CASE 
+                WHEN file_name = 'implementation_plan.md' THEN 1
+                WHEN file_name LIKE 'implementation_plan%' THEN 2
+                WHEN file_name = 'task.md' THEN 3
+                WHEN file_name LIKE 'task%' THEN 4
+                WHEN file_name = 'walkthrough.md' THEN 5
+                WHEN file_name LIKE 'walkthrough%' THEN 6
+                ELSE 7
+            END,
+            COALESCE(created_at, updated_at, '') DESC,
+            file_name DESC
+        "#,
+    )?;
+
+    let rows = stmt.query_map([conversation_id], |row| {
+        Ok(ArtifactItem {
+            id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            file_name: row.get(2)?,
+            file_path: row.get(3)?,
+            title: row.get(4)?,
+            summary: row.get(5)?,
+            content: row.get(6)?,
+            user_facing: row.get::<_, i64>(7)? != 0,
+            request_feedback: row.get::<_, i64>(8)? != 0,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    })?;
+
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
+}
+
+pub fn get_workspace_artifacts(
+    conn: &Connection,
+    workspace_path: &str,
+) -> Result<Vec<WorkspaceArtifactItem>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT a.id, a.conversation_id, COALESCE(c.title, '未命名会话'), COALESCE(c.source_app, 'antigravity'),
+               a.file_name, a.file_path, a.title, a.summary, a.content,
+               a.user_facing, a.request_feedback, a.created_at, a.updated_at
+        FROM conversation_artifacts a
+        JOIN conversations c ON a.conversation_id = c.id
+        WHERE c.workspace_path = ?1
+        ORDER BY 
+            COALESCE(a.created_at, a.updated_at, c.created_at, '') DESC,
+            CASE 
+                WHEN a.file_name = 'implementation_plan.md' THEN 1
+                WHEN a.file_name LIKE 'implementation_plan%' THEN 2
+                WHEN a.file_name = 'task.md' THEN 3
+                WHEN a.file_name LIKE 'task%' THEN 4
+                WHEN a.file_name = 'walkthrough.md' THEN 5
+                WHEN a.file_name LIKE 'walkthrough%' THEN 6
+                ELSE 7
+            END,
+            a.file_name ASC
+        "#,
+    )?;
+
+    let rows = stmt.query_map([workspace_path], |row| {
+        Ok(WorkspaceArtifactItem {
+            id: row.get(0)?,
+            conversation_id: row.get(1)?,
+            conversation_title: row.get(2)?,
+            source_app: row.get(3)?,
+            file_name: row.get(4)?,
+            file_path: row.get(5)?,
+            title: row.get(6)?,
+            summary: row.get(7)?,
+            content: row.get(8)?,
+            user_facing: row.get::<_, i64>(9)? != 0,
+            request_feedback: row.get::<_, i64>(10)? != 0,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        })
+    })?;
+
+    let mut list = Vec::new();
+    for r in rows {
+        list.push(r?);
+    }
+    Ok(list)
 }
 

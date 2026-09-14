@@ -7,6 +7,7 @@ export interface WorkspaceStat {
   codex_cnt: number;
   wb_cnt: number;
   hermes_cnt: number;
+  mimo_cnt: number;
   message_count: number;
   user_message_count: number;
   last_updated?: string;
@@ -46,6 +47,20 @@ export interface MessageItem {
   duration_ms?: number;
   tool_calls_json?: string;
   images?: string | Array<{ src: string; width?: number; height?: number }>;
+}
+
+export interface ArtifactItem {
+  id: number;
+  conversation_id: string;
+  file_name: string;
+  file_path: string;
+  title: string;
+  summary?: string | null;
+  content: string;
+  user_facing: boolean;
+  request_feedback: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface AgentShare {
@@ -237,6 +252,22 @@ export interface HeatmapCell {
   conv_count?: number;
 }
 
+export interface WorkspaceArtifactItem {
+  id: number;
+  conversation_id: string;
+  conversation_title: string;
+  source_app: string;
+  file_name: string;
+  file_path: string;
+  title: string;
+  summary?: string;
+  content: string;
+  user_facing: boolean;
+  request_feedback: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface WorkspaceDetailStats {
   workspace_path: string;
   workspace_short: string;
@@ -247,6 +278,7 @@ export interface WorkspaceDetailStats {
   codex_conversation_count: number;
   wb_conversation_count: number;
   hermes_conversation_count: number;
+  mimo_conversation_count: number;
   user_message_count: number;
   message_count: number;
   agent_breakdown: string;
@@ -259,6 +291,7 @@ export interface WorkspaceDetailStats {
   fine_blocks: WorkspaceFineBlock[];
   module_blocks: WorkspaceModuleBlock[];
   report_md?: string;
+  artifacts?: WorkspaceArtifactItem[];
 }
 
 export interface SyncResultInfo {

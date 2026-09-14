@@ -272,5 +272,6 @@ fn parse_codex_file(
         parse_status: "ok".to_string(),
         source_types: vec!["codex".to_string()],
         messages,
+        artifacts: Vec::new(),
     }))
 }

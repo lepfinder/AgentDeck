@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codex;
 pub mod cursor;
 pub mod hermes;
+pub mod mimo;
 pub mod workbuddy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +31,19 @@ pub struct RawMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawArtifact {
+    pub file_name: String,
+    pub file_path: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub content: String,
+    pub user_facing: bool,
+    pub request_feedback: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawConversation {
     pub id: String,
     pub title: String,
@@ -40,6 +54,8 @@ pub struct RawConversation {
     pub parse_status: String,
     pub source_types: Vec<String>,
     pub messages: Vec<RawMessage>,
+    #[serde(default)]
+    pub artifacts: Vec<RawArtifact>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,9 +118,59 @@ pub fn project_root_from_path(path_str: &str) -> String {
     clean.to_string()
 }
 
+/// 清洗启发式抽取的路径候选，剔除 JSON 转义/字段碎片
+pub fn sanitize_extracted_path(raw: &str) -> Option<String> {
+    let mut s = raw.trim().trim_start_matches("file://").trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // 截断到第一个明显非路径字符（JSON 残留、@[path] 尾部括号等）
+    let cut = s
+        .find(|c: char| matches!(c, '"' | '\'' | '\\' | '{' | '}' | '[' | ']' | '\n' | '\r'))
+        .unwrap_or(s.len());
+    s = s[..cut].trim();
+    // @[/Users/.../proj] 一类引用：路径本身不应以括号结尾
+    s = s.trim_end_matches(|c: char| {
+        matches!(c, ',' | ';' | ':' | ')' | '(' | ']' | '[' | '`' | ' ' | '/')
+    });
+
+    // 路径至少保留根斜杠 + 一段
+    if !s.starts_with('/') || s.len() < 2 {
+        return None;
+    }
+    if s.contains("toolAction") || s.contains("Active Document") {
+        return None;
+    }
+    // 拒绝源码 import 误抽（/components/ui/button、/assets/...）
+    if !is_plausible_workspace_path(s) {
+        return None;
+    }
+
+    Some(s.to_string())
+}
+
+fn is_plausible_workspace_path(s: &str) -> bool {
+    s.starts_with("/Users/")
+        || s.starts_with("/home/")
+        || s.starts_with("/workspace/")
+        || s.contains("/workspace/")
+}
+
 /// 将远端 `/workspace/...` 与本机 `~/workspace/...` 合并为同一身份
 pub fn canonicalize_workspace_path(path_str: &str) -> String {
-    let root = project_root_from_path(path_str);
+    let cleaned = match sanitize_extracted_path(path_str) {
+        Some(s) => s,
+        None => {
+            // 非绝对路径（如 slug）仍走原逻辑
+            let t = path_str.trim();
+            if t.is_empty() || t.starts_with('/') {
+                return String::new();
+            }
+            t.to_string()
+        }
+    };
+    let root = project_root_from_path(&cleaned);
     if root.is_empty() {
         return root;
     }
@@ -139,6 +205,11 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
         msg.tool_args.hash(&mut hasher);
         msg.created_at.hash(&mut hasher);
         msg.images.hash(&mut hasher);
+    }
+    for art in &conv.artifacts {
+        art.file_name.hash(&mut hasher);
+        art.content.hash(&mut hasher);
+        art.updated_at.hash(&mut hasher);
     }
     format!("{:016x}", hasher.finish())
 }
@@ -468,6 +539,42 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
         );
     }
 
+    // 保存关联的产物文档 (Artifacts)
+    if !conv.artifacts.is_empty() {
+        let mut artifact_stmt = tx.prepare_cached(
+            r#"
+            INSERT INTO conversation_artifacts (
+                conversation_id, file_name, file_path, title, summary, content,
+                user_facing, request_feedback, created_at, updated_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            ON CONFLICT(conversation_id, file_name) DO UPDATE SET
+                file_path = excluded.file_path,
+                title = excluded.title,
+                summary = excluded.summary,
+                content = excluded.content,
+                user_facing = excluded.user_facing,
+                request_feedback = excluded.request_feedback,
+                updated_at = excluded.updated_at
+            "#,
+        )?;
+
+        for art in &conv.artifacts {
+            artifact_stmt.execute(params![
+                &conv.id,
+                &art.file_name,
+                &art.file_path,
+                &art.title,
+                &art.summary,
+                &art.content,
+                if art.user_facing { 1 } else { 0 },
+                if art.request_feedback { 1 } else { 0 },
+                &art.created_at,
+                &art.updated_at,
+            ])?;
+        }
+    }
+
     tx.commit()?;
 
     Ok(!exists)
@@ -494,13 +601,14 @@ impl SyncEngine {
         );
 
         type ImporterFn = fn(&Connection, bool) -> ImporterStats;
-        let importers: [(&str, ImporterFn); 6] = [
+        let importers: [(&str, ImporterFn); 7] = [
             ("Antigravity", antigravity::sync),
             ("Cursor", cursor::sync),
             ("Claude", claude::sync),
             ("Codex", codex::sync),
             ("Hermes", hermes::sync),
             ("WorkBuddy", workbuddy::sync),
+            ("MiMo", mimo::sync),
         ];
 
         for (name, importer) in importers {
@@ -584,6 +692,7 @@ mod tests {
                 make_msg(0, "历史消息0", Some(old_time.clone())),
                 make_msg(1, "历史消息1", Some(old_time.clone())),
             ],
+            artifacts: vec![],
         };
         let is_new = save_conversation_tx(&conn, &conv_v1).unwrap();
         assert!(is_new);
@@ -603,6 +712,7 @@ mod tests {
                 make_msg(1, "历史消息1 (流式补全)", Some(new_time.clone())), // 模拟内容微调且带新时间
                 make_msg(2, "今天追加的新消息", Some(new_time.clone())),
             ],
+            artifacts: vec![],
         };
         let is_new2 = save_conversation_tx(&conn, &conv_v2).unwrap();
         assert!(!is_new2);
@@ -644,6 +754,7 @@ mod tests {
             parse_status: "ok".to_string(),
             source_types: vec!["cursor".to_string()],
             messages: vec![make_msg(0, "历史消息0", Some(old_time.clone()))],
+            artifacts: vec![],
         };
         save_conversation_tx(&conn, &conv_v3).unwrap();
 
@@ -655,6 +766,34 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining_cnt, 1);
+    }
+
+    #[test]
+    fn test_sanitize_extracted_path_strips_json_junk() {
+        let dirty = r#"/Users/xiyangxie/workspace/chuhai/notix\"","toolAction":"\"Listing"#;
+        let clean = sanitize_extracted_path(dirty).unwrap();
+        assert_eq!(clean, "/Users/xiyangxie/workspace/chuhai/notix");
+
+        let trailing = "/Users/xiyangxie/workspace/github/deepseek-harness,";
+        assert_eq!(
+            sanitize_extracted_path(trailing).as_deref(),
+            Some("/Users/xiyangxie/workspace/github/deepseek-harness")
+        );
+
+        let with_bracket = "/Users/xiyangxie/workspace/personal/xiaonuan-web]";
+        assert_eq!(
+            sanitize_extracted_path(with_bracket).as_deref(),
+            Some("/Users/xiyangxie/workspace/personal/xiaonuan-web")
+        );
+        assert_eq!(
+            canonicalize_workspace_path(with_bracket),
+            "/Users/xiyangxie/workspace/personal/xiaonuan-web"
+        );
+
+        assert!(sanitize_extracted_path("/components/ui/button'\\nimport").is_none());
+
+        let canon = canonicalize_workspace_path(dirty);
+        assert_eq!(canon, "/Users/xiyangxie/workspace/chuhai/notix");
     }
 }
 

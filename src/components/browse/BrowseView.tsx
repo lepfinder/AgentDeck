@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats } from '../../types';
+import React, { useState, useEffect, useRef } from 'react';
+import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats, ArtifactItem } from '../../types';
 import { api, isTauri } from '../../api/tauriBridge';
 import { formatBeijingTime, formatRelativeTime } from '../../utils/date';
 import { useI18n } from '../../i18n';
@@ -8,6 +8,7 @@ import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import { OpenInIdeMenu } from './OpenInIdeMenu';
 import { DashboardView } from '../dashboard/DashboardView';
 import { PromptLibraryView } from '../prompts/PromptLibraryView';
+import { ArtifactsModal } from './ArtifactsModal';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -24,6 +25,7 @@ import {
   ArrowUpDown,
   Maximize2,
   X,
+  FileText,
 } from 'lucide-react';
 
 interface Props {
@@ -72,6 +74,9 @@ export const BrowseView: React.FC<Props> = ({
   const [expandedTurns, setExpandedTurns] = useState<Record<number, boolean>>({});
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
+  const [selectedArtifact, setSelectedArtifact] = useState<ArtifactItem | null>(null);
+  const [showArtifactModal, setShowArtifactModal] = useState(false);
 
   const parseImages = (raw: any): Array<{ src: string; width?: number; height?: number }> => {
     if (!raw) return [];
@@ -99,18 +104,92 @@ export const BrowseView: React.FC<Props> = ({
       .filter((x): x is { src: string; width?: number; height?: number } => Boolean(x && x.src));
   };
 
+  const getMatchedArtifactsForMessage = (
+    text: string | undefined,
+    msgTime: string | undefined,
+    allArts: ArtifactItem[]
+  ): ArtifactItem[] => {
+    if (!text || allArts.length === 0) return [];
+
+    // 1. 如果文本中精确提到了某个特定产物文件名（如 implementation_plan.v1.md）
+    const exactMatches = allArts.filter((art) => text.includes(art.file_name));
+    if (exactMatches.length > 0) {
+      return exactMatches;
+    }
+
+    // 2. 如果包含通用 implementation_plan
+    if (text.includes('implementation_plan')) {
+      const planArts = allArts.filter((a) => a.file_name.startsWith('implementation_plan'));
+      if (planArts.length > 0) {
+        if (msgTime) {
+          const priorPlans = planArts
+            .filter((a) => a.created_at && a.created_at <= msgTime)
+            .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+          if (priorPlans.length > 0) {
+            return [priorPlans[0]];
+          }
+        }
+        return [planArts[0]];
+      }
+    }
+
+    // 3. 如果包含通用 walkthrough
+    if (text.includes('walkthrough')) {
+      const walkArts = allArts.filter((a) => a.file_name.startsWith('walkthrough'));
+      if (walkArts.length > 0) {
+        if (msgTime) {
+          const priorWalks = walkArts
+            .filter((a) => a.created_at && a.created_at <= msgTime)
+            .sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+          if (priorWalks.length > 0) {
+            return [priorWalks[0]];
+          }
+        }
+        return [walkArts[0]];
+      }
+    }
+
+    return [];
+  };
+
   // 切换会话时重置折叠状态
   useEffect(() => {
     setExpandedTurns({});
   }, [selectedConversationId]);
 
-  // 加载工作区列表
+  const selectedWorkspaceRef = useRef(selectedWorkspace);
+  const convSearchRef = useRef(convSearch);
+  const isStarredViewRef = useRef(isStarredView);
+  const wsSearchRef = useRef(wsSearch);
+
+  useEffect(() => {
+    selectedWorkspaceRef.current = selectedWorkspace;
+  }, [selectedWorkspace]);
+
+  useEffect(() => {
+    convSearchRef.current = convSearch;
+  }, [convSearch]);
+
+  useEffect(() => {
+    isStarredViewRef.current = isStarredView;
+  }, [isStarredView]);
+
+  useEffect(() => {
+    wsSearchRef.current = wsSearch;
+  }, [wsSearch]);
+
+  const loadingWsRef = useRef(false);
+  // 加载工作区列表（带并发锁）
   const loadWorkspaces = async () => {
+    if (loadingWsRef.current) return;
+    loadingWsRef.current = true;
     try {
-      const list = await api.listWorkspaces(wsSearch);
+      const list = await api.listWorkspaces(wsSearchRef.current);
       setWorkspaces(list);
     } catch (e) {
       console.error(e);
+    } finally {
+      loadingWsRef.current = false;
     }
   };
 
@@ -118,17 +197,22 @@ export const BrowseView: React.FC<Props> = ({
     loadWorkspaces();
   }, [wsSearch]);
 
-  // 加载会话列表
+  const loadingConvsRef = useRef(false);
+  // 加载会话列表（带并发锁）
   const loadConversations = async () => {
+    if (loadingConvsRef.current) return;
+    loadingConvsRef.current = true;
     try {
       const list = await api.listConversations(
-        isStarredView ? undefined : selectedWorkspace,
-        convSearch,
-        isStarredView
+        isStarredViewRef.current ? undefined : selectedWorkspaceRef.current,
+        convSearchRef.current,
+        isStarredViewRef.current
       );
       setConversations(list);
     } catch (e) {
       console.error(e);
+    } finally {
+      loadingConvsRef.current = false;
     }
   };
 
@@ -136,38 +220,54 @@ export const BrowseView: React.FC<Props> = ({
     loadConversations();
   }, [selectedWorkspace, convSearch, isStarredView]);
 
-  // 加载收藏会话总数
+  const loadingStarredRef = useRef(false);
+  // 加载收藏会话总数（带并发锁）
   const loadStarredCount = async () => {
+    if (loadingStarredRef.current) return;
+    loadingStarredRef.current = true;
     try {
       const list = await api.listConversations(undefined, undefined, true);
       setStarredCount(list.length);
     } catch (e) {
       console.error(e);
+    } finally {
+      loadingStarredRef.current = false;
     }
   };
 
-  // 监听后台实时同步完成事件，自动刷新工作区与会话列表
+  // 监听后台实时同步完成事件（单例注册，绝对不泄漏，防并发风暴）
   useEffect(() => {
     if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
+    let isSubscribed = true;
+    let unlistenFn: (() => void) | null = null;
+
     listen('sync-completed', () => {
       loadWorkspaces();
       loadConversations();
       loadStarredCount();
     }).then((fn) => {
-      unlisten = fn;
+      if (!isSubscribed) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
     });
 
     return () => {
-      if (unlisten) unlisten();
+      isSubscribed = false;
+      if (unlistenFn) {
+        unlistenFn();
+      }
     };
-  }, [selectedWorkspace, convSearch, isStarredView]);
+  }, []);
 
-  // 加载会话消息流
+  // 加载会话消息流与方案产物
   useEffect(() => {
     if (!selectedConversationId) {
       setMessages([]);
       setCurrentConv(null);
+      setArtifacts([]);
+      setSelectedArtifact(null);
       return;
     }
     const conv = conversations.find((c) => c.id === selectedConversationId);
@@ -184,6 +284,21 @@ export const BrowseView: React.FC<Props> = ({
       })
       .finally(() => {
         setLoadingConv(false);
+      });
+
+    api
+      .getConversationArtifacts(selectedConversationId)
+      .then((arts) => {
+        setArtifacts(arts);
+        if (arts.length > 0) {
+          setSelectedArtifact(arts[0]);
+        } else {
+          setSelectedArtifact(null);
+        }
+      })
+      .catch((e) => {
+        console.error(e);
+        setArtifacts([]);
       });
   }, [selectedConversationId]);
 
@@ -215,6 +330,8 @@ export const BrowseView: React.FC<Props> = ({
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-pink-500/15 text-pink-500 border border-pink-500/30 rounded">Codex</span>;
       case 'workbuddy':
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-cyan-500/15 text-cyan-500 border border-cyan-500/30 rounded">WorkBuddy</span>;
+      case 'mimo':
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-rose-500/15 text-rose-500 border border-rose-500/30 rounded">MiMo</span>;
       default:
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted rounded">{source}</span>;
     }
@@ -388,6 +505,11 @@ export const BrowseView: React.FC<Props> = ({
                       Hermes {ws.hermes_cnt}
                     </span>
                   )}
+                  {(ws.mimo_cnt ?? 0) > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-rose-500/15 text-rose-500 rounded font-mono">
+                      MiMo {ws.mimo_cnt}
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
@@ -508,8 +630,8 @@ export const BrowseView: React.FC<Props> = ({
             {selectedConversationId && currentConv ? (
               <>
                 {/* 会话顶部 Header */}
-                <div className="p-4 border-b theme-border flex items-center justify-between theme-bg-header backdrop-blur-sm">
-                  <div className="min-w-0 pr-4">
+                <div className="p-4 border-b theme-border flex items-center justify-between theme-bg-header backdrop-blur-sm gap-4">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <button
                         onClick={() => onSelectConversation('')}
@@ -522,23 +644,23 @@ export const BrowseView: React.FC<Props> = ({
                     <h2 className="text-base font-bold theme-text-main truncate flex items-center gap-2">
                       <span>{currentConv.title || t('conv.untitled')}</span>
                     </h2>
-                    <div className="flex items-center gap-3 text-xs theme-text-muted mt-1">
-                      {getSourceBadge(currentConv.source_app)}
-                      <span className="truncate font-mono">{currentConv.workspace_path}</span>
-                      <span>·</span>
-                      <span>{t('conv.messages', { n: messages.length })}</span>
+                    <div className="flex items-center gap-2 text-xs theme-text-muted mt-1 min-w-0">
+                      <span className="shrink-0">{getSourceBadge(currentConv.source_app)}</span>
+                      <span className="truncate font-mono min-w-0">{currentConv.workspace_path}</span>
+                      <span className="shrink-0">·</span>
+                      <span className="shrink-0 whitespace-nowrap">{t('conv.messages', { n: messages.length })}</span>
                     </div>
                   </div>
 
-                  {/* 顶部操作区：正序/倒序 + 展开/折叠全部 + 收藏按钮 */}
-                  <div className="flex items-center gap-2">
+                  {/* 顶部操作区：正序/倒序 + 展开/折叠全部 + 实施方案 + 收藏按钮 */}
+                  <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
                     {/* 正序 / 倒序切换按钮 */}
                     <button
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
                       title={sortOrder === 'asc' ? t('conv.sortTitleAsc') : t('conv.sortTitleDesc')}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
                     >
-                      <ArrowUpDown className="h-3.5 w-3.5 text-blue-500" />
+                      <ArrowUpDown className="h-3.5 w-3.5 text-blue-500 shrink-0" />
                       <span>{sortOrder === 'asc' ? t('conv.sortAsc') : t('conv.sortDesc')}</span>
                     </button>
 
@@ -556,7 +678,7 @@ export const BrowseView: React.FC<Props> = ({
                         }
                         setExpandedTurns(next);
                       }}
-                      className="px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs"
+                      className="px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
                     >
                       {messageTurns.length > 0 &&
                       Object.keys(expandedTurns).length === messageTurns.length &&
@@ -565,16 +687,32 @@ export const BrowseView: React.FC<Props> = ({
                         : t('conv.expandAll')}
                     </button>
 
+                    {artifacts.length > 0 && (
+                      <button
+                        onClick={() => {
+                          if (!selectedArtifact && artifacts.length > 0) {
+                            setSelectedArtifact(artifacts[0]);
+                          }
+                          setShowArtifactModal(true);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold bg-emerald-500/10 border-emerald-500/35 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                        title="查看本会话制定的实施方案与产物文档"
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        <span>实施方案 ({artifacts.length})</span>
+                      </button>
+                    )}
+
                     <button
                       onClick={handleToggleStar}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer shadow-xs ${
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0 ${
                         currentConv.is_starred
                           ? 'bg-amber-500/15 border-amber-500/40 text-amber-500'
                           : 'theme-bg-sub hover:opacity-80 theme-border theme-text-main'
                       }`}
                     >
                       <Star
-                        className={`h-3.5 w-3.5 ${
+                        className={`h-3.5 w-3.5 shrink-0 ${
                           currentConv.is_starred ? 'fill-amber-400 text-amber-400' : 'theme-text-sub'
                         }`}
                       />
@@ -642,6 +780,33 @@ export const BrowseView: React.FC<Props> = ({
                               {userMsg.text && (
                                 <div className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap font-sans pl-1">
                                   {userMsg.text}
+                                  {(() => {
+                                    if (artifacts.length === 0) return null;
+                                    const matched = getMatchedArtifactsForMessage(
+                                      userMsg.text,
+                                      userMsg.created_at,
+                                      artifacts
+                                    );
+                                    if (matched.length === 0) return null;
+                                    return (
+                                      <span className="inline-flex flex-wrap gap-1.5 ml-2">
+                                        {matched.map((art) => (
+                                          <button
+                                            key={art.file_name}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setSelectedArtifact(art);
+                                              setShowArtifactModal(true);
+                                            }}
+                                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25 transition-all cursor-pointer shadow-2xs"
+                                          >
+                                            <FileText className="h-3 w-3" />
+                                            <span>查看{art.title || art.file_name}</span>
+                                          </button>
+                                        ))}
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
                               )}
 
@@ -724,11 +889,69 @@ export const BrowseView: React.FC<Props> = ({
                                     {/* Markdown 消息正文 */}
                                     {m.text && (
                                       <div className="markdown-body select-text leading-relaxed text-xs">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        <ReactMarkdown
+                                          remarkPlugins={[remarkGfm]}
+                                          components={{
+                                            code({ node, className, children, ...props }) {
+                                              const rawStr = String(children).trim();
+                                              const matched = getMatchedArtifactsForMessage(
+                                                rawStr,
+                                                m.created_at,
+                                                artifacts
+                                              )[0];
+                                              if (matched) {
+                                                return (
+                                                  <button
+                                                    onClick={(e) => {
+                                                      e.preventDefault();
+                                                      e.stopPropagation();
+                                                      setSelectedArtifact(matched);
+                                                      setShowArtifactModal(true);
+                                                    }}
+                                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/35 hover:bg-emerald-500/25 transition-all cursor-pointer mx-0.5"
+                                                    title={`点击查看方案：${matched.title || matched.file_name}`}
+                                                  >
+                                                    <FileText className="h-3 w-3 inline" />
+                                                    <span>{rawStr}</span>
+                                                  </button>
+                                                );
+                                              }
+                                              return <code className={className} {...props}>{children}</code>;
+                                            },
+                                          }}
+                                        >
                                           {m.text}
                                         </ReactMarkdown>
                                       </div>
                                     )}
+
+                                    {/* 匹配到的产物文档快捷直达入口卡片 */}
+                                     {(() => {
+                                       if (artifacts.length === 0 || !m.text) return null;
+                                       const matched = getMatchedArtifactsForMessage(
+                                         m.text,
+                                         m.created_at,
+                                         artifacts
+                                       );
+                                       if (matched.length === 0) return null;
+                                      return (
+                                        <div className="flex flex-wrap gap-2 pt-2 mt-2 border-t theme-border-sub">
+                                          {matched.map((art) => (
+                                            <button
+                                              key={art.file_name}
+                                              onClick={() => {
+                                                setSelectedArtifact(art);
+                                                setShowArtifactModal(true);
+                                              }}
+                                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 transition-all cursor-pointer shadow-2xs"
+                                            >
+                                              <FileText className="h-3.5 w-3.5" />
+                                              <span>查看方案文档：{art.title || art.file_name}</span>
+                                            </button>
+                                          ))}
+                                        </div>
+                                      );
+                                    })()}
 
                                     {/* Agent 消息附图（若有） */}
                                     {(() => {
@@ -800,7 +1023,10 @@ export const BrowseView: React.FC<Props> = ({
               </>
             ) : selectedWorkspace ? (
               /* 工作区全景研发分析 */
-              <WorkspaceAnalysisView workspacePath={selectedWorkspace} />
+              <WorkspaceAnalysisView
+                workspacePath={selectedWorkspace}
+                onSelectConversation={onSelectConversation}
+              />
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
                 <Sparkles className="h-10 w-10 mb-2 opacity-50" />
@@ -836,6 +1062,15 @@ export const BrowseView: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* 方案与产物文档浏览弹窗 */}
+      <ArtifactsModal
+        isOpen={showArtifactModal}
+        onClose={() => setShowArtifactModal(false)}
+        artifacts={artifacts}
+        currentArtifact={selectedArtifact}
+        onSelectArtifact={(art) => setSelectedArtifact(art)}
+      />
     </div>
   );
 };

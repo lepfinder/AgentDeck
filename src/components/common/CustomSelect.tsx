@@ -75,15 +75,15 @@ export function CustomSelect<T extends string | number>({
         {renderTrigger ? (
           renderTrigger(selectedOption)
         ) : (
-          <span className="flex items-center gap-2 truncate">
+          <span className="flex items-center gap-2 truncate min-w-0 flex-1 text-left">
             {selectedOption?.icon}
-            <span className="truncate">
+            <span className="truncate" title={selectedOption?.label}>
               {selectedOption ? selectedOption.label : resolvedPlaceholder}
             </span>
           </span>
         )}
         <ChevronDown
-          className={`h-3.5 w-3.5 theme-text-muted transition-transform duration-200 flex-shrink-0 ${
+          className={`h-3.5 w-3.5 theme-text-muted transition-transform duration-200 flex-shrink-0 ml-1.5 ${
             isOpen ? 'rotate-180 text-blue-500' : ''
           }`}
         />
@@ -91,7 +91,9 @@ export function CustomSelect<T extends string | number>({
 
       {isOpen && (
         <div
-          className={`absolute left-0 top-full z-50 mt-1 min-w-full w-max max-h-60 overflow-y-auto rounded-xl p-1 shadow-xl border theme-border theme-bg-card backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-100 scrollbar-thin ${menuClassName}`}
+          className={`absolute z-50 mt-1 max-h-60 overflow-y-auto rounded-xl p-1 shadow-xl border theme-border theme-bg-card backdrop-blur-md animate-in fade-in-0 zoom-in-95 duration-100 scrollbar-thin ${
+            menuClassName ? menuClassName : 'left-0 min-w-full w-max max-w-xs'
+          }`}
         >
           {options.map((opt) => {
             const isSelected = opt.value === value;
@@ -99,27 +101,28 @@ export function CustomSelect<T extends string | number>({
               <button
                 key={String(opt.value)}
                 type="button"
+                title={opt.label}
                 onClick={() => {
                   onChange(opt.value);
                   setIsOpen(false);
                 }}
-                className={`w-full flex items-center justify-between gap-3 px-2.5 py-1.5 rounded-lg text-xs font-medium text-left transition-colors cursor-pointer select-none ${
+                className={`w-full flex items-center justify-between gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-left transition-colors cursor-pointer select-none ${
                   isSelected
                     ? 'bg-blue-600/10 text-blue-600 dark:text-blue-400 font-semibold'
                     : 'theme-text-main hover:theme-bg-sub'
                 }`}
               >
-                <div className="flex items-center gap-2 truncate">
+                <div className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
                   {opt.icon}
                   <span className="truncate">{opt.label}</span>
                   {opt.subLabel && (
-                    <span className="text-[10px] theme-text-sub font-normal truncate">
+                    <span className="text-[10px] theme-text-sub font-normal truncate shrink-0">
                       {opt.subLabel}
                     </span>
                   )}
                 </div>
                 {isSelected && (
-                  <Check className="h-3.5 w-3.5 text-blue-500 flex-shrink-0 ml-1.5" />
+                  <Check className="h-3.5 w-3.5 text-blue-500 flex-shrink-0 ml-1" />
                 )}
               </button>
             );

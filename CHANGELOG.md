@@ -2,6 +2,38 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.3.5] - 2026-09-14
+
+### 新增
+- **Xiaomi MiMo Desktop 会话接入**：
+  - 新增 `mimo` importer，只读同步 `~/.local/share/mimocode/mimocode.db` 中的 session / message / part
+  - 映射用户提问、助手正文、thinking（reasoning）与工具调用到统一消息流
+  - 仅导入主对话（`agent_id=main`），过滤子 Agent 内部轨迹，避免时间线噪声
+  - 工作区侧栏、会话徽章、工作区分析、设置页数据源与「Open in IDE」菜单同步支持 MiMo
+  - 本地 REST API `/api/workspaces` 返回 `mimo_cnt`
+
+## [0.3.4] - 2026-09-11
+
+### 性能与架构
+- **彻底根治刷新与同步时的 UI 卡死与 macOS 彩虹圈 (Spinning Beachball)**：
+  - **架构级读写分离**：新增无锁专用只读连接池 (`open_read_connection`)，配置 `SQLITE_OPEN_READ_ONLY`、`query_only = ON` 与 256MB mmap 内存映射，彻底解耦与写事务锁争抢。
+  - **异步化 IPC 调度**：所有只读 Tauri 命令全面转为 `async fn`并在 Tokio blocking 线程池中运行，避免霸占 Tauri 底层 IPC 分发信道导致主进程挂起。
+  - **单例化事件监听与防抖并发锁**：修复前端 `sync-completed` 监听器随依赖重置而泄漏叠加的问题，增加 `isSubscribed` 卸载保护与并发请求锁，消除 60~90 次并发请求轰炸。
+  - **聚合 SQL 索引下推**：近 30 天大盘统计增加 `created_at` 索引范围剪枝，消除 21 万+ 行全表扫描。
+
+### 新增与优化
+- **项目方案与设计文档库 (Artifacts Center)**：
+  - 支持单会话实施计划 (`implementation_plan`) 与复盘走查 (`walkthrough`) 产物多版本识别与弹窗索引。
+  - 在工作区详情页支持全工作区方案文档汇总中心，提供按类型（实施计划、复盘走查、任务清单）与来源会话多维过滤。
+  - 优化文档库来源会话下拉筛选控件，修复文本过长导致浮层向左溢出屏幕被遮挡的问题，实现单行省略、完整标题浮动气泡与精致卡片视觉。
+
+## [0.3.3] - 2026-09-10
+
+### 修复
+- **工作区路径抽取与侧栏 Agent 标签**：
+  - 修复 Antigravity 误把 transcript JSON / `@[path]` 尾括号拼进 `workspace_path`，导致侧栏出现脏工作区名（如 `notix\"","toolAction"...`、`xiaonuan-web]`）
+  - 收紧路径清洗与启动时脏路径自动修复；侧栏 `AG` 计数改为识别 `source_app` / `antigravity`，不再只依赖旧 `transcript` 类型
+
 ## [0.3.1] - 2026-09-07
 
 ### 新增与优化

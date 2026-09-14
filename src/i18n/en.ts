@@ -224,6 +224,7 @@ export const en: Record<MessageKey, string> = {
   'ide.hint.antigravity': 'Open this project in Antigravity',
   'ide.hint.claude': 'cd into the folder and run claude',
   'ide.hint.codex': 'cd into the folder and run codex',
+  'ide.hint.mimo': 'Open this project in Xiaomi MiMo',
 
   'prompt.title': 'Prompt library',
   'prompt.new': 'New',

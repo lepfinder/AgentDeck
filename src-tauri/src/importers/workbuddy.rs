@@ -510,6 +510,7 @@ fn parse_workbuddy_file(
         parse_status: "ok".to_string(),
         source_types: vec!["workbuddy".to_string()],
         messages,
+        artifacts: Vec::new(),
     }))
 }
 

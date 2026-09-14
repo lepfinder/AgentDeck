@@ -287,5 +287,6 @@ fn parse_claude_jsonl(
         parse_status: "ok".to_string(),
         source_types: vec!["claude".to_string()],
         messages,
+        artifacts: Vec::new(),
     }))
 }

@@ -489,7 +489,8 @@ fn route_get(
                                 "claude_cnt": w.claude_cnt,
                                 "codex_cnt": w.codex_cnt,
                                 "wb_cnt": w.wb_cnt,
-                                "hermes_cnt": w.hermes_cnt
+                                "hermes_cnt": w.hermes_cnt,
+                                "mimo_cnt": w.mimo_cnt
                             })
                         })
                         .collect();
@@ -543,6 +544,18 @@ fn route_get(
                     stream,
                     200,
                     json!({"ok": true, "conversation_id": mid, "messages": msgs}),
+                ),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        p if p.starts_with("/api/conversation/") && p.ends_with("/artifacts") => {
+            let cid = &p["/api/conversation/".len()..p.len() - "/artifacts".len()];
+            match crate::db::get_conversation_artifacts(conn, cid) {
+                Ok(artifacts) => send_json(
+                    stream,
+                    200,
+                    json!({"ok": true, "conversation_id": cid, "artifacts": artifacts}),
                 ),
                 Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
             }

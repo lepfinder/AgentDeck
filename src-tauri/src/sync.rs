@@ -76,6 +76,16 @@ pub fn get_agent_source_paths() -> Vec<PathBuf> {
         if wb_dir.is_dir() {
             paths.push(wb_dir);
         }
+
+        // 7. Xiaomi MiMo Desktop (mimocode.db)
+        let mimo_db = home.join(".local/share/mimocode/mimocode.db");
+        if mimo_db.exists() {
+            paths.push(mimo_db.clone());
+        }
+        let mimo_wal = home.join(".local/share/mimocode/mimocode.db-wal");
+        if mimo_wal.exists() {
+            paths.push(mimo_wal);
+        }
     }
     paths
 }
@@ -178,6 +188,21 @@ pub fn collect_agent_sources(conn: &rusqlite::Connection) -> Vec<AgentSourceInfo
             "workbuddy",
             "WorkBuddy",
             vec![make_info(".workbuddy/projects", "任务与交互会话 (.jsonl)")],
+        ),
+        (
+            "mimo",
+            "Xiaomi MiMo",
+            vec![
+                make_info(".local/share/mimocode/mimocode.db", "会话主库 (SQLite)"),
+                make_info(
+                    ".local/share/mimocode/mimocode.db-wal",
+                    "会话主库 WAL 增量日志",
+                ),
+                make_info(
+                    "Library/Application Support/Xiaomi MiMo/db/artifacts.db",
+                    "交付产物索引",
+                ),
+            ],
         ),
     ];
 
@@ -370,7 +395,7 @@ mod tests {
         .unwrap();
 
         let sources = collect_agent_sources(&conn);
-        assert_eq!(sources.len(), 6);
+        assert_eq!(sources.len(), 7);
 
         let cursor_info = sources.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor_info.name, "Cursor");
@@ -384,6 +409,13 @@ mod tests {
 
         let claude_info = sources.iter().find(|s| s.id == "claude").unwrap();
         assert_eq!(claude_info.session_count, 0);
+    }
+
+    #[test]
+    fn test_measure_execute_sync() {
+        let t0 = std::time::Instant::now();
+        let res = execute_sync(false);
+        println!("execute_sync(false) finished in {:?}: {:?}", t0.elapsed(), res);
     }
 }
 

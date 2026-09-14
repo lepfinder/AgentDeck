@@ -5,6 +5,8 @@ import type {
   WorkspaceStat,
   ConversationItem,
   MessageItem,
+  ArtifactItem,
+  WorkspaceArtifactItem,
   SearchResultItem,
   SyncResultInfo,
   WorkspaceDetailStats,
@@ -86,6 +88,24 @@ export const api = {
     }
     const res = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}/messages`);
     return await res.json();
+  },
+
+  async getConversationArtifacts(conversationId: string): Promise<ArtifactItem[]> {
+    if (isTauri()) {
+      return await invoke<ArtifactItem[]>('get_conversation_artifacts_cmd', { conversationId });
+    }
+    const res = await fetch(`/api/conversation/${encodeURIComponent(conversationId)}/artifacts`);
+    const data = await res.json();
+    return data.artifacts || [];
+  },
+
+  async getWorkspaceArtifacts(workspacePath: string): Promise<WorkspaceArtifactItem[]> {
+    if (isTauri()) {
+      return await invoke<WorkspaceArtifactItem[]>('get_workspace_artifacts_cmd', { workspacePath });
+    }
+    const res = await fetch(`/api/workspace/artifacts?path=${encodeURIComponent(workspacePath)}`);
+    const data = await res.json();
+    return data.artifacts || [];
   },
 
   async toggleStar(conversationId: string): Promise<boolean> {
@@ -452,6 +472,7 @@ export const api = {
       { id: 'antigravity', label: 'Antigravity', kind: 'app', installed: false },
       { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
       { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
+      { id: 'mimo', label: 'Xiaomi MiMo', kind: 'app', installed: false },
     ];
   },
 

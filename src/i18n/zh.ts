@@ -222,6 +222,7 @@ export const zh = {
   'ide.hint.antigravity': '用 Antigravity 打开此项目',
   'ide.hint.claude': '在终端进入目录并启动 claude',
   'ide.hint.codex': '在终端进入目录并启动 codex',
+  'ide.hint.mimo': '用 Xiaomi MiMo 打开此项目',
 
   'prompt.title': '提示词库',
   'prompt.new': '新建',

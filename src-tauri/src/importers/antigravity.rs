@@ -6,10 +6,11 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use super::{
-    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+    needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawArtifact,
+    RawConversation, RawMessage,
 };
 
-const AG_PARSER_REV: &str = "ag-dual-dir-v1";
+const AG_PARSER_REV: &str = "ag-dual-dir-v4";
 const AG_PARSER_REV_KEY: &str = "agentdeck:ag_parser_rev";
 
 struct SessionCandidate {
@@ -257,6 +258,163 @@ fn load_antigravity_db_media(
     mapping
 }
 
+fn unwrap_json_str(val: &Value) -> String {
+    match val {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+                if let Ok(Value::String(unquoted)) = serde_json::from_str::<Value>(trimmed) {
+                    return unquoted;
+                }
+                let inner = &trimmed[1..trimmed.len() - 1];
+                inner
+                    .replace("\\n", "\n")
+                    .replace("\\r", "")
+                    .replace("\\t", "\t")
+                    .replace("\\\"", "\"")
+                    .replace("\\\\", "\\")
+            } else {
+                s.replace("\\n", "\n").replace("\\r", "").replace("\\\"", "\"")
+            }
+        }
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+fn extract_markdown_title(content: &str, default_name: &str) -> String {
+    for line in content.lines() {
+        let trimmed = line.trim().trim_start_matches('"').trim();
+        if trimmed.starts_with('#') {
+            let title = trimmed
+                .trim_start_matches('#')
+                .trim()
+                .trim_matches(|c| c == '*' || c == '`' || c == '"' || c == '[' || c == ']')
+                .trim();
+            if !title.is_empty() {
+                return title.to_string();
+            }
+        }
+    }
+    match default_name {
+        name if name.starts_with("implementation_plan") => "实施计划 (Implementation Plan)".to_string(),
+        name if name.starts_with("walkthrough") => "成果走查 (Walkthrough)".to_string(),
+        name if name.starts_with("task") => "任务清单 (Task)".to_string(),
+        _ => default_name.to_string(),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RawArtifactEntry {
+    #[allow(dead_code)]
+    step_index: i64,
+    base_file_name: String,
+    file_path: String,
+    title: String,
+    summary: Option<String>,
+    content: String,
+    user_facing: bool,
+    request_feedback: bool,
+    created_at: Option<String>,
+}
+
+fn load_antigravity_artifacts(session_dir: &Path) -> Vec<RawArtifact> {
+    let mut artifacts = Vec::new();
+    let entries = match std::fs::read_dir(session_dir) {
+        Ok(e) => e,
+        Err(_) => return artifacts,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let file_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        // 仅收集 .md 文件，且排除隐藏文件及特定系统文件
+        if !file_name.ends_with(".md") || file_name.starts_with('.') {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        let title = extract_markdown_title(&content, &file_name);
+
+        // 尝试读取伴生 metadata.json
+        let meta_path = session_dir.join(format!("{}.metadata.json", file_name));
+        let mut summary = None;
+        let mut user_facing = true;
+        let mut request_feedback = false;
+        let mut updated_at = None;
+
+        if meta_path.is_file() {
+            if let Ok(meta_str) = std::fs::read_to_string(&meta_path) {
+                if let Ok(meta_val) = serde_json::from_str::<Value>(&meta_str) {
+                    summary = meta_val
+                        .get("summary")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    user_facing = meta_val
+                        .get("userFacing")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+                    request_feedback = meta_val
+                        .get("requestFeedback")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    updated_at = meta_val
+                        .get("updatedAt")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                }
+            }
+        }
+
+        if updated_at.is_none() {
+            if let Ok(meta) = path.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    let dt: chrono::DateTime<chrono::Utc> = mtime.into();
+                    updated_at = Some(dt.to_rfc3339());
+                }
+            }
+        }
+
+        artifacts.push(RawArtifact {
+            file_name,
+            file_path: path.to_string_lossy().to_string(),
+            title,
+            summary,
+            content,
+            user_facing,
+            request_feedback,
+            created_at: updated_at.clone(),
+            updated_at,
+        });
+    }
+
+    // 优先级排序：implementation_plan.md > task.md > walkthrough.md > 其他
+    artifacts.sort_by_key(|a| match a.file_name.as_str() {
+        "implementation_plan.md" => 1,
+        "task.md" => 2,
+        "walkthrough.md" => 3,
+        _ => 4,
+    });
+
+    artifacts
+}
+
 fn parse_antigravity_session(
     cid: &str,
     transcript_path: &Path,
@@ -270,8 +428,10 @@ fn parse_antigravity_session(
     let db_media = load_antigravity_db_media(cid, &home, is_ide);
 
     let user_req_re = Regex::new(r"(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>")?;
-    let workspace_re = Regex::new(r"(/[^\s\n\r]+)\s*->")?;
-    let active_doc_re = Regex::new(r"Active Document:\s*([^\s(]+)")?;
+    let artifact_uri_re = Regex::new(r#"Comments on artifact URI:\s*file://([^\s\n\r"']+)"#)?;
+    // 禁止吃进 JSON 引号/反斜杠/方括号，避免 toolAction 或 @[path] 尾 ] 拼进路径
+    let workspace_re = Regex::new(r#"(/[^\s\n\r"'\\\[\]]+)\s*->"#)?;
+    let active_doc_re = Regex::new(r#"Active Document:\s*([^\s("'\\\[\]]+)"#)?;
     let at_img_re = Regex::new(r"@\[?(/[^\s\]\)]+\.(?:png|jpe?g|gif|webp|svg))\]?")?;
     let file_uri_img_re = Regex::new(r#"file://(/[^\s"'\n\r\(\)]+\.(?:png|jpe?g|gif|webp|svg))"#)?;
     let media_re = Regex::new(r#"(/Users[^\x00-\x1f\s"'`<>]*?media[_\-\w]*\.(?:png|jpe?g|webp|gif|svg))"#)?;
@@ -283,6 +443,7 @@ fn parse_antigravity_session(
     let mut created_at = None;
     let mut updated_at = None;
     let mut step_idx = 0i64;
+    let mut transcript_artifact_entries: Vec<RawArtifactEntry> = Vec::new();
 
     // 优先读取 overview.txt 提取标题
     let overview_path = session_dir.join("overview.txt");
@@ -333,22 +494,30 @@ fn parse_antigravity_session(
         if workspace_path.is_empty() {
             if let Some(caps) = workspace_re.captures(raw_content) {
                 if let Some(m) = caps.get(1) {
-                    workspace_path = super::project_root_from_path(m.as_str());
+                    if let Some(clean) = super::sanitize_extracted_path(m.as_str()) {
+                        workspace_path = super::canonicalize_workspace_path(&clean);
+                    }
                 }
             } else if let Some(caps) = active_doc_re.captures(raw_content) {
                 if let Some(m) = caps.get(1) {
-                    workspace_path = super::project_root_from_path(m.as_str());
+                    if let Some(clean) = super::sanitize_extracted_path(m.as_str()) {
+                        workspace_path = super::canonicalize_workspace_path(&clean);
+                    }
                 }
             } else if raw_content.contains("/workspace/") {
                 for line in raw_content.lines() {
                     if let Some(idx) = line.find("/workspace/") {
                         let sub = &line[idx..];
-                        let cand = super::project_root_from_path(
-                            sub.split_whitespace().next().unwrap_or(""),
-                        );
-                        if !cand.is_empty() {
-                            workspace_path = cand;
-                            break;
+                        let token = sub
+                            .split(|c: char| c.is_whitespace() || matches!(c, ']' | '[' | '"' | '\'' | ')' | '('))
+                            .next()
+                            .unwrap_or("");
+                        if let Some(clean) = super::sanitize_extracted_path(token) {
+                            let cand = super::canonicalize_workspace_path(&clean);
+                            if !cand.is_empty() {
+                                workspace_path = cand;
+                                break;
+                            }
                         }
                     }
                 }
@@ -357,13 +526,55 @@ fn parse_antigravity_session(
 
         match step_type {
             "USER_INPUT" => {
-                let user_text = if let Some(caps) = user_req_re.captures(raw_content) {
+                let mut user_text = if let Some(caps) = user_req_re.captures(raw_content) {
                     caps.get(1)
                         .map(|m| m.as_str().trim().to_string())
-                        .unwrap_or_else(|| raw_content.to_string())
+                        .unwrap_or_default()
                 } else {
                     raw_content.trim().to_string()
                 };
+
+                // 处理 Artifact 审批动作 (Proceed / Approve)
+                let is_approved = raw_content.contains("The user has approved this document.");
+                let artifact_name = artifact_uri_re.captures(raw_content).and_then(|c| {
+                    c.get(1).map(|m| {
+                        Path::new(m.as_str())
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("实施计划")
+                            .to_string()
+                    })
+                });
+
+                if is_approved {
+                    let doc_name = artifact_name.as_deref().unwrap_or("实施计划");
+                    if user_text.is_empty() {
+                        let mut comment_lines = Vec::new();
+                        let body = if let Some(idx) = raw_content.find("<USER_REQUEST>") {
+                            &raw_content[..idx]
+                        } else {
+                            raw_content
+                        };
+                        for line in body.lines() {
+                            let s = line.trim();
+                            if s.is_empty()
+                                || s.starts_with("Comments on artifact URI:")
+                                || s == "The user has approved this document."
+                            {
+                                continue;
+                            }
+                            comment_lines.push(s);
+                        }
+                        let comment = comment_lines.join(" ").trim().to_string();
+                        if !comment.is_empty() {
+                            user_text = format!("✅ 已批准 {}：{}", doc_name, comment);
+                        } else {
+                            user_text = format!("✅ 已批准 {}", doc_name);
+                        }
+                    } else {
+                        user_text = format!("✅ 已批准 {}: {}", doc_name, user_text);
+                    }
+                }
 
                 if title.is_empty() && !user_text.is_empty() {
                     title = user_text.chars().take(80).collect();
@@ -439,6 +650,23 @@ fn parse_antigravity_session(
                     None
                 };
 
+                // 若用户输入仍为空且无附图，尝试剥离 <ADDITIONAL_METADATA> 提取有效前置内容
+                if user_text.is_empty() && image_entries.is_empty() {
+                    let fallback = if let Some(idx) = raw_content.find("<ADDITIONAL_METADATA>") {
+                        raw_content[..idx].trim()
+                    } else {
+                        raw_content.trim()
+                    };
+                    let clean_fallback = fallback
+                        .replace("<USER_REQUEST>", "")
+                        .replace("</USER_REQUEST>", "")
+                        .trim()
+                        .to_string();
+                    if !clean_fallback.is_empty() {
+                        user_text = clean_fallback;
+                    }
+                }
+
                 messages.push(RawMessage {
                     step_index: step_idx,
                     role: "user".to_string(),
@@ -461,6 +689,91 @@ fn parse_antigravity_session(
                     .get("thinking")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+
+                // 提取本次回复中可能生成的实施方案或交付产物 (write_to_file)
+                if let Some(tool_calls_arr) = json_val.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in tool_calls_arr {
+                        let fn_name = tc.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                        if fn_name == "write_to_file" {
+                            if let Some(args_obj) = tc.get("args") {
+                                let target_file_val = args_obj.get("TargetFile").unwrap_or(&Value::Null);
+                                let target_file = unwrap_json_str(target_file_val);
+                                let file_name = Path::new(&target_file)
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or_default()
+                                    .to_string();
+
+                                let has_artifact_meta = args_obj.get("ArtifactMetadata").is_some();
+                                let is_target_artifact = file_name.ends_with(".md") && (
+                                    has_artifact_meta
+                                        || file_name.starts_with("implementation_plan")
+                                        || file_name.starts_with("walkthrough")
+                                        || file_name.starts_with("task")
+                                        || target_file.contains("/brain/")
+                                        || target_file.contains("/.gemini/")
+                                );
+
+                                if is_target_artifact {
+                                    let code_val = args_obj.get("CodeContent").unwrap_or(&Value::Null);
+                                    let content = unwrap_json_str(code_val);
+                                    if !content.trim().is_empty() {
+                                        let mut summary = None;
+                                        let mut user_facing = true;
+                                        let mut request_feedback = false;
+
+                                        if let Some(meta_val) = args_obj.get("ArtifactMetadata") {
+                                            let meta_obj = match meta_val {
+                                                Value::Object(_) => Some(meta_val.clone()),
+                                                Value::String(_) => {
+                                                    let unquoted = unwrap_json_str(meta_val);
+                                                    serde_json::from_str::<Value>(&unquoted).ok()
+                                                }
+                                                _ => None,
+                                            };
+                                            if let Some(m) = meta_obj {
+                                                summary = m
+                                                    .get("Summary")
+                                                    .or_else(|| m.get("summary"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string());
+                                                user_facing = m
+                                                    .get("UserFacing")
+                                                    .or_else(|| m.get("userFacing"))
+                                                    .and_then(|v| v.as_bool())
+                                                    .unwrap_or(true);
+                                                request_feedback = m
+                                                    .get("RequestFeedback")
+                                                    .or_else(|| m.get("requestFeedback"))
+                                                    .and_then(|v| v.as_bool())
+                                                    .unwrap_or(false);
+                                            }
+                                        }
+
+                                        let title = extract_markdown_title(&content, &file_name);
+                                        let step_created_at = json_val
+                                            .get("created_at")
+                                            .or_else(|| json_val.get("timestamp"))
+                                            .and_then(|v| v.as_str())
+                                            .map(|s| s.to_string());
+
+                                        transcript_artifact_entries.push(RawArtifactEntry {
+                                            step_index: step_idx,
+                                            base_file_name: file_name,
+                                            file_path: target_file,
+                                            title,
+                                            summary,
+                                            content,
+                                            user_facing,
+                                            request_feedback,
+                                            created_at: step_created_at,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 messages.push(RawMessage {
                     step_index: step_idx,
@@ -516,6 +829,97 @@ fn parse_antigravity_session(
         vec!["antigravity".to_string()]
     };
 
+    // 将 transcript_artifact_entries 按 base_file_name 组织并生成版本化产物列表
+    let mut artifacts_by_name: std::collections::BTreeMap<String, Vec<RawArtifactEntry>> =
+        std::collections::BTreeMap::new();
+
+    for entry in transcript_artifact_entries {
+        let list = artifacts_by_name
+            .entry(entry.base_file_name.clone())
+            .or_default();
+        // 若相邻连续写入的内容完全相同，过滤冗余
+        if let Some(last) = list.last() {
+            if last.content == entry.content {
+                continue;
+            }
+        }
+        list.push(entry);
+    }
+
+    let mut final_artifacts: Vec<RawArtifact> = Vec::new();
+    let mut seen_file_names = std::collections::HashSet::new();
+
+    for (base_name, entries) in artifacts_by_name {
+        let total = entries.len();
+        let stem = base_name.strip_suffix(".md").unwrap_or(&base_name);
+
+        for (idx, entry) in entries.into_iter().enumerate() {
+            let file_name = if total == 1 || idx == total - 1 {
+                // 最新版本或唯一定义保留原生文件名
+                base_name.clone()
+            } else {
+                // 历史版本加上 .v{序号}.md 后缀
+                format!("{}.v{}.md", stem, idx + 1)
+            };
+
+            seen_file_names.insert(file_name.clone());
+            final_artifacts.push(RawArtifact {
+                file_name,
+                file_path: entry.file_path,
+                title: entry.title,
+                summary: entry.summary,
+                content: entry.content,
+                user_facing: entry.user_facing,
+                request_feedback: entry.request_feedback,
+                created_at: entry.created_at.clone(),
+                updated_at: entry.created_at,
+            });
+        }
+    }
+
+    // 补充物理磁盘上存在但 transcript 中未记录的其它独立 artifact 文件
+    for disk_art in load_antigravity_artifacts(session_dir) {
+        if !seen_file_names.contains(&disk_art.file_name) {
+            seen_file_names.insert(disk_art.file_name.clone());
+            final_artifacts.push(disk_art);
+        }
+    }
+
+    // 按业务类型与时序排序：实施计划(最新>历史倒序) > 任务清单 > 成果复盘(最新>历史倒序) > 其它
+    final_artifacts.sort_by(|a, b| {
+        let type_score = |name: &str| -> i32 {
+            if name == "implementation_plan.md" {
+                1
+            } else if name.starts_with("implementation_plan") {
+                2
+            } else if name == "task.md" {
+                3
+            } else if name.starts_with("task") {
+                4
+            } else if name == "walkthrough.md" {
+                5
+            } else if name.starts_with("walkthrough") {
+                6
+            } else {
+                7
+            }
+        };
+
+        let sa = type_score(&a.file_name);
+        let sb = type_score(&b.file_name);
+        if sa != sb {
+            return sa.cmp(&sb);
+        }
+
+        let time_a = a.created_at.as_deref().unwrap_or("");
+        let time_b = b.created_at.as_deref().unwrap_or("");
+        if time_a != time_b {
+            return time_b.cmp(time_a);
+        }
+
+        b.file_name.cmp(&a.file_name)
+    });
+
     Ok(Some(RawConversation {
         id: cid.to_string(),
         title,
@@ -526,6 +930,7 @@ fn parse_antigravity_session(
         parse_status: "ok".to_string(),
         source_types,
         messages,
+        artifacts: final_artifacts,
     }))
 }
 
@@ -568,6 +973,71 @@ mod tests {
         assert_eq!(conv.messages[0].content, "测试提问内容");
         assert_eq!(conv.messages[1].role, "assistant");
         assert_eq!(conv.messages[1].content, "这是助手的回答");
+    }
+
+    #[test]
+    fn test_parse_antigravity_approval_message() {
+        let tmp_dir = std::env::temp_dir().join(format!("test_ag_approval_{}", std::process::id()));
+        let logs_dir = tmp_dir.join(".system_generated/logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+
+        let transcript_path = logs_dir.join("transcript.jsonl");
+        let mut file = File::create(&transcript_path).unwrap();
+        // 模拟批准 implementation_plan.md 且 <USER_REQUEST> 为空
+        writeln!(
+            file,
+            r#"{{"type":"USER_INPUT","step_index":0,"content":"Comments on artifact URI: file:///Users/test/.gemini/brain/cid/implementation_plan.md\n\nThe user has approved this document.\n\n<USER_REQUEST>\n\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nlocal time\n</ADDITIONAL_METADATA>","timestamp":"2026-09-08T10:00:00Z"}}"#
+        )
+        .unwrap();
+        drop(file);
+
+        let conv = parse_antigravity_session("test-cid-456", &transcript_path, &tmp_dir, true)
+            .unwrap()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        assert_eq!(conv.messages.len(), 1);
+        assert_eq!(conv.messages[0].role, "user");
+        assert_eq!(conv.messages[0].content, "✅ 已批准 implementation_plan.md");
+    }
+
+    #[test]
+    fn test_parse_antigravity_artifacts() {
+        let tmp_dir = std::env::temp_dir().join(format!("test_ag_art_{}", std::process::id()));
+        let logs_dir = tmp_dir.join(".system_generated/logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+
+        let transcript_path = logs_dir.join("transcript.jsonl");
+        let mut file = File::create(&transcript_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"USER_INPUT","step_index":0,"content":"<USER_REQUEST>查看方案</USER_REQUEST>","timestamp":"2026-09-08T10:00:00Z"}}"#
+        )
+        .unwrap();
+        drop(file);
+
+        // 创建 implementation_plan.md 及 implementation_plan.md.metadata.json
+        let plan_md_path = tmp_dir.join("implementation_plan.md");
+        std::fs::write(&plan_md_path, "# 架构重构实施计划\n\n这是正文内容").unwrap();
+
+        let meta_path = tmp_dir.join("implementation_plan.md.metadata.json");
+        std::fs::write(&meta_path, r#"{"summary":"实施方案摘要说明","updatedAt":"2026-09-08T10:05:00Z","requestFeedback":true,"userFacing":true}"#).unwrap();
+
+        let conv = parse_antigravity_session("test-cid-art", &transcript_path, &tmp_dir, true)
+            .unwrap()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        assert_eq!(conv.artifacts.len(), 1);
+        let art = &conv.artifacts[0];
+        assert_eq!(art.file_name, "implementation_plan.md");
+        assert_eq!(art.title, "架构重构实施计划");
+        assert_eq!(art.summary.as_deref(), Some("实施方案摘要说明"));
+        assert!(art.content.contains("这是正文内容"));
+        assert!(art.request_feedback);
+        assert!(art.user_facing);
     }
 
     #[test]
@@ -618,6 +1088,123 @@ mod tests {
             selected.shadowed_paths[0],
             std::path::PathBuf::from("/mock/ide/brain/shared-uuid-001/transcript.jsonl")
         );
+    }
+
+    #[test]
+    fn test_parse_antigravity_multiversion_artifacts() {
+        let tmp_dir = std::env::temp_dir().join(format!("test_ag_multiversion_{}", std::process::id()));
+        let logs_dir = tmp_dir.join(".system_generated/logs");
+        std::fs::create_dir_all(&logs_dir).unwrap();
+
+        let transcript_path = logs_dir.join("transcript.jsonl");
+        let mut file = File::create(&transcript_path).unwrap();
+
+        // Step 0: 用户提问
+        let line0 = serde_json::json!({
+            "type": "USER_INPUT",
+            "step_index": 0,
+            "content": "<USER_REQUEST>设计第一版方案</USER_REQUEST>",
+            "created_at": "2026-09-08T10:00:00Z"
+        });
+        writeln!(file, "{}", line0).unwrap();
+
+        // Step 1: AI 生成第一版 implementation_plan.md
+        let line1 = serde_json::json!({
+            "type": "PLANNER_RESPONSE",
+            "step_index": 1,
+            "content": "已生成第一版",
+            "created_at": "2026-09-08T10:01:00Z",
+            "tool_calls": [{
+                "name": "write_to_file",
+                "args": {
+                    "TargetFile": format!("{}/implementation_plan.md", tmp_dir.display()),
+                    "CodeContent": "# 第一版: AI 翻译与笔记润色\n\n正文1",
+                    "ArtifactMetadata": serde_json::json!({
+                        "Summary": "第一版摘要",
+                        "RequestFeedback": true,
+                        "UserFacing": true
+                    }).to_string()
+                }
+            }]
+        });
+        writeln!(file, "{}", line1).unwrap();
+
+        // Step 2: 用户提问增加新需求
+        let line2 = serde_json::json!({
+            "type": "USER_INPUT",
+            "step_index": 2,
+            "content": "<USER_REQUEST>设计第二版监控方案</USER_REQUEST>",
+            "created_at": "2026-09-08T10:10:00Z"
+        });
+        writeln!(file, "{}", line2).unwrap();
+
+        // Step 3: AI 生成第二版 implementation_plan.md
+        let line3 = serde_json::json!({
+            "type": "PLANNER_RESPONSE",
+            "step_index": 3,
+            "content": "已生成第二版",
+            "created_at": "2026-09-08T10:11:00Z",
+            "tool_calls": [{
+                "name": "write_to_file",
+                "args": {
+                    "TargetFile": format!("{}/implementation_plan.md", tmp_dir.display()),
+                    "CodeContent": "# 第二版: LLM 监控看板\n\n正文2",
+                    "ArtifactMetadata": serde_json::json!({
+                        "Summary": "第二版摘要",
+                        "RequestFeedback": true,
+                        "UserFacing": true
+                    }).to_string()
+                }
+            }]
+        });
+        writeln!(file, "{}", line3).unwrap();
+
+        let conv = parse_antigravity_session("test-cid-multi", &transcript_path, &tmp_dir, true)
+            .unwrap()
+            .unwrap();
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        // 验证提取出的产物包含 2 个版本
+        assert_eq!(conv.artifacts.len(), 2);
+        // 按照排序规则，最新版 (implementation_plan.md) 排在最前，历史版 (implementation_plan.v1.md) 在后
+        let latest = &conv.artifacts[0];
+        let v1 = &conv.artifacts[1];
+
+        assert_eq!(latest.file_name, "implementation_plan.md");
+        assert_eq!(latest.title, "第二版: LLM 监控看板");
+        assert_eq!(latest.summary.as_deref(), Some("第二版摘要"));
+
+        assert_eq!(v1.file_name, "implementation_plan.v1.md");
+        assert_eq!(v1.title, "第一版: AI 翻译与笔记润色");
+        assert_eq!(v1.summary.as_deref(), Some("第一版摘要"));
+    }
+
+    #[test]
+    fn test_sync_real_antigravity_db() {
+        let home = match dirs::home_dir() {
+            Some(h) => h,
+            None => return,
+        };
+        let db_path = home.join(".agentdeck/agentdeck.db");
+        if db_path.exists() {
+            let conn = Connection::open(&db_path).unwrap();
+            crate::db::init_schema(&conn).unwrap();
+            let stats = sync(&conn, true);
+            eprintln!("Antigravity sync stats: {:?}", stats);
+
+            // 检查目标会话 68613a2f-279c-4299-bf94-b75a4b7f71e0 的 artifacts
+            let artifacts = crate::db::get_conversation_artifacts(
+                &conn,
+                "68613a2f-279c-4299-bf94-b75a4b7f71e0",
+            )
+            .unwrap();
+            eprintln!("Session 68613a2f artifacts count: {}", artifacts.len());
+            for art in &artifacts {
+                eprintln!("  - [{}] {}: {}", art.file_name, art.title, art.created_at.as_deref().unwrap_or("-"));
+            }
+            assert!(artifacts.len() >= 10, "Should have extracted all historical plan artifacts, got {}", artifacts.len());
+        }
     }
 }
 

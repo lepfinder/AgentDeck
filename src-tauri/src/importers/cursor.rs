@@ -321,6 +321,7 @@ fn process_cursor_composer(
         parse_status: "ok".to_string(),
         source_types: vec!["cursor".to_string()],
         messages,
+        artifacts: Vec::new(),
     };
 
     match save_conversation_tx(conn, &conv) {

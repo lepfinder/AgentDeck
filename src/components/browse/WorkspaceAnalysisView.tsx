@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import type { WorkspaceDetailStats, WorkspaceFineBlock } from '../../types';
+import type {
+  WorkspaceDetailStats,
+  WorkspaceFineBlock,
+  WorkspaceArtifactItem,
+} from '../../types';
 import { api } from '../../api/tauriBridge';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -24,15 +28,26 @@ import {
   X,
   CheckCircle2,
   AlertTriangle,
+  Copy,
+  Check,
+  ExternalLink,
+  Search,
+  ChevronRight,
+  FileCode2,
 } from 'lucide-react';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
+import { CustomSelect } from '../common/CustomSelect';
 import { useI18n } from '../../i18n';
 
 interface Props {
   workspacePath: string;
+  onSelectConversation?: (conversationId: string) => void;
 }
 
-export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
+export const WorkspaceAnalysisView: React.FC<Props> = ({
+  workspacePath,
+  onSelectConversation,
+}) => {
   const { t } = useI18n();
   const [detail, setDetail] = useState<WorkspaceDetailStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +56,14 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   const [extracting, setExtracting] = useState(false);
   const [extractMessage, setExtractMessage] = useState<string | null>(null);
   const [progressInfo, setProgressInfo] = useState<PipelineProgress | null>(null);
+
+  // 方案与设计文档专属状态
+  const [isArtifactsModalOpen, setIsArtifactsModalOpen] = useState(false);
+  const [selectedArtifact, setSelectedArtifact] = useState<WorkspaceArtifactItem | null>(null);
+  const [artifactFilterType, setArtifactFilterType] = useState<'all' | 'plan' | 'walkthrough' | 'task'>('all');
+  const [artifactSearchQuery, setArtifactSearchQuery] = useState('');
+  const [artifactConvFilter, setArtifactConvFilter] = useState<string>('all');
+  const [copiedArtifact, setCopiedArtifact] = useState(false);
 
   const fetchDetail = async () => {
     if (!workspacePath) return;
@@ -58,6 +81,110 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
   useEffect(() => {
     fetchDetail();
   }, [workspacePath]);
+
+  useEffect(() => {
+    if (detail?.artifacts && detail.artifacts.length > 0 && !selectedArtifact) {
+      setSelectedArtifact(detail.artifacts[0]);
+    }
+  }, [detail]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isArtifactsModalOpen) {
+        setIsArtifactsModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isArtifactsModalOpen]);
+
+  const getDocTypeBadge = (fileName: string) => {
+    if (fileName.startsWith('implementation_plan')) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+          实施计划
+        </span>
+      );
+    }
+    if (fileName.startsWith('walkthrough')) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/30">
+          复盘走查
+        </span>
+      );
+    }
+    if (fileName.startsWith('task')) {
+      return (
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30">
+          任务清单
+        </span>
+      );
+    }
+    return (
+      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/30">
+        技术文档
+      </span>
+    );
+  };
+
+  const getVersionBadge = (fileName: string, allArts?: WorkspaceArtifactItem[]) => {
+    const match = fileName.match(/\.v(\d+)\.md$/);
+    if (match) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9.5px] font-mono font-bold bg-slate-500/15 text-slate-600 dark:text-slate-300 border border-slate-500/25">
+          v{match[1]}
+        </span>
+      );
+    }
+    const isMultiVersion = (allArts || []).some((a) =>
+      a.file_name.startsWith(fileName.replace('.md', '.v'))
+    );
+    if (isMultiVersion) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9.5px] font-mono font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-300 border border-emerald-500/35">
+          最新
+        </span>
+      );
+    }
+    return null;
+  };
+
+  const getSourceBadge = (source: string) => {
+    const s = source.toLowerCase();
+    if (s.includes('antigravity')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25">
+          AG
+        </span>
+      );
+    }
+    if (s.includes('cursor')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25">
+          Cursor
+        </span>
+      );
+    }
+    if (s.includes('mimo')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/25">
+          MiMo
+        </span>
+      );
+    }
+    if (s.includes('claude')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25">
+          Claude
+        </span>
+      );
+    }
+    return (
+      <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/25 uppercase">
+        {source.slice(0, 6)}
+      </span>
+    );
+  };
 
   // 1. 细粒度 Blocks 智能提取
   const handleExtractBlocks = async (force: boolean) => {
@@ -266,41 +393,80 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         <p className="text-xs theme-text-muted font-mono mt-0.5 break-all">{detail.workspace_path}</p>
       </div>
 
-      {/* 4 大核心 KPI 卡片 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* 5 大核心 KPI 卡片 */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
         {/* 会话数 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
-          <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">{t('analysis.sessionsTotal')}</span>
-            <Layers className="h-4 w-4 text-blue-500" />
+        <div className="theme-bg-card border theme-border rounded-xl p-3.5 relative overflow-hidden shadow-xs">
+          <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
+            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('analysis.sessionsTotal')}>
+              {t('analysis.sessionsTotal')}
+            </span>
+            <Layers className="h-4 w-4 text-blue-500 shrink-0" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {detail.conversation_count}
           </div>
-          <div className="mt-2 text-[11px] theme-text-muted truncate">
+          <div className="mt-2 text-[11px] theme-text-muted truncate" title={detail.agent_breakdown}>
             {detail.agent_breakdown}
           </div>
         </div>
 
         {/* 用户提问 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
-          <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">{t('dashboard.kpiPrompts')}</span>
-            <MessageSquare className="h-4 w-4 text-emerald-500" />
+        <div className="theme-bg-card border theme-border rounded-xl p-3.5 relative overflow-hidden shadow-xs">
+          <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
+            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('dashboard.kpiPrompts')}>
+              {t('analysis.prompts')}
+            </span>
+            <MessageSquare className="h-4 w-4 text-emerald-500 shrink-0" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {detail.user_message_count.toLocaleString()}
           </div>
-          <div className="mt-2 text-[11px] theme-text-muted">
+          <div className="mt-2 text-[11px] theme-text-muted truncate">
             {t('analysis.allInteract', { n: detail.message_count.toLocaleString() })}
           </div>
         </div>
 
+        {/* 方案与设计文档 (Artifacts) */}
+        <div
+          onClick={() => {
+            setIsArtifactsModalOpen(true);
+            if (detail.artifacts && detail.artifacts.length > 0 && !selectedArtifact) {
+              setSelectedArtifact(detail.artifacts[0]);
+            }
+          }}
+          className="theme-bg-card border theme-border hover:border-emerald-500/50 hover:bg-emerald-500/5 rounded-xl p-3.5 relative overflow-hidden shadow-xs cursor-pointer transition-all group"
+          title="点击弹窗查看本项目全部设计方案与成果文档"
+        >
+          <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
+            <span className="text-xs font-medium whitespace-nowrap truncate group-hover:text-emerald-500 transition-colors" title="方案与设计文档">
+              方案文档
+            </span>
+            <FileCode2 className="h-4 w-4 text-emerald-500 shrink-0 group-hover:scale-110 transition-transform" />
+          </div>
+          <div className="text-2xl font-bold theme-text-main tracking-tight font-mono group-hover:text-emerald-500 transition-colors">
+            {(detail.artifacts?.length || 0).toLocaleString()}{' '}
+            <span className="text-xs font-normal theme-text-muted">篇</span>
+          </div>
+          <div className="mt-2 text-[11px] theme-text-muted truncate flex items-center justify-between">
+            <span>
+              {detail.artifacts && detail.artifacts.length > 0
+                ? `覆盖 ${new Set(detail.artifacts.map((a) => a.conversation_id)).size} 个会话`
+                : '暂无方案产物'}
+            </span>
+            <span className="text-[10.5px] text-emerald-600/90 dark:text-emerald-400/90 group-hover:translate-x-0.5 transition-transform flex items-center">
+              查看 &rarr;
+            </span>
+          </div>
+        </div>
+
         {/* 活跃天数 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
-          <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">{t('analysis.activeDaysTotal')}</span>
-            <Calendar className="h-4 w-4 text-purple-500" />
+        <div className="theme-bg-card border theme-border rounded-xl p-3.5 relative overflow-hidden shadow-xs">
+          <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
+            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('analysis.activeDaysTotal')}>
+              {t('analysis.activeDays')}
+            </span>
+            <Calendar className="h-4 w-4 text-purple-500 shrink-0" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {detail.active_days} <span className="text-xs font-normal theme-text-muted">{t('analysis.daysUnit')}</span>
@@ -313,15 +479,17 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
         </div>
 
         {/* 峰值日消息 */}
-        <div className="theme-bg-card border theme-border rounded-xl p-4 relative overflow-hidden shadow-xs">
-          <div className="flex items-center justify-between theme-text-muted mb-2">
-            <span className="text-xs font-medium">{t('analysis.peakMsgs')}</span>
-            <Flame className="h-4 w-4 text-orange-500" />
+        <div className="theme-bg-card border theme-border rounded-xl p-3.5 relative overflow-hidden shadow-xs">
+          <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
+            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('analysis.peakMsgs')}>
+              {t('analysis.peak')}
+            </span>
+            <Flame className="h-4 w-4 text-orange-500 shrink-0" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
             {detail.peak_count.toLocaleString()} <span className="text-xs font-normal theme-text-muted">{t('analysis.tiao')}</span>
           </div>
-          <div className="mt-2 text-[11px] theme-text-muted">
+          <div className="mt-2 text-[11px] theme-text-muted truncate">
             {detail.peak_day || '—'}
           </div>
         </div>
@@ -695,6 +863,353 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({ workspacePath }) => {
           </div>
         )}
       </div>
+
+      {/* 项目设计方案与成果文档中心 模态对话框 (Modal) */}
+      {isArtifactsModalOpen && (() => {
+        const allArtifacts = detail.artifacts || [];
+        const uniqueConversations = Array.from(
+          new Map(allArtifacts.map((a) => [a.conversation_id, a.conversation_title])).entries()
+        );
+
+        const planCount = allArtifacts.filter((a) => a.file_name.startsWith('implementation_plan')).length;
+        const walkCount = allArtifacts.filter((a) => a.file_name.startsWith('walkthrough')).length;
+        const taskCount = allArtifacts.filter((a) => a.file_name.startsWith('task')).length;
+
+        const filteredArtifacts = allArtifacts.filter((art) => {
+          if (artifactFilterType === 'plan' && !art.file_name.startsWith('implementation_plan')) return false;
+          if (artifactFilterType === 'walkthrough' && !art.file_name.startsWith('walkthrough')) return false;
+          if (artifactFilterType === 'task' && !art.file_name.startsWith('task')) return false;
+
+          if (artifactConvFilter !== 'all' && art.conversation_id !== artifactConvFilter) return false;
+
+          if (artifactSearchQuery.trim()) {
+            const q = artifactSearchQuery.toLowerCase();
+            const matchTitle = art.title?.toLowerCase().includes(q);
+            const matchFile = art.file_name?.toLowerCase().includes(q);
+            const matchSummary = art.summary?.toLowerCase().includes(q);
+            const matchConv = art.conversation_title?.toLowerCase().includes(q);
+            if (!matchTitle && !matchFile && !matchSummary && !matchConv) return false;
+          }
+
+          return true;
+        });
+
+        const activeDoc = selectedArtifact || filteredArtifacts[0] || null;
+
+        const handleCopyDoc = () => {
+          if (!activeDoc?.content) return;
+          navigator.clipboard.writeText(activeDoc.content);
+          setCopiedArtifact(true);
+          setTimeout(() => setCopiedArtifact(false), 2000);
+        };
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150">
+            <div className="w-full max-w-6xl h-[88vh] rounded-2xl flex flex-col theme-bg-card border theme-border shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+              {/* Modal 顶栏 Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b theme-border-sub bg-slate-500/5 select-none shrink-0">
+                <div className="flex items-center gap-3 min-w-0 pr-4">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                    <FileCode2 className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2.5">
+                      <h3 className="text-base font-bold theme-text-main truncate">
+                        {detail.workspace_short} · 方案与设计文档库
+                      </h3>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 font-mono shrink-0">
+                        共 {allArtifacts.length} 篇
+                      </span>
+                    </div>
+                    <p className="text-xs theme-text-muted mt-0.5 font-mono truncate">
+                      {detail.workspace_path}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setIsArtifactsModalOpen(false)}
+                    className="p-2 rounded-lg theme-text-muted hover:theme-text-main hover:bg-slate-500/10 transition-colors cursor-pointer"
+                    title="关闭 (Esc)"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 顶部搜索与多维过滤条 */}
+              <div className="px-6 py-3 border-b theme-border-sub bg-slate-500/5 flex flex-wrap items-center justify-between gap-3 select-none shrink-0">
+                {/* 类型过滤按钮组 */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={() => setArtifactFilterType('all')}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      artifactFilterType === 'all'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'theme-bg-sub hover:bg-slate-500/10 theme-text-sub border theme-border'
+                    }`}
+                  >
+                    全部 ({allArtifacts.length})
+                  </button>
+                  <button
+                    onClick={() => setArtifactFilterType('plan')}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      artifactFilterType === 'plan'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'theme-bg-sub hover:bg-slate-500/10 theme-text-sub border theme-border'
+                    }`}
+                  >
+                    实施计划 ({planCount})
+                  </button>
+                  <button
+                    onClick={() => setArtifactFilterType('walkthrough')}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      artifactFilterType === 'walkthrough'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'theme-bg-sub hover:bg-slate-500/10 theme-text-sub border theme-border'
+                    }`}
+                  >
+                    复盘走查 ({walkCount})
+                  </button>
+                  {taskCount > 0 && (
+                    <button
+                      onClick={() => setArtifactFilterType('task')}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                        artifactFilterType === 'task'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'theme-bg-sub hover:bg-slate-500/10 theme-text-sub border theme-border'
+                      }`}
+                    >
+                      任务清单 ({taskCount})
+                    </button>
+                  )}
+                </div>
+
+                {/* 搜索与会话筛选 */}
+                <div className="flex items-center gap-2.5 flex-1 max-w-lg justify-end">
+                  {uniqueConversations.length > 1 && (
+                    <div className="w-[200px] shrink-0">
+                      <CustomSelect
+                        value={artifactConvFilter}
+                        onChange={(val) => setArtifactConvFilter(String(val))}
+                        options={[
+                          {
+                            value: 'all',
+                            label: `全部来源会话 (${uniqueConversations.length})`,
+                          },
+                          ...uniqueConversations.map(([id, convTitle]) => ({
+                            value: id,
+                            label: convTitle || id.slice(0, 8),
+                          })),
+                        ]}
+                        triggerClassName="py-1 px-2.5 text-xs rounded-lg theme-bg-card border theme-border shadow-2xs hover:border-emerald-500/50"
+                        menuClassName="right-0 w-72 sm:w-80 max-h-72 shadow-2xl"
+                      />
+                    </div>
+                  )}
+
+                  <div className="relative flex-1 min-w-[160px]">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 theme-text-muted" />
+                    <input
+                      type="text"
+                      value={artifactSearchQuery}
+                      onChange={(e) => setArtifactSearchQuery(e.target.value)}
+                      placeholder="搜索方案、标题或摘要..."
+                      className="w-full pl-8 pr-3 py-1 text-xs rounded-lg border theme-border theme-bg-card theme-text-main placeholder:theme-text-muted focus:outline-hidden focus:border-emerald-500/50"
+                    />
+                    {artifactSearchQuery && (
+                      <button
+                        onClick={() => setArtifactSearchQuery('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* 双栏主体：左侧列表 + 右侧阅读器 */}
+              <div className="flex-1 flex overflow-hidden min-h-0">
+                {filteredArtifacts.length > 0 ? (
+                  <>
+                    {/* 左侧文档索引列表 */}
+                    <div className="w-80 sm:w-88 border-r theme-border-sub flex flex-col theme-bg-sub shrink-0">
+                      <div className="px-4 py-2.5 border-b theme-border-sub text-[11px] font-bold tracking-wider theme-text-sub uppercase flex items-center justify-between">
+                        <span>文档索引</span>
+                        <span className="text-[10px] font-normal font-mono">{filteredArtifacts.length} 篇</span>
+                      </div>
+
+                      <div className="flex-1 overflow-y-auto p-3 space-y-2 select-none">
+                        {filteredArtifacts.map((art) => {
+                          const isSelected = activeDoc?.id === art.id;
+                          return (
+                            <div
+                              key={art.id}
+                              onClick={() => setSelectedArtifact(art)}
+                              className={`p-3 rounded-xl border transition-all cursor-pointer group ${
+                                isSelected
+                                  ? 'bg-emerald-500/10 border-emerald-500/40 shadow-xs'
+                                  : 'theme-bg-card hover:bg-slate-500/5 theme-border border-transparent'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                                <div className="flex items-center gap-1.5">
+                                  {getDocTypeBadge(art.file_name)}
+                                  {getVersionBadge(art.file_name, detail.artifacts)}
+                                  {getSourceBadge(art.source_app)}
+                                </div>
+                                {art.request_feedback && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9.5px] font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                                    需审批
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="font-semibold text-xs theme-text-main line-clamp-1 group-hover:text-emerald-500 transition-colors">
+                                {art.title || art.file_name}
+                              </div>
+
+                              {art.conversation_title && (
+                                <div className="text-[10.5px] theme-text-sub mt-1 truncate flex items-center gap-1">
+                                  <MessageSquare className="h-2.5 w-2.5 shrink-0 text-slate-400" />
+                                  <span className="truncate">{art.conversation_title}</span>
+                                </div>
+                              )}
+
+                              {art.summary && (
+                                <p className="text-[11px] leading-relaxed text-slate-500 dark:text-slate-400 line-clamp-2 mt-1.5">
+                                  {art.summary}
+                                </p>
+                              )}
+
+                              <div className="flex items-center justify-between text-[10px] theme-text-muted mt-2 pt-2 border-t theme-border-sub">
+                                <span className="flex items-center gap-1 font-mono">
+                                  <Calendar className="h-3 w-3" />
+                                  {art.created_at ? art.created_at.slice(0, 16).replace('T', ' ') : '-'}
+                                </span>
+                                <ChevronRight
+                                  className={`h-3.5 w-3.5 transition-transform ${
+                                    isSelected ? 'text-emerald-500 translate-x-0.5' : 'theme-text-muted'
+                                  }`}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 右侧主阅读器 */}
+                    <div className="flex-1 flex flex-col overflow-hidden theme-bg-card min-w-0">
+                      {activeDoc ? (
+                        <>
+                          {/* 阅读器顶栏工具条 */}
+                          <div className="flex items-start justify-between px-6 py-4 border-b theme-border-sub bg-slate-500/5 select-none shrink-0 gap-4">
+                            <div className="flex-1 min-w-0">
+                              {/* 顶部标签徽章与文件名行 */}
+                              <div className="flex items-center gap-1.5 mb-1.5 flex-wrap">
+                                {getDocTypeBadge(activeDoc.file_name)}
+                                {getVersionBadge(activeDoc.file_name, detail.artifacts)}
+                                {getSourceBadge(activeDoc.source_app)}
+                                <span className="font-mono text-[10.5px] text-slate-500 dark:text-slate-400 bg-slate-500/10 px-1.5 py-0.5 rounded border theme-border">
+                                  {activeDoc.file_name}
+                                </span>
+                                <span className="text-[11px] text-slate-400">
+                                  · {activeDoc.content.length.toLocaleString()} 字符
+                                </span>
+                              </div>
+
+                              {/* 独立标题行：宽敞大字号展示 */}
+                              <h4 className="font-bold text-base theme-text-main line-clamp-2 leading-snug" title={activeDoc.title || activeDoc.file_name}>
+                                {activeDoc.title || activeDoc.file_name}
+                              </h4>
+
+                              {/* 底部所属会话元信息 */}
+                              {activeDoc.conversation_title && (
+                                <div className="flex items-center gap-1.5 text-[11.5px] theme-text-sub mt-2 truncate">
+                                  <MessageSquare className="h-3 w-3 shrink-0 text-slate-400" />
+                                  <span className="theme-text-muted">所属会话:</span>
+                                  <span className="truncate text-slate-700 dark:text-slate-200 font-medium">
+                                    {activeDoc.conversation_title}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0 pt-0.5">
+                              {onSelectConversation && (
+                                <button
+                                  onClick={() => {
+                                    setIsArtifactsModalOpen(false);
+                                    onSelectConversation(activeDoc.conversation_id);
+                                  }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-main transition-all cursor-pointer shadow-2xs"
+                                  title="关闭弹窗并跳转至生成该方案的原始会话"
+                                >
+                                  <ExternalLink className="h-3.5 w-3.5 text-blue-500" />
+                                  <span>前往所属会话</span>
+                                </button>
+                              )}
+                              <button
+                                onClick={handleCopyDoc}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-main transition-all cursor-pointer shadow-2xs"
+                              >
+                                {copiedArtifact ? (
+                                  <>
+                                    <Check className="h-3.5 w-3.5 text-emerald-500" />
+                                    <span className="text-emerald-500 font-semibold">已复制</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="h-3.5 w-3.5 theme-text-sub" />
+                                    <span>复制 Markdown</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* 方案摘要高光条 */}
+                          {activeDoc.summary && (
+                            <div className="mx-6 mt-4 p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-start gap-2.5 shrink-0">
+                              <Sparkles className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+                              <div className="text-xs leading-relaxed text-emerald-950 dark:text-emerald-200">
+                                <span className="font-bold mr-1.5">方案摘要:</span>
+                                {activeDoc.summary}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Markdown 正文滚动区域 */}
+                          <div className="flex-1 overflow-y-auto px-6 py-5">
+                            <div className="max-w-4xl mx-auto markdown-body select-text text-xs leading-relaxed">
+                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                {activeDoc.content}
+                              </ReactMarkdown>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
+                          <FileCode2 className="h-10 w-10 mb-2 opacity-30" />
+                          <p className="text-xs">请选择左侧文档以进行阅读</p>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center p-12 theme-text-sub">
+                    <FileCode2 className="h-10 w-10 mb-2 opacity-30 text-slate-400" />
+                    <p className="text-xs">未找到符合当前筛选条件的方案文档</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Block 详情抽屉 Drawer */}
       {selectedBlock && (

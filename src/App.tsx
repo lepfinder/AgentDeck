@@ -146,13 +146,15 @@ export function App() {
   // 监听 Tauri 后台文件自动变动与同步状态事件 (Auto Realtime Watcher)
   useEffect(() => {
     if (!isTauri()) return;
-    let unlistenStarted: (() => void) | undefined;
-    let unlistenCompleted: (() => void) | undefined;
+    let isSubscribed = true;
+    let unlistenStarted: (() => void) | null = null;
+    let unlistenCompleted: (() => void) | null = null;
 
     listen('sync-started', () => {
       setIsSyncing(true);
     }).then((fn) => {
-      unlistenStarted = fn;
+      if (!isSubscribed) fn();
+      else unlistenStarted = fn;
     });
 
     listen<SyncResultInfo>('sync-completed', (event) => {
@@ -165,10 +167,12 @@ export function App() {
         }
       }
     }).then((fn) => {
-      unlistenCompleted = fn;
+      if (!isSubscribed) fn();
+      else unlistenCompleted = fn;
     });
 
     return () => {
+      isSubscribed = false;
       if (unlistenStarted) unlistenStarted();
       if (unlistenCompleted) unlistenCompleted();
     };

@@ -10,6 +10,7 @@ const IDE_HINT_KEYS: Record<string, MessageKey> = {
   antigravity: 'ide.hint.antigravity',
   claude: 'ide.hint.claude',
   codex: 'ide.hint.codex',
+  mimo: 'ide.hint.mimo',
 };
 
 const DEFAULT_IDES: IdeAppStatus[] = [
@@ -17,6 +18,7 @@ const DEFAULT_IDES: IdeAppStatus[] = [
   { id: 'antigravity', label: 'Antigravity', kind: 'app', installed: false },
   { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
   { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
+  { id: 'mimo', label: 'Xiaomi MiMo', kind: 'app', installed: false },
 ];
 
 interface Props {
