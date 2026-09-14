@@ -879,6 +879,7 @@ pub(crate) fn build_daily_summary(
                 WHEN c.source_types LIKE '%codex%' THEN 'codex'
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as source_app,
             m.role,
@@ -1151,6 +1152,7 @@ pub(crate) fn build_recent_activity(
                 WHEN c.source_types LIKE '%codex%' THEN 'codex'
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as source_app,
             m.role,

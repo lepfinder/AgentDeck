@@ -972,6 +972,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%codex%' THEN 'codex'
                 WHEN source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as app,
             COUNT(*) as cnt
@@ -1011,6 +1012,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%codex%' THEN 'codex'
                 WHEN source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as app,
             SUM(message_count) as cnt
@@ -1617,6 +1619,7 @@ pub fn fetch_conversations(
                 WHEN c.source_types LIKE '%codex%' THEN 'codex'
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as source_app,
             c.title,
@@ -1782,6 +1785,7 @@ pub fn search_global_messages(
                    WHEN c.source_types LIKE '%codex%' THEN 'codex'
                    WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                    WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                   WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                    ELSE 'antigravity'
                END as source_app,
                c.workspace_path,
@@ -2758,6 +2762,7 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
                 WHEN c.source_types LIKE '%codex%' THEN 'codex'
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as source_app,
             c.title as conv_title,

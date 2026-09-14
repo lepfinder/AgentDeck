@@ -1731,7 +1731,7 @@ export const SettingsModal: React.FC<Props> = ({
                   </div>
                   <div className="flex justify-between py-1 border-b theme-border-sub">
                     <span className="theme-text-muted">{t('settings.agents')}</span>
-                    <span className="font-medium theme-text-main">Antigravity, Cursor, Claude Code, Codex, Hermes, WorkBuddy</span>
+                    <span className="font-medium theme-text-main">Antigravity, Cursor, Claude Code, Codex, Hermes, WorkBuddy, Xiaomi MiMo</span>
                   </div>
                 </div>
               </div>

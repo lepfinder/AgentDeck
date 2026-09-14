@@ -12,6 +12,9 @@
   - 工作区侧栏、会话徽章、工作区分析、设置页数据源与「Open in IDE」菜单同步支持 MiMo
   - 本地 REST API `/api/workspaces` 返回 `mimo_cnt`
 
+### 修复
+- **会话列表来源徽章误标为 AG**：列表/搜索/大盘统计等 8 处 `source_types` CASE 映射补上 `mimo`，不再落入 Antigravity 兜底
+
 ## [0.3.4] - 2026-09-11
 
 ### 性能与架构
