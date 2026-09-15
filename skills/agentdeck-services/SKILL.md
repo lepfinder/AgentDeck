@@ -5,6 +5,8 @@ description: >-
   list status, start/stop/restart, logs, register services from agent judgment.
   Use when the user or agent needs to run local apps, check health, register
   npm scripts (e.g. core + desktop), or replace ad-hoc bin start scripts.
+metadata:
+  version: "0.1.0"
 ---
 
 # AgentDeck Local Services

@@ -347,7 +347,7 @@ export function ServicesView(): React.ReactElement {
     }
   };
 
-  const installPrompt = `请安装 AgentDeck Services Skill：http://127.0.0.1:8788/skills/agentdeck-services/README.md
+  const installPrompt = `请安装 AgentDeck Services Skill：https://raw.githubusercontent.com/lepfinder/AgentDeck/main/skills/agentdeck-services/README.md
 装完告诉我是否需要开启新会话。`;
 
   const verifyPrompt =
@@ -871,7 +871,7 @@ export function ServicesView(): React.ReactElement {
                 {
                   n: '01',
                   t: '把安装提示词发给 Agent',
-                  d: 'Agent 会从本机 8788 拉取 Skill 文件并写入用户级技能目录。',
+                  d: 'Agent 会从 GitHub 拉取 SKILL.md 与 scripts，写入用户级技能目录。',
                 },
                 {
                   n: '02',
@@ -916,7 +916,10 @@ export function ServicesView(): React.ReactElement {
               </pre>
               <p className="mt-2 text-[11px] theme-text-muted">
                 入口：
-                <span className="font-mono"> http://127.0.0.1:8788/skills/agentdeck-services/README.md</span>
+                <span className="font-mono">
+                  {' '}
+                  https://raw.githubusercontent.com/lepfinder/AgentDeck/main/skills/agentdeck-services/README.md
+                </span>
               </p>
             </section>
 
@@ -970,7 +973,9 @@ export function ServicesView(): React.ReactElement {
                 type="button"
                 className={actionBtnClass({ variant: 'ghost' })}
                 onClick={() =>
-                  void api.openUrl('http://127.0.0.1:8788/skills/agentdeck-services/README.md')
+                  void api.openUrl(
+                    'https://raw.githubusercontent.com/lepfinder/AgentDeck/main/skills/agentdeck-services/README.md',
+                  )
                 }
               >
                 <ExternalLink className="mr-1 h-3.5 w-3.5" />
