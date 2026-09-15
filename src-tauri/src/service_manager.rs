@@ -1022,21 +1022,6 @@ fn append_log_banner(log_file: &Path, message: &str) {
     }
 }
 
-fn pump_stream_to_log<R: Read + Send + 'static>(reader: R, log_path: PathBuf) {
-    thread::spawn(move || {
-        let mut file = match OpenOptions::new().create(true).append(true).open(&log_path) {
-            Ok(f) => f,
-            Err(_) => return,
-        };
-        let buffered = BufReader::new(reader);
-        for line in buffered.lines() {
-            let Ok(line) = line else { break };
-            let _ = writeln!(file, "[{}] {}", local_timestamp(), line);
-            let _ = file.flush();
-        }
-    });
-}
-
 fn ensure_data_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -1144,6 +1129,18 @@ fn spawn_service(rt: &ServiceRuntime) -> Result<u32, String> {
         ),
     );
 
+    // Redirect stdout/stderr straight to the log file (not through AgentDeck pipes).
+    // Otherwise closing/restarting AgentDeck breaks the pipe and child processes can
+    // crash with write EPIPE when they (or Node execSync) write to stdio.
+    let stdout_log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_file)
+        .map_err(|e| format!("无法打开日志文件 {}: {}", log_file.display(), e))?;
+    let stderr_log = stdout_log
+        .try_clone()
+        .map_err(|e| format!("无法克隆日志文件句柄: {}", e))?;
+
     let path_env = get_augmented_path();
     let raw_program = expand_template(&def.start.command[0], &project_dir);
     let cmd_program = resolve_executable(&raw_program, &path_env);
@@ -1155,13 +1152,13 @@ fn spawn_service(rt: &ServiceRuntime) -> Result<u32, String> {
     cmd.args(&cmd_args)
         .current_dir(&cwd)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(stdout_log))
+        .stderr(Stdio::from(stderr_log))
         .env("PATH", &path_env)
         .envs(&def.start.env);
 
     // Put service in its own process group so stop can kill npm + children cleanly,
-    // without sharing EVA's process group.
+    // without sharing AgentDeck's process group (closing AgentDeck won't kill services).
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -1169,13 +1166,6 @@ fn spawn_service(rt: &ServiceRuntime) -> Result<u32, String> {
     }
 
     let mut child = cmd.spawn().map_err(|e| format!("启动失败: {}", e))?;
-    if let Some(stdout) = child.stdout.take() {
-        pump_stream_to_log(stdout, log_file.clone());
-    }
-    if let Some(stderr) = child.stderr.take() {
-        pump_stream_to_log(stderr, log_file.clone());
-    }
-
     let pid = child.id();
     // Reap in background to avoid zombies; do not kill on drop.
     thread::spawn(move || {
@@ -1245,26 +1235,28 @@ fn strip_ansi(text: &str) -> String {
 }
 
 fn strip_orphan_sgr(text: &str) -> String {
-    let bytes = text.as_bytes();
+    // Must iterate by Unicode scalar values — byte-wise `as char` Latin-1-ifies
+    // UTF-8 multi-byte sequences (Chinese etc.) into mojibake.
+    let chars: Vec<char> = text.chars().collect();
     let mut result = String::with_capacity(text.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'[' {
+    while i < chars.len() {
+        if chars[i] == '[' {
             let start = i;
             i += 1;
             let mut has_digit = false;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b';') {
+            while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == ';') {
                 has_digit = true;
                 i += 1;
             }
-            if has_digit && i < bytes.len() && bytes[i] == b'm' {
+            if has_digit && i < chars.len() && chars[i] == 'm' {
                 i += 1;
                 continue;
             }
             result.push('[');
             i = start + 1;
         } else {
-            result.push(bytes[i] as char);
+            result.push(chars[i]);
             i += 1;
         }
     }
@@ -2219,6 +2211,21 @@ mod tests {
     fn strip_orphan_sgr_codes() {
         let raw = "[94mVoice:[0m hello";
         assert_eq!(strip_ansi(raw), "Voice: hello");
+    }
+
+    #[test]
+    fn strip_ansi_preserves_utf8_chinese() {
+        let raw = "[2026-09-15 21:03:10] \u{1b}[31mERROR\u{1b}[0m NotebookLM 服务未运行 (status: starting)";
+        let out = strip_ansi(raw);
+        assert!(out.contains("NotebookLM 服务未运行"));
+        assert!(!out.contains('\u{1b}'));
+        assert!(!out.contains("æ"));
+    }
+
+    #[test]
+    fn strip_orphan_sgr_preserves_utf8_with_orphan_codes() {
+        let raw = "[31mERROR[0m NotebookLM 服务未运行";
+        assert_eq!(strip_ansi(raw), "ERROR NotebookLM 服务未运行");
     }
 
     #[test]

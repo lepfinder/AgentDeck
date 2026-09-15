@@ -2,6 +2,17 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [0.3.6] - 2026-09-15
+
+### 新增
+- **本地服务日志错误监控**：控制台实时识别可疑错误、定位跳转、一键复制与忽略（忽略状态本地持久化）
+- **导航树错误标识**：运行中服务若日志有未忽略错误，侧栏显示红色标识与最新错误相对时间
+- **agentdeck-services Skill**：GitHub 安装/更新说明，支持整包下载 `SKILL.md` + scripts
+
+### 修复
+- **日志中文乱码**：ANSI orphan SGR 清理改为按 Unicode 字符处理，不再把 UTF-8 拆成 Latin-1
+- **AgentDeck 退出导致子服务 EPIPE**：启动时 stdout/stderr 直接落到日志文件，不再经 AgentDeck 管道中转；关闭/重启 AgentDeck 不再弄断已启动服务的标准输出
+
 ## [0.3.5] - 2026-09-14
 
 ### 新增

@@ -31,6 +31,9 @@ import {
   Check,
   Pencil,
   AlignLeft,
+  Layers,
+  Loader2,
+  StopCircle,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
 import {
@@ -38,6 +41,16 @@ import {
   renameConversationTitle,
   summarizeConversation,
 } from '../../lib/conversationAi';
+import {
+  DEFAULT_BATCH_SUMMARIZE_OPTIONS,
+  estimateBatchSeconds,
+  fetchConversationMessages,
+  runBatchSummarize,
+  selectConversationsForBatch,
+  type BatchProgress,
+  type BatchSummarizeOptions,
+} from '../../lib/batchSummarizeConversations';
+import { getServiceLlmConfig } from '../../lib/serviceLlm';
 
 interface Props {
   selectedWorkspace: string;
@@ -100,6 +113,15 @@ export const BrowseView: React.FC<Props> = ({
   const [summarizing, setSummarizing] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [aiActionError, setAiActionError] = useState<string | null>(null);
+  const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+  const [batchOpts, setBatchOpts] = useState<BatchSummarizeOptions>(
+    () => ({ ...DEFAULT_BATCH_SUMMARIZE_OPTIONS }),
+  );
+  const [batchProgress, setBatchProgress] = useState<BatchProgress | null>(null);
+  const [batchPanelOpen, setBatchPanelOpen] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchRunning, setBatchRunning] = useState(false);
+  const batchCancelRef = useRef(false);
 
   const parseImages = (raw: any): Array<{ src: string; width?: number; height?: number }> => {
     if (!raw) return [];
@@ -260,6 +282,34 @@ export const BrowseView: React.FC<Props> = ({
     loadConversations();
   }, [selectedWorkspace, convSearch, isStarredView]);
 
+  // 仅在切换工作区 / 收藏视图时取消；切勿把 batchRunning 放进依赖，
+  // 否则一点「开始」就会把 cancel 置 true，整批立刻变成「已取消」。
+  const batchWsRef = useRef(selectedWorkspace);
+  const batchStarredRef = useRef(isStarredView);
+  useEffect(() => {
+    const wsChanged = batchWsRef.current !== selectedWorkspace;
+    const starredChanged = batchStarredRef.current !== isStarredView;
+    batchWsRef.current = selectedWorkspace;
+    batchStarredRef.current = isStarredView;
+    if (wsChanged || starredChanged) {
+      batchCancelRef.current = true;
+    }
+  }, [selectedWorkspace, isStarredView]);
+
+  const batchCandidates = selectConversationsForBatch(conversations, batchOpts);
+  const batchEstimateSec = estimateBatchSeconds(batchCandidates.length);
+
+  const openBatchConfirm = () => {
+    if (isStarredView || !selectedWorkspace || batchRunning) return;
+    setBatchError(null);
+    setBatchOpts({ ...DEFAULT_BATCH_SUMMARIZE_OPTIONS });
+    setBatchConfirmOpen(true);
+  };
+
+  const cancelBatchSummarize = () => {
+    batchCancelRef.current = true;
+  };
+
   const loadingStarredRef = useRef(false);
   // 加载收藏会话总数（带并发锁）
   const loadStarredCount = async () => {
@@ -353,6 +403,55 @@ export const BrowseView: React.FC<Props> = ({
   const applyConversationUpdate = (updated: ConversationItem) => {
     setCurrentConv(updated);
     setConversations((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)));
+  };
+
+  const startBatchSummarize = async () => {
+    if (batchRunning) return;
+    if (!getServiceLlmConfig()) {
+      setBatchError(t('conv.batchNeedAi'));
+      return;
+    }
+    const targets = selectConversationsForBatch(conversations, batchOpts);
+    if (targets.length === 0) {
+      setBatchError(t('conv.batchNone'));
+      return;
+    }
+
+    setBatchConfirmOpen(false);
+    setBatchError(null);
+    batchCancelRef.current = false;
+    setBatchRunning(true);
+    // 立刻弹出右下角进度框（不必等第一轮 onProgress）
+    setBatchProgress({
+      total: targets.length,
+      done: 0,
+      ok: 0,
+      skip: 0,
+      error: 0,
+      currentId: null,
+      items: targets.map((c) => ({
+        id: c.id,
+        title: c.title || c.source_title || '未命名',
+        status: 'queued',
+      })),
+      cancelled: false,
+      finished: false,
+    });
+    setBatchPanelOpen(true);
+
+    try {
+      await runBatchSummarize({
+        conversations: targets,
+        fetchMessages: fetchConversationMessages,
+        shouldCancel: () => batchCancelRef.current,
+        onProgress: setBatchProgress,
+        onConversationUpdated: applyConversationUpdate,
+      });
+    } catch (e) {
+      setBatchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBatchRunning(false);
+    }
   };
 
   const handleToggleStar = async () => {
@@ -704,6 +803,16 @@ export const BrowseView: React.FC<Props> = ({
                 {selectedWorkspace && !isStarredView && (
                   <div className="flex items-center gap-1.5">
                     <button
+                      type="button"
+                      onClick={openBatchConfirm}
+                      disabled={batchRunning || conversations.length === 0}
+                      title={t('conv.batchSummarizeHint')}
+                      className="text-[11px] text-violet-500 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:no-underline"
+                    >
+                      <Layers className="h-3 w-3" />
+                      <span>{t('conv.batchSummarize')}</span>
+                    </button>
+                    <button
                       onClick={() => onSelectConversation('')}
                       className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
                     >
@@ -730,6 +839,7 @@ export const BrowseView: React.FC<Props> = ({
             <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
               {conversations.map((conv) => {
                 const isSelected = conv.id === selectedConversationId;
+                const batchItem = batchProgress?.items.find((i) => i.id === conv.id);
                 return (
                   <div
                     key={conv.id}
@@ -750,6 +860,15 @@ export const BrowseView: React.FC<Props> = ({
                           <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
                             AI
                           </span>
+                        )}
+                        {batchItem?.status === 'running' && (
+                          <Loader2 className="h-3 w-3 shrink-0 text-violet-500 animate-spin" />
+                        )}
+                        {batchItem?.status === 'ok' && (
+                          <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+                        )}
+                        {batchItem?.status === 'error' && (
+                          <span className="shrink-0 text-[9px] font-semibold text-red-500">!</span>
                         )}
                       </div>
                     </div>
@@ -1382,6 +1501,218 @@ export const BrowseView: React.FC<Props> = ({
               className="max-w-full max-h-[85vh] rounded-2xl object-contain shadow-2xl border border-white/15"
             />
           </div>
+        </div>
+      )}
+
+      {/* 批量总结命名：确认 */}
+      {batchConfirmOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !batchRunning && setBatchConfirmOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border theme-border theme-bg-main p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold theme-text-main flex items-center gap-2">
+                  <Layers className="h-4 w-4 text-violet-500" />
+                  {t('conv.batchSummarizeTitle')}
+                </h3>
+                <p className="mt-1 text-xs theme-text-muted">{t('conv.batchScope')}</p>
+              </div>
+              <button
+                type="button"
+                className="theme-text-muted hover:theme-text-main cursor-pointer"
+                onClick={() => setBatchConfirmOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2.5 text-sm theme-text-main">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={batchOpts.onlyMissing && !batchOpts.redoExisting}
+                  disabled={batchOpts.redoExisting}
+                  onChange={(e) =>
+                    setBatchOpts((o) => ({ ...o, onlyMissing: e.target.checked }))
+                  }
+                  className="rounded border theme-border"
+                />
+                {t('conv.batchOnlyMissing')}
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={batchOpts.includeErrors}
+                  disabled={batchOpts.redoExisting}
+                  onChange={(e) =>
+                    setBatchOpts((o) => ({ ...o, includeErrors: e.target.checked }))
+                  }
+                  className="rounded border theme-border"
+                />
+                {t('conv.batchIncludeErrors')}
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={batchOpts.redoExisting}
+                  onChange={(e) =>
+                    setBatchOpts((o) => ({ ...o, redoExisting: e.target.checked }))
+                  }
+                  className="rounded border theme-border"
+                />
+                {t('conv.batchRedo')}
+              </label>
+              <label className="flex items-center gap-2">
+                <span className="theme-text-muted text-xs shrink-0">{t('conv.batchMax')}</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={batchOpts.maxCount}
+                  onChange={(e) =>
+                    setBatchOpts((o) => ({
+                      ...o,
+                      maxCount: Math.max(1, Math.min(200, Number(e.target.value) || 50)),
+                    }))
+                  }
+                  className="w-20 rounded-lg border theme-border theme-bg-input px-2 py-1 text-xs"
+                />
+                <span className="text-xs theme-text-muted">{t('conv.batchMaxUnit')}</span>
+              </label>
+            </div>
+
+            <p className="mt-3 text-xs theme-text-muted">
+              {batchCandidates.length === 0
+                ? t('conv.batchNone')
+                : batchEstimateSec >= 60
+                  ? t('conv.batchEstimate', {
+                      n: batchCandidates.length,
+                      min: Math.max(1, Math.round(batchEstimateSec / 60)),
+                    })
+                  : t('conv.batchEstimateShort', {
+                      n: batchCandidates.length,
+                      sec: batchEstimateSec,
+                    })}
+            </p>
+            {batchError && (
+              <p className="mt-2 text-xs text-red-500">{batchError}</p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="px-3 py-1.5 text-xs rounded-lg border theme-border theme-text-muted hover:theme-text-main cursor-pointer"
+                onClick={() => setBatchConfirmOpen(false)}
+              >
+                {t('conv.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={batchCandidates.length === 0}
+                className="px-3 py-1.5 text-xs rounded-lg bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-40 cursor-pointer"
+                onClick={() => void startBatchSummarize()}
+              >
+                {t('conv.batchStart')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 批量总结命名：进度 */}
+      {batchPanelOpen && batchProgress && (
+        <div className="fixed bottom-6 right-6 z-[100] w-[min(100%-2rem,22rem)] rounded-2xl border theme-border theme-bg-main shadow-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b theme-border flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold theme-text-main flex items-center gap-2">
+                {batchRunning ? (
+                  <Loader2 className="h-3.5 w-3.5 text-violet-500 animate-spin shrink-0" />
+                ) : (
+                  <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                )}
+                <span className="truncate">
+                  {batchRunning
+                    ? t('conv.batchRunning')
+                    : batchProgress.cancelled
+                      ? t('conv.batchCancelled')
+                      : t('conv.batchDone')}
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] theme-text-muted">
+                {t('conv.batchProgress', {
+                  done: batchProgress.done,
+                  total: batchProgress.total,
+                })}
+                {' · '}
+                {t('conv.batchStats', {
+                  ok: batchProgress.ok,
+                  skip: batchProgress.skip,
+                  error: batchProgress.error,
+                })}
+              </p>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              {batchRunning ? (
+                <button
+                  type="button"
+                  onClick={cancelBatchSummarize}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-lg border theme-border theme-text-muted hover:theme-text-main cursor-pointer"
+                >
+                  <StopCircle className="h-3 w-3" />
+                  {t('conv.batchCancel')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBatchPanelOpen(false);
+                    setBatchProgress(null);
+                  }}
+                  className="px-2 py-1 text-[11px] rounded-lg border theme-border theme-text-muted hover:theme-text-main cursor-pointer"
+                >
+                  {t('conv.batchClose')}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="max-h-48 overflow-y-auto px-2 py-2 space-y-1">
+            {batchProgress.items.map((item) => (
+              <div
+                key={item.id}
+                className="flex items-start gap-2 rounded-lg px-2 py-1.5 text-[11px]"
+              >
+                <span className="shrink-0 mt-0.5 w-3.5">
+                  {item.status === 'running' && (
+                    <Loader2 className="h-3 w-3 text-violet-500 animate-spin" />
+                  )}
+                  {item.status === 'ok' && <Check className="h-3 w-3 text-emerald-500" />}
+                  {item.status === 'error' && (
+                    <span className="text-red-500 font-bold">!</span>
+                  )}
+                  {item.status === 'skip' && (
+                    <span className="theme-text-muted">–</span>
+                  )}
+                  {item.status === 'queued' && (
+                    <span className="theme-text-muted">·</span>
+                  )}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate theme-text-main">{item.title}</div>
+                  {item.error && (
+                    <div className="truncate text-red-500/90">{item.error}</div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {batchError && (
+            <div className="px-4 py-2 border-t theme-border text-xs text-red-500">{batchError}</div>
+          )}
         </div>
       )}
 

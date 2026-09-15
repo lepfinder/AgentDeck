@@ -18,18 +18,24 @@ import {
   Pencil,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   LayoutDashboard,
   BookOpen,
   Copy,
   ExternalLink,
 } from 'lucide-react';
 import { useLocalServices, type ServiceStatus, type InstalledIdes } from '../../hooks/useLocalServices';
+import {
+  useServiceLogAlerts,
+  type ServiceLogAlert,
+} from '../../hooks/useServiceLogAlerts';
 import { ServiceConsole } from './ServiceConsole';
 import {
   ServicesFleetOverview,
   type FleetFilter,
 } from './ServicesFleetOverview';
 import { formatUptime } from '../../utils/formatUptime';
+import { formatErrorAgo } from '../../utils/formatServiceLog';
 import { cn } from '../../lib/cn';
 import { api } from '../../api/tauriBridge';
 import cursorIcon from '../../assets/ides/cursor.png';
@@ -243,6 +249,42 @@ function projectRunningSummary(services: ServiceStatus[]): string {
   return `${running}/${services.length} 运行`;
 }
 
+function latestGroupAlert(
+  services: ServiceStatus[],
+  alerts: Record<string, ServiceLogAlert>,
+): ServiceLogAlert | undefined {
+  let best: ServiceLogAlert | undefined;
+  for (const svc of services) {
+    const a = alerts[svc.id];
+    if (!a) continue;
+    if (!best || (a.latestAtMs ?? -1) > (best.latestAtMs ?? -1)) {
+      best = { ...a };
+    } else if (best && a.latestAtMs === best.latestAtMs) {
+      best = { ...best, count: best.count + a.count };
+    }
+  }
+  return best;
+}
+
+function NavStatusLine({
+  label,
+  alert,
+  nowMs,
+}: {
+  label: string;
+  alert?: ServiceLogAlert;
+  nowMs: number;
+}) {
+  if (!alert) {
+    return <span className="block truncate text-[10px] theme-text-muted mt-0.5">{label}</span>;
+  }
+  return (
+    <span className="block truncate text-[10px] mt-0.5 text-red-500">
+      {label} · 错误 {formatErrorAgo(alert.latestAtMs, nowMs)}
+    </span>
+  );
+}
+
 export function ServicesView(): React.ReactElement {
   const {
     services,
@@ -264,6 +306,9 @@ export function ServicesView(): React.ReactElement {
     renameProject,
     renameService,
   } = useLocalServices();
+
+  const { alerts, nowMs, ignoreServiceErrors, ignoredByServiceId, ignoreEpoch } =
+    useServiceLogAlerts(services, tailLog);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all');
@@ -440,6 +485,8 @@ export function ServicesView(): React.ReactElement {
               {projectGroups.map((group) => {
                 const collapsed = collapsedProjects[group.projectId];
                 const multi = group.services.length > 1;
+                const groupAlert = latestGroupAlert(group.services, alerts);
+                const singleAlert = !multi ? alerts[group.services[0]?.id ?? ''] : undefined;
                 return (
                   <div key={group.projectId} className="space-y-0.5">
                     <div
@@ -471,22 +518,38 @@ export function ServicesView(): React.ReactElement {
                             <ChevronDown className="h-3.5 w-3.5 shrink-0" />
                           )
                         ) : (
-                          <span
-                            className={cn(
-                              'h-2 w-2 rounded-full shrink-0 ml-0.5',
-                              stateDotClass(group.services[0].state, group.services[0].health)
-                            )}
-                          />
+                          <span className="relative shrink-0 ml-0.5">
+                            <span
+                              className={cn(
+                                'block h-2 w-2 rounded-full',
+                                singleAlert
+                                  ? 'bg-red-500'
+                                  : stateDotClass(
+                                      group.services[0].state,
+                                      group.services[0].health,
+                                    ),
+                              )}
+                            />
+                          </span>
                         )}
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate text-sm font-medium theme-text-main">
-                            {group.projectName}
+                          <span className="flex items-center gap-1 min-w-0">
+                            <span className="block truncate text-sm font-medium theme-text-main">
+                              {group.projectName}
+                            </span>
+                            {(multi ? groupAlert : singleAlert) && (
+                              <AlertTriangle className="h-3 w-3 shrink-0 text-red-500" />
+                            )}
                           </span>
-                          <span className="block truncate text-[10px] theme-text-muted mt-0.5">
-                            {multi
-                              ? `${group.services.length} 个服务 · ${projectRunningSummary(group.services)}`
-                              : stateLabel(group.services[0].state, group.services[0].health)}
-                          </span>
+                          <NavStatusLine
+                            label={
+                              multi
+                                ? `${group.services.length} 个服务 · ${projectRunningSummary(group.services)}`
+                                : stateLabel(group.services[0].state, group.services[0].health)
+                            }
+                            alert={multi ? groupAlert : singleAlert}
+                            nowMs={nowMs}
+                          />
                         </span>
                       </button>
                       <button
@@ -509,6 +572,7 @@ export function ServicesView(): React.ReactElement {
                       !collapsed &&
                       group.services.map((svc) => {
                         const active = svc.id === selectedId;
+                        const alert = alerts[svc.id];
                         return (
                           <div
                             key={svc.id}
@@ -527,16 +591,28 @@ export function ServicesView(): React.ReactElement {
                               <span
                                 className={cn(
                                   'h-2 w-2 rounded-full shrink-0',
-                                  stateDotClass(svc.state, svc.health)
+                                  alert ? 'bg-red-500' : stateDotClass(svc.state, svc.health),
                                 )}
                               />
                               <span className="min-w-0 flex-1">
-                                <span className={cn('block truncate text-sm', active && 'font-medium')}>
-                                  {svc.name}
+                                <span className="flex items-center gap-1 min-w-0">
+                                  <span
+                                    className={cn(
+                                      'block truncate text-sm',
+                                      active && 'font-medium',
+                                    )}
+                                  >
+                                    {svc.name}
+                                  </span>
+                                  {alert && (
+                                    <AlertTriangle className="h-3 w-3 shrink-0 text-red-500" />
+                                  )}
                                 </span>
-                                <span className="block truncate text-[10px] theme-text-muted mt-0.5">
-                                  {stateLabel(svc.state, svc.health)}
-                                </span>
+                                <NavStatusLine
+                                  label={stateLabel(svc.state, svc.health)}
+                                  alert={alert}
+                                  nowMs={nowMs}
+                                />
                               </span>
                             </button>
                             <button
@@ -819,6 +895,11 @@ export function ServicesView(): React.ReactElement {
                     logFile={selected.logFile}
                     live={consoleLive}
                     onFetchLog={tailLog}
+                    ignoredSignatures={ignoredByServiceId(selected.id)}
+                    ignoreEpoch={ignoreEpoch}
+                    onIgnoreErrors={(signatures) =>
+                      ignoreServiceErrors(selected.id, signatures)
+                    }
                   />
                 </section>
               </>
