@@ -694,6 +694,54 @@
           <span>/api/prompts/:id</span>
         </a>
       </div>
+
+      <div class="menu-group">
+        <div class="menu-title">本地服务</div>
+        <a href="#endpoint-svc-list" class="menu-item" data-path="/api/services">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/services</span>
+        </a>
+        <a href="#endpoint-svc-projects" class="menu-item" data-path="/api/services/projects">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/services/projects</span>
+        </a>
+        <a href="#endpoint-svc-one" class="menu-item" data-path="/api/services/:p/:s">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/services/:p/:s</span>
+        </a>
+        <a href="#endpoint-svc-logs" class="menu-item" data-path="/api/services/:p/:s/logs">
+          <span class="badge-mini method-get">GET</span>
+          <span>/api/services/:p/:s/logs</span>
+        </a>
+        <a href="#endpoint-svc-start" class="menu-item" data-path="/api/services/:p/:s/start">
+          <span class="badge-mini method-post">POST</span>
+          <span>.../start</span>
+        </a>
+        <a href="#endpoint-svc-stop" class="menu-item" data-path="/api/services/:p/:s/stop">
+          <span class="badge-mini method-post">POST</span>
+          <span>.../stop</span>
+        </a>
+        <a href="#endpoint-svc-restart" class="menu-item" data-path="/api/services/:p/:s/restart">
+          <span class="badge-mini method-post">POST</span>
+          <span>.../restart</span>
+        </a>
+        <a href="#endpoint-svc-upsert" class="menu-item" data-path="/api/services">
+          <span class="badge-mini method-post">POST</span>
+          <span>/api/services (upsert)</span>
+        </a>
+        <a href="#endpoint-svc-rename-project" class="menu-item" data-path="/api/services/projects/:id">
+          <span class="badge-mini method-post">PATCH</span>
+          <span>.../projects/:id</span>
+        </a>
+        <a href="#endpoint-svc-rename-service" class="menu-item" data-path="/api/services/:p/:s">
+          <span class="badge-mini method-post">PATCH</span>
+          <span>/api/services/:p/:s</span>
+        </a>
+        <a href="#endpoint-svc-delete" class="menu-item" data-path="/api/services/:p/:s">
+          <span class="badge-mini method-delete">DEL</span>
+          <span>/api/services/:p/:s</span>
+        </a>
+      </div>
     </aside>
 
     <!-- 右侧内容区域 -->
@@ -1335,6 +1383,308 @@
           </div>
         </div>
       </div>
+
+      <div class="section-heading">本地服务管理（Project → Services）</div>
+      <p style="color: var(--text-muted); font-size: 13px; margin: -8px 0 20px 0; max-width: 860px;">
+        服务键为 <code>{projectId}/{serviceId}</code>（如 <code>voxlab/main</code>）。
+        启停为异步受理（HTTP <strong>202</strong>），请用 GET 状态轮询；失败时看 logs。
+        Agent 技能：<code>agentdeck-services</code>。
+      </p>
+
+      <div class="endpoint-card" id="endpoint-svc-list">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/services</span>
+          </div>
+          <span class="desc">列出全部服务实时状态（扁平）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>返回值示例</span></div>
+            <pre class="example-body">{
+  "ok": true,
+  "data": {
+    "total": 1,
+    "services": [{
+      "id": "voxlab/main",
+      "projectId": "voxlab",
+      "serviceId": "main",
+      "name": "VoxLab",
+      "state": "running",
+      "health": "ok",
+      "ports": [{ "port": 8001, "listening": true }],
+      "openUrl": "http://localhost:8001"
+    }]
+  }
+}</pre>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('GET', '/api/services', null, 'res-svc-list')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl http://127.0.0.1:8788/api/services</div>
+          </div>
+          <div class="response-container" id="res-svc-list">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-projects">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/services/projects</span>
+          </div>
+          <span class="desc">按项目分组（含 runningCount / 子服务摘要）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="action-row">
+            <button class="send-btn" onclick="sendReq('GET', '/api/services/projects', null, 'res-svc-projects')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl http://127.0.0.1:8788/api/services/projects</div>
+          </div>
+          <div class="response-container" id="res-svc-projects">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-one">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/services/:projectId/:serviceId</span>
+          </div>
+          <span class="desc">单个服务状态</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>projectId <input id="svc-project-id" type="text" value="voxlab"></label>
+            <label>serviceId <input id="svc-service-id" type="text" value="main"></label>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcGet()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-svc-one">curl http://127.0.0.1:8788/api/services/voxlab/main</div>
+          </div>
+          <div class="response-container" id="res-svc-one">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-logs">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-get">GET</span>
+            <span class="path">/api/services/:projectId/:serviceId/logs</span>
+          </div>
+          <span class="desc">日志尾部（?lines=80）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>lines <input id="svc-log-lines" type="number" value="80" min="10" max="500"></label>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcLogs()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-svc-logs">curl "http://127.0.0.1:8788/api/services/voxlab/main/logs?lines=80"</div>
+          </div>
+          <div class="response-container" id="res-svc-logs">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-start">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/services/:projectId/:serviceId/start</span>
+          </div>
+          <span class="desc">异步启动（202），再 GET 轮询 state</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcAction('start')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/services/voxlab/main/start</div>
+          </div>
+          <div class="response-container" id="res-svc-start">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-stop">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/services/:projectId/:serviceId/stop</span>
+          </div>
+          <span class="desc">异步停止；可选 body {"force":true}</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcAction('stop')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/services/voxlab/main/stop -d '{}'</div>
+          </div>
+          <div class="response-container" id="res-svc-stop">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-restart">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/services/:projectId/:serviceId/restart</span>
+          </div>
+          <span class="desc">异步重启</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcAction('restart')">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview">curl -X POST http://127.0.0.1:8788/api/services/voxlab/main/restart</div>
+          </div>
+          <div class="response-container" id="res-svc-restart">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-upsert">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">POST</span>
+            <span class="path">/api/services</span>
+          </div>
+          <span class="desc">注册 / 更新服务（upsert payload）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="example-section">
+            <div class="example-header"><span>请求体示例</span></div>
+            <pre class="example-body">{
+  "project": { "id": "myapp", "name": "MyApp", "projectDir": "/abs/path" },
+  "service": {
+    "id": "core",
+    "name": "Core",
+    "start": { "command": ["npm", "run", "core"], "cwd": "{projectDir}", "env": {} },
+    "pidFile": "{projectDir}/data/core.pid",
+    "logFile": "{projectDir}/data/core.log",
+    "ports": [3001],
+    "health": { "url": "http://localhost:3001/", "statusOk": true, "timeoutSecs": 90, "pollIntervalSecs": 2 },
+    "openUrl": "http://localhost:3001",
+    "stop": { "graceSecs": 8, "cleanupPorts": [3001] }
+  }
+}</pre>
+          </div>
+          <p style="color: var(--text-muted); font-size: 12px; margin: 0 0 12px;">
+            Agent 自行读代码组装 payload 后 upsert；桌面端 scan/probe 仅走 Tauri。同项目多服务：相同 project.id，不同 service.id。
+          </p>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-rename-project">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">PATCH</span>
+            <span class="path">/api/services/projects/:projectId</span>
+          </div>
+          <span class="desc">重命名项目（仅展示名）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>projectId <input id="svc-rename-project-id" type="text" value="homecore" placeholder="projectId"></label>
+            <label>name <input id="svc-rename-project-name" type="text" value="HomeCore" placeholder="新项目名"></label>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcRenameProject()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-svc-rename-project">curl -X PATCH http://127.0.0.1:8788/api/services/projects/homecore -d '{"name":"HomeCore"}'</div>
+          </div>
+          <div class="response-container" id="res-svc-rename-project">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-rename-service">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-post">PATCH</span>
+            <span class="path">/api/services/:projectId/:serviceId</span>
+          </div>
+          <span class="desc">重命名服务（仅展示名）</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="param-row">
+            <label>name <input id="svc-rename-service-name" type="text" value="Core" placeholder="新服务名"></label>
+          </div>
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcRenameService()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-svc-rename-service">curl -X PATCH http://127.0.0.1:8788/api/services/homecore/core -d '{"name":"Core"}'</div>
+          </div>
+          <div class="response-container" id="res-svc-rename-service">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
+
+      <div class="endpoint-card" id="endpoint-svc-delete">
+        <div class="endpoint-summary">
+          <div class="endpoint-route">
+            <span class="method method-delete">DELETE</span>
+            <span class="path">/api/services/:projectId/:serviceId</span>
+          </div>
+          <span class="desc">强制停止并删除配置</span>
+        </div>
+        <div class="endpoint-content">
+          <div class="action-row">
+            <button class="send-btn" onclick="testSvcDelete()">
+              <svg class="lucide-icon" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              <span>执行测试 (Send)</span>
+            </button>
+            <div class="curl-preview" id="curl-svc-delete">curl -X DELETE http://127.0.0.1:8788/api/services/voxlab/main</div>
+          </div>
+          <div class="response-container" id="res-svc-delete">
+            <div class="response-header"><span class="status-ok">STATUS</span><span class="latency">LATENCY</span></div>
+            <pre class="response-body"></pre>
+          </div>
+        </div>
+      </div>
     </main>
   </div>
 
@@ -1553,6 +1903,58 @@
       const path = `/api/prompts/${id}`;
       document.getElementById('curl-prompts-delete').textContent = `curl -X DELETE http://127.0.0.1:8788${path}`;
       sendReq('DELETE', path, null, 'res-prompts-delete');
+    }
+
+    function svcKeyPath() {
+      const p = document.getElementById('svc-project-id').value.trim() || 'voxlab';
+      const s = document.getElementById('svc-service-id').value.trim() || 'main';
+      return `/api/services/${encodeURIComponent(p)}/${encodeURIComponent(s)}`;
+    }
+
+    function testSvcGet() {
+      const path = svcKeyPath();
+      document.getElementById('curl-svc-one').textContent = `curl http://127.0.0.1:8788${path}`;
+      sendReq('GET', path, null, 'res-svc-one');
+    }
+
+    function testSvcLogs() {
+      const lines = document.getElementById('svc-log-lines').value || '80';
+      const path = `${svcKeyPath()}/logs?lines=${encodeURIComponent(lines)}`;
+      document.getElementById('curl-svc-logs').textContent = `curl "http://127.0.0.1:8788${path}"`;
+      sendReq('GET', path, null, 'res-svc-logs');
+    }
+
+    function testSvcAction(action) {
+      const path = `${svcKeyPath()}/${action}`;
+      const body = action === 'stop' ? {} : null;
+      sendReq('POST', path, body, `res-svc-${action}`);
+    }
+
+    function testSvcDelete() {
+      const path = svcKeyPath();
+      document.getElementById('curl-svc-delete').textContent = `curl -X DELETE http://127.0.0.1:8788${path}`;
+      sendReq('DELETE', path, {}, 'res-svc-delete');
+    }
+
+    function testSvcRenameProject() {
+      const id = document.getElementById('svc-rename-project-id').value.trim() || 'homecore';
+      const name = document.getElementById('svc-rename-project-name').value.trim();
+      if (!name) { alert('请填写新项目名'); return; }
+      const path = `/api/services/projects/${encodeURIComponent(id)}`;
+      const body = { name };
+      document.getElementById('curl-svc-rename-project').textContent =
+        `curl -X PATCH http://127.0.0.1:8788${path} -H "Content-Type: application/json" -d '${JSON.stringify(body)}'`;
+      sendReq('PATCH', path, body, 'res-svc-rename-project');
+    }
+
+    function testSvcRenameService() {
+      const name = document.getElementById('svc-rename-service-name').value.trim();
+      if (!name) { alert('请填写新服务名'); return; }
+      const path = svcKeyPath();
+      const body = { name };
+      document.getElementById('curl-svc-rename-service').textContent =
+        `curl -X PATCH http://127.0.0.1:8788${path} -H "Content-Type: application/json" -d '${JSON.stringify(body)}'`;
+      sendReq('PATCH', path, body, 'res-svc-rename-service');
     }
 
     async function copyMarkdownDoc() {

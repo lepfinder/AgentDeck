@@ -17,7 +17,17 @@ export interface ConversationItem {
   id: string;
   workspace_path: string;
   source_app: string;
+  /** 展示标题：优先 AI 标题 */
   title: string;
+  /** 同步源标题 */
+  source_title: string;
+  ai_title?: string | null;
+  ai_summary?: string | null;
+  ai_status?: string | null;
+  ai_summary_stale?: boolean;
+  ai_model?: string | null;
+  ai_generated_at?: string | null;
+  content_hash?: string;
   created_at?: string;
   updated_at?: string;
   message_count: number;

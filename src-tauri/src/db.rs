@@ -45,7 +45,17 @@ pub struct ConversationItem {
     pub id: String,
     pub workspace_path: String,
     pub source_app: String,
+    /// 列表展示标题：优先 AI 标题，否则同步源标题
     pub title: String,
+    /// 同步源标题（每次 sync upsert 覆盖）
+    pub source_title: String,
+    pub ai_title: Option<String>,
+    pub ai_summary: Option<String>,
+    pub ai_status: Option<String>,
+    pub ai_summary_stale: bool,
+    pub ai_model: Option<String>,
+    pub ai_generated_at: Option<String>,
+    pub content_hash: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub message_count: i64,
@@ -615,6 +625,20 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_artifacts_conv_id ON conversation_artifacts(conversation_id);
+
+        -- AgentDeck 本地 AI 元数据（与同步源隔离，sync upsert 不触碰）
+        CREATE TABLE IF NOT EXISTS conversation_ai (
+            conversation_id TEXT PRIMARY KEY,
+            ai_title TEXT,
+            summary TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'idle',
+            based_on_content_hash TEXT,
+            model TEXT,
+            error TEXT,
+            generated_at TEXT,
+            updated_at TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
         "#
     )?;
 
@@ -1277,7 +1301,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
     let get_top_convs = |order_by: &str| -> Result<Vec<TopRankItem>> {
         let mut list = Vec::new();
         let query = format!(
-            "SELECT c.id, c.title,
+            "SELECT c.id,
+                    COALESCE(NULLIF(TRIM(ai.ai_title), ''), c.title) as title,
                     CASE
                         WHEN c.source_types LIKE '%claude%' THEN 'claude'
                         WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
@@ -1289,6 +1314,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                     c.workspace_path, c.message_count, c.user_message_count, c.updated_at,
                     (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
              FROM conversations c
+             LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
              ORDER BY {} DESC LIMIT 10",
             order_by
         );
@@ -1622,7 +1648,14 @@ pub fn fetch_conversations(
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 ELSE 'antigravity'
             END as source_app,
-            c.title,
+            c.title as source_title,
+            NULLIF(TRIM(COALESCE(ai.ai_title, '')), '') as ai_title,
+            COALESCE(ai.summary, '') as ai_summary,
+            COALESCE(ai.status, 'idle') as ai_status,
+            ai.based_on_content_hash,
+            ai.model as ai_model,
+            ai.generated_at as ai_generated_at,
+            COALESCE(c.content_hash, '') as content_hash,
             c.created_at,
             c.updated_at,
             c.message_count,
@@ -1630,9 +1663,14 @@ pub fn fetch_conversations(
             c.parse_status,
             (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
         FROM conversations c
+        LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE (?1 = 0 OR (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) > 0)
           AND (?2 IS NULL OR ?2 = '' OR c.workspace_path = ?2)
-          AND (?3 IS NULL OR ?3 = '' OR c.title LIKE '%' || ?3 || '%')
+          AND (
+            ?3 IS NULL OR ?3 = ''
+            OR c.title LIKE '%' || ?3 || '%'
+            OR COALESCE(ai.ai_title, '') LIKE '%' || ?3 || '%'
+          )
         ORDER BY c.updated_at DESC
         LIMIT 200
     "#;
@@ -1645,19 +1683,46 @@ pub fn fetch_conversations(
             search.unwrap_or("")
         ],
         |row| {
-            let is_starred_cnt: i64 = row.get(9)?;
-            let raw_created: Option<String> = row.get(4)?;
-            let raw_updated: Option<String> = row.get(5)?;
+            let source_title: String = row.get(3)?;
+            let ai_title: Option<String> = row.get(4)?;
+            let based_on: Option<String> = row.get(7)?;
+            let content_hash: String = row.get(10)?;
+            let is_starred_cnt: i64 = row.get(16)?;
+            let raw_created: Option<String> = row.get(11)?;
+            let raw_updated: Option<String> = row.get(12)?;
+            let raw_ai_generated: Option<String> = row.get(9)?;
+            let display_title = ai_title
+                .as_ref()
+                .filter(|t| !t.is_empty())
+                .cloned()
+                .unwrap_or_else(|| source_title.clone());
+            let summary_stale = match (&based_on, content_hash.as_str()) {
+                (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
+                _ => false,
+            };
+            let ai_summary: String = row.get(5)?;
             Ok(ConversationItem {
                 id: row.get(0)?,
                 workspace_path: row.get(1)?,
                 source_app: row.get(2)?,
-                title: row.get(3)?,
+                title: display_title,
+                source_title,
+                ai_title,
+                ai_summary: if ai_summary.is_empty() {
+                    None
+                } else {
+                    Some(ai_summary)
+                },
+                ai_status: Some(row.get::<_, String>(6)?),
+                ai_summary_stale: summary_stale,
+                ai_model: row.get(8)?,
+                ai_generated_at: to_beijing_iso(raw_ai_generated),
+                content_hash,
                 created_at: to_beijing_iso(raw_created),
                 updated_at: to_beijing_iso(raw_updated),
-                message_count: row.get(6)?,
-                user_message_count: row.get(7)?,
-                parse_status: row.get(8)?,
+                message_count: row.get(13)?,
+                user_message_count: row.get(14)?,
+                parse_status: row.get(15)?,
                 is_starred: is_starred_cnt > 0,
             })
         },
@@ -1740,6 +1805,230 @@ pub fn toggle_star_session(conn: &Connection, conversation_id: &str) -> Result<b
     }
 }
 
+fn now_rfc3339() -> String {
+    Utc::now().to_rfc3339()
+}
+
+/// 手动重命名：只写 ai_title，不影响同步源 title
+pub fn update_conversation_ai_title(
+    conn: &Connection,
+    conversation_id: &str,
+    ai_title: &str,
+) -> Result<ConversationItem> {
+    let title = ai_title.trim();
+    if title.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "title cannot be empty".into(),
+        ));
+    }
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversations WHERE id = ?1",
+        params![conversation_id],
+        |r| r.get(0),
+    )?;
+    if exists == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+
+    let now = now_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO conversation_ai (conversation_id, ai_title, summary, status, updated_at)
+        VALUES (?1, ?2, '', 'idle', ?3)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            ai_title = excluded.ai_title,
+            updated_at = excluded.updated_at
+        "#,
+        params![conversation_id, title, now],
+    )?;
+
+    fetch_conversation_by_id(conn, conversation_id)?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+/// 保存 AI 总结结果（标题 + 摘要）
+pub fn save_conversation_ai_summary(
+    conn: &Connection,
+    conversation_id: &str,
+    ai_title: Option<&str>,
+    summary: &str,
+    status: &str,
+    based_on_content_hash: Option<&str>,
+    model: Option<&str>,
+    error: Option<&str>,
+) -> Result<ConversationItem> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversations WHERE id = ?1",
+        params![conversation_id],
+        |r| r.get(0),
+    )?;
+    if exists == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+
+    let now = now_rfc3339();
+    let title_opt = ai_title.map(|t| t.trim()).filter(|t| !t.is_empty());
+    let generated_at = if status == "ok" {
+        Some(now.as_str())
+    } else {
+        None
+    };
+
+    conn.execute(
+        r#"
+        INSERT INTO conversation_ai (
+            conversation_id, ai_title, summary, status,
+            based_on_content_hash, model, error, generated_at, updated_at
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            ai_title = COALESCE(excluded.ai_title, conversation_ai.ai_title),
+            summary = excluded.summary,
+            status = excluded.status,
+            based_on_content_hash = excluded.based_on_content_hash,
+            model = COALESCE(excluded.model, conversation_ai.model),
+            error = excluded.error,
+            generated_at = COALESCE(excluded.generated_at, conversation_ai.generated_at),
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            conversation_id,
+            title_opt,
+            summary,
+            status,
+            based_on_content_hash,
+            model,
+            error,
+            generated_at,
+            now,
+        ],
+    )?;
+
+    fetch_conversation_by_id(conn, conversation_id)?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+pub fn set_conversation_ai_status(
+    conn: &Connection,
+    conversation_id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<()> {
+    let now = now_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO conversation_ai (conversation_id, ai_title, summary, status, error, updated_at)
+        VALUES (?1, NULL, '', ?2, ?3, ?4)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            status = excluded.status,
+            error = excluded.error,
+            updated_at = excluded.updated_at
+        "#,
+        params![conversation_id, status, error, now],
+    )?;
+    Ok(())
+}
+
+pub fn clear_conversation_ai_title(conn: &Connection, conversation_id: &str) -> Result<ConversationItem> {
+    conn.execute(
+        r#"
+        UPDATE conversation_ai
+        SET ai_title = NULL, updated_at = ?2
+        WHERE conversation_id = ?1
+        "#,
+        params![conversation_id, now_rfc3339()],
+    )?;
+    fetch_conversation_by_id(conn, conversation_id)?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+pub fn fetch_conversation_by_id(
+    conn: &Connection,
+    conversation_id: &str,
+) -> Result<Option<ConversationItem>> {
+    let sql = r#"
+        SELECT
+            c.id,
+            c.workspace_path,
+            CASE
+                WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                ELSE 'antigravity'
+            END as source_app,
+            c.title as source_title,
+            NULLIF(TRIM(COALESCE(ai.ai_title, '')), '') as ai_title,
+            COALESCE(ai.summary, '') as ai_summary,
+            COALESCE(ai.status, 'idle') as ai_status,
+            ai.based_on_content_hash,
+            ai.model as ai_model,
+            ai.generated_at as ai_generated_at,
+            COALESCE(c.content_hash, '') as content_hash,
+            c.created_at,
+            c.updated_at,
+            c.message_count,
+            c.user_message_count,
+            c.parse_status,
+            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
+        FROM conversations c
+        LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
+        WHERE c.id = ?1
+    "#;
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = stmt.query_map(params![conversation_id], |row| {
+        let source_title: String = row.get(3)?;
+        let ai_title: Option<String> = row.get(4)?;
+        let based_on: Option<String> = row.get(7)?;
+        let content_hash: String = row.get(10)?;
+        let is_starred_cnt: i64 = row.get(16)?;
+        let raw_created: Option<String> = row.get(11)?;
+        let raw_updated: Option<String> = row.get(12)?;
+        let raw_ai_generated: Option<String> = row.get(9)?;
+        let display_title = ai_title
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .unwrap_or_else(|| source_title.clone());
+        let summary_stale = match (&based_on, content_hash.as_str()) {
+            (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
+            _ => false,
+        };
+        let ai_summary: String = row.get(5)?;
+        Ok(ConversationItem {
+            id: row.get(0)?,
+            workspace_path: row.get(1)?,
+            source_app: row.get(2)?,
+            title: display_title,
+            source_title,
+            ai_title,
+            ai_summary: if ai_summary.is_empty() {
+                None
+            } else {
+                Some(ai_summary)
+            },
+            ai_status: Some(row.get::<_, String>(6)?),
+            ai_summary_stale: summary_stale,
+            ai_model: row.get(8)?,
+            ai_generated_at: to_beijing_iso(raw_ai_generated),
+            content_hash,
+            created_at: to_beijing_iso(raw_created),
+            updated_at: to_beijing_iso(raw_updated),
+            message_count: row.get(13)?,
+            user_message_count: row.get(14)?,
+            parse_status: row.get(15)?,
+            is_starred: is_starred_cnt > 0,
+        })
+    })?;
+
+    if let Some(row) = rows.next() {
+        return Ok(Some(row?));
+    }
+    Ok(None)
+}
+
 fn snippet_around(text: &str, query: &str, radius: usize) -> String {
     let q = query.trim();
     if q.is_empty() {
@@ -1778,7 +2067,8 @@ pub fn search_global_messages(
     let mut list = Vec::new();
     let is_user = role == Some("user");
     let sql = r#"
-        SELECT m.id, m.conversation_id, c.title,
+        SELECT m.id, m.conversation_id,
+               COALESCE(NULLIF(TRIM(ai.ai_title), ''), c.title) as title,
                CASE
                    WHEN c.source_types LIKE '%claude%' THEN 'claude'
                    WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
@@ -1794,6 +2084,7 @@ pub fn search_global_messages(
                m.created_at
         FROM messages m
         JOIN conversations c ON m.conversation_id = c.id
+        LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE (?1 = 0 OR m.role LIKE '%user%')
           AND m.content LIKE '%' || ?2 || '%'
         ORDER BY m.id DESC

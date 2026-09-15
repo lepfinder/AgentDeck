@@ -36,6 +36,7 @@ export function App() {
   const { t, locale, setLocale } = useI18n();
   const [isStarredView, setIsStarredView] = useState(false);
   const [isPromptLibraryView, setIsPromptLibraryView] = useState(false);
+  const [isServicesView, setIsServicesView] = useState(false);
   const [promptLibraryCount, setPromptLibraryCount] = useState(0);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
@@ -56,6 +57,7 @@ export function App() {
     setSelectedConversationId('');
     setIsStarredView(false);
     setIsPromptLibraryView(false);
+    setIsServicesView(false);
   };
 
   // 顶栏拖拽支持
@@ -219,6 +221,7 @@ export function App() {
     setSelectedConversationId(convId);
     setIsStarredView(false);
     setIsPromptLibraryView(false);
+    setIsServicesView(false);
   };
 
   return (
@@ -335,11 +338,13 @@ export function App() {
           selectedConversationId={selectedConversationId}
           isStarredView={isStarredView}
           isPromptLibraryView={isPromptLibraryView}
+          isServicesView={isServicesView}
           promptLibraryCount={promptLibraryCount}
           onSelectWorkspace={(ws) => {
             setSelectedWorkspace(ws);
             setIsStarredView(false);
             setIsPromptLibraryView(false);
+            setIsServicesView(false);
           }}
           onSelectConversation={setSelectedConversationId}
           onSwitchToDashboard={() => {
@@ -347,18 +352,28 @@ export function App() {
             setSelectedConversationId('');
             setIsStarredView(false);
             setIsPromptLibraryView(false);
+            setIsServicesView(false);
           }}
           onSwitchToStarred={() => {
             setSelectedWorkspace('');
             setSelectedConversationId('');
             setIsStarredView(true);
             setIsPromptLibraryView(false);
+            setIsServicesView(false);
           }}
           onSwitchToPromptLibrary={() => {
             setSelectedWorkspace('');
             setSelectedConversationId('');
             setIsStarredView(false);
             setIsPromptLibraryView(true);
+            setIsServicesView(false);
+          }}
+          onSwitchToServices={() => {
+            setSelectedWorkspace('');
+            setSelectedConversationId('');
+            setIsStarredView(false);
+            setIsPromptLibraryView(false);
+            setIsServicesView(true);
           }}
           onPromptLibraryCountChange={setPromptLibraryCount}
           stats={stats}

@@ -115,10 +115,10 @@ export const DashboardView: React.FC<Props> = ({
   }
 
   const agentData = agentTab === 'convs' ? stats.agent_comparison_convs : stats.agent_comparison_msgs;
-  const hourlyDays = hourlyTab === 'msgs' ? stats.last30_hourly_msgs : stats.last30_hourly_convs;
+  const hourlyDays = hourlyTab === 'msgs' ? stats.last30_hourly_user_msgs : stats.last30_hourly_convs;
   const topRankData = topRankTab === 'all' ? stats.top_conversations_all : stats.top_conversations_user;
   const volumeUnit = (tab: 'msgs' | 'convs') =>
-    tab === 'msgs' ? t('dashboard.unitMessages') : t('dashboard.unitSessions');
+    tab === 'msgs' ? t('dashboard.unitPrompts') : t('dashboard.unitSessions');
   const beijingNow = getBeijingNow();
   const currentHour = beijingNow.getHours();
   const todayStr = stats.beijing_today || formatBeijingDate(beijingNow);
@@ -336,7 +336,7 @@ export const DashboardView: React.FC<Props> = ({
                       : 'theme-text-muted hover:theme-text-main'
                   }`}
                 >
-                  {t('dashboard.byMessages')}
+                  {t('dashboard.byPrompts')}
                 </button>
                 <button
                   onClick={() => setHourlyTab('convs')}
@@ -388,7 +388,7 @@ export const DashboardView: React.FC<Props> = ({
                     : 'theme-text-muted hover:theme-text-main'
                 }`}
               >
-                  {t('dashboard.byMessages')}
+                  {t('dashboard.byPrompts')}
               </button>
               <button
                 onClick={() => setLast30Tab('convs')}
@@ -404,7 +404,7 @@ export const DashboardView: React.FC<Props> = ({
           </div>
           <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
             <span>
-              {t('dashboard.total')} <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong>
+              {t('dashboard.total')} <strong className="theme-text-main font-mono">{last30Total.toLocaleString()}</strong> {volumeUnit(last30Tab)}
             </span>
             <span>
               {t('dashboard.dailyAvg')} <strong className="theme-text-main font-mono">{last30Avg.toLocaleString()}</strong>
@@ -703,7 +703,7 @@ function toHourlyBarItems(
   currentHour: number,
   dateStr: string,
 ): ActivityBarItem[] {
-  const hours = metric === 'msgs' ? msgHours : convHours;
+  const hours = metric === 'msgs' ? userMsgHours : convHours;
   return hours.map((slot, idx) => {
     const messageCount = msgHours[idx]?.count ?? 0;
     const conversationCount = convHours[idx]?.count ?? 0;
@@ -728,7 +728,7 @@ function toLast30BarItems(
   metric: 'msgs' | 'convs',
   selectedDate: string,
 ): ActivityBarItem[] {
-  const slots = metric === 'msgs' ? msgSlots : convSlots;
+  const slots = metric === 'msgs' ? userMsgSlots : convSlots;
   const convByDate = new Map(convSlots.map((s) => [s.date, s.count]));
   const msgByDate = new Map(msgSlots.map((s) => [s.date, s.count]));
   const userMsgByDate = new Map(userMsgSlots.map((s) => [s.date, s.count]));

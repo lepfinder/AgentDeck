@@ -119,6 +119,74 @@ export const api = {
     return data.starred;
   },
 
+  async updateConversationAiTitle(
+    conversationId: string,
+    aiTitle: string
+  ): Promise<ConversationItem> {
+    if (isTauri()) {
+      return await invoke<ConversationItem>('update_conversation_ai_title_cmd', {
+        conversationId,
+        aiTitle,
+      });
+    }
+    throw new Error('仅在客户端环境下支持重命名会话');
+  },
+
+  async clearConversationAiTitle(conversationId: string): Promise<ConversationItem> {
+    if (isTauri()) {
+      return await invoke<ConversationItem>('clear_conversation_ai_title_cmd', {
+        conversationId,
+      });
+    }
+    throw new Error('仅在客户端环境下支持清除 AI 标题');
+  },
+
+  async saveConversationAiSummary(payload: {
+    conversationId: string;
+    aiTitle?: string | null;
+    summary: string;
+    status: string;
+    basedOnContentHash?: string | null;
+    model?: string | null;
+    error?: string | null;
+  }): Promise<ConversationItem> {
+    if (isTauri()) {
+      return await invoke<ConversationItem>('save_conversation_ai_summary_cmd', {
+        conversationId: payload.conversationId,
+        aiTitle: payload.aiTitle ?? null,
+        summary: payload.summary,
+        status: payload.status,
+        basedOnContentHash: payload.basedOnContentHash ?? null,
+        model: payload.model ?? null,
+        error: payload.error ?? null,
+      });
+    }
+    throw new Error('仅在客户端环境下支持保存会话摘要');
+  },
+
+  async setConversationAiStatus(
+    conversationId: string,
+    status: string,
+    error?: string | null
+  ): Promise<void> {
+    if (isTauri()) {
+      await invoke('set_conversation_ai_status_cmd', {
+        conversationId,
+        status,
+        error: error ?? null,
+      });
+      return;
+    }
+    throw new Error('仅在客户端环境下支持更新会话摘要状态');
+  },
+
+  async getConversationItem(conversationId: string): Promise<ConversationItem | null> {
+    if (isTauri()) {
+      return await invoke<ConversationItem | null>('get_conversation_item', { conversationId });
+    }
+    return null;
+  },
+
   async searchMessages(query: string, role?: string, limit?: number): Promise<SearchResultItem[]> {
     if (isTauri()) {
       return await invoke<SearchResultItem[]>('search_messages', {
@@ -539,5 +607,55 @@ export const api = {
       return await invoke<PromptItem>('record_prompt_use_cmd', { id });
     }
     throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  services: {
+    list: () => invoke<import('../hooks/useLocalServices').ServiceMeta[]>('service_list'),
+    status: (id?: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceStatus[]>('service_status', {
+        id: id ?? null,
+      }),
+    start: (id: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_start', { id }),
+    stop: (id: string, force?: boolean) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_stop', {
+        id,
+        force: force ?? null,
+      }),
+    restart: (id: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_restart', { id }),
+    open: (id: string) => invoke<void>('service_open', { id }),
+    openInIde: (path: string, ide: string) => invoke<void>('service_open_in_ide', { path, ide }),
+    detectIdes: () =>
+      invoke<import('../hooks/useLocalServices').InstalledIdes>('service_detect_ides'),
+    tailLog: (id: string, lines?: number) =>
+      invoke<string>('service_tail_log', { id, lines: lines ?? null }),
+    pickFolder: () => invoke<string | null>('service_pick_folder'),
+    scanProject: (projectDir: string) =>
+      invoke<import('../types/serviceCandidate').CandidateConfig>('service_scan_project', {
+        projectDir,
+      }),
+    probeCandidate: (payload: import('../types/serviceCandidate').ServiceRegistrationPayload, timeoutSecs?: number, attempt?: number) =>
+      invoke<import('../types/serviceCandidate').ProbeReport>('service_probe_candidate', {
+        payload,
+        timeoutSecs: timeoutSecs ?? null,
+        attempt: attempt ?? null,
+      }),
+    upsert: (payload: import('../types/serviceCandidate').ServiceRegistrationPayload) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_upsert', {
+        payload,
+      }),
+    renameProject: (projectId: string, name: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_rename_project', {
+        projectId,
+        name,
+      }),
+    renameService: (id: string, name: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_rename_service', {
+        id,
+        name,
+      }),
+    remove: (id: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_remove', { id }),
   },
 };

@@ -4,6 +4,7 @@ use crate::db::{
     fetch_workspaces, get_database_path, get_prompt, get_short_workspace, list_prompts, prompt_category_options,
     search_global_messages, update_prompt, PromptAgentItem, PromptInput,
 };
+use crate::service_http;
 use crate::sync::execute_sync;
 use rusqlite::Connection;
 use serde_json::json;
@@ -11,6 +12,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
+use tauri::AppHandle;
 use url::Url;
 
 struct HttpRequest {
@@ -25,7 +27,7 @@ enum PromptRoute {
     Item(i64),
 }
 
-pub fn start_http_server(port: u16) {
+pub fn start_http_server(app: AppHandle, port: u16) {
     thread::spawn(move || {
         let addr = format!("127.0.0.1:{}", port);
         let listener = match TcpListener::bind(&addr) {
@@ -44,8 +46,9 @@ pub fn start_http_server(port: u16) {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
+                    let app = app.clone();
                     thread::spawn(move || {
-                        handle_connection(stream);
+                        handle_connection(app, stream);
                     });
                 }
                 Err(e) => {
@@ -56,7 +59,7 @@ pub fn start_http_server(port: u16) {
     });
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(app: AppHandle, mut stream: TcpStream) {
     let req = match read_http_request(&mut stream) {
         Some(r) => r,
         None => return,
@@ -71,6 +74,32 @@ fn handle_connection(mut stream: TcpStream) {
     let path = req.path.as_str();
     let query_params = req.query_params;
     let body = req.body;
+
+    // Local services API (does not need DB connection)
+    if path == "/api/services"
+        || path == "/api/services/"
+        || path.starts_with("/api/services/")
+    {
+        let result = match method {
+            "GET" | "HEAD" => {
+                if method == "HEAD" {
+                    send_response(&mut stream, 200, "application/json", "");
+                    return;
+                }
+                service_http::handle_get(&app, path, &query_params)
+            }
+            "POST" | "PUT" | "PATCH" | "DELETE" => service_http::handle_mut(&app, method, path, &body),
+            _ => Err((
+                405,
+                json!({"ok": false, "error": {"code": "METHOD_NOT_ALLOWED", "message": format!("不支持 {}", method)}}),
+            )),
+        };
+        match result {
+            Ok((code, body)) => send_json(&mut stream, code, body),
+            Err((code, body)) => send_json(&mut stream, code, body),
+        }
+        return;
+    }
 
     // 路由分发
     match method {
@@ -631,6 +660,22 @@ fn route_get(
                 }
             }
             send_json(stream, 404, json!({"ok": false, "error": "Media asset not found"}));
+        }
+
+        // Agent Skills 安装入口（对齐「安装提示词 + URL」用法）
+        "/skills/agentdeck-services"
+        | "/skills/agentdeck-services/"
+        | "/skills/agentdeck-services/README.md" => {
+            let md = include_str!("../../skills/agentdeck-services/README.md");
+            send_response(stream, 200, "text/markdown; charset=utf-8", md);
+        }
+        "/skills/agentdeck-services/SKILL.md" => {
+            let md = include_str!("../../skills/agentdeck-services/SKILL.md");
+            send_response(stream, 200, "text/markdown; charset=utf-8", md);
+        }
+        "/skills/agentdeck-services/scripts/agentdeck-svc.sh" => {
+            let sh = include_str!("../../skills/agentdeck-services/scripts/agentdeck-svc.sh");
+            send_response(stream, 200, "text/x-shellscript; charset=utf-8", sh);
         }
 
         _ => send_json(

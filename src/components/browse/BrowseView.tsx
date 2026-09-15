@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   Star,
   BookMarked,
+  Server,
   Search,
   MessageSquare,
   Wrench,
@@ -26,19 +27,31 @@ import {
   Maximize2,
   X,
   FileText,
+  Copy,
+  Check,
+  Pencil,
+  AlignLeft,
 } from 'lucide-react';
+import { ServicesView } from '../services/ServicesView';
+import {
+  clearConversationAiTitle,
+  renameConversationTitle,
+  summarizeConversation,
+} from '../../lib/conversationAi';
 
 interface Props {
   selectedWorkspace: string;
   selectedConversationId: string;
   isStarredView: boolean;
   isPromptLibraryView: boolean;
+  isServicesView: boolean;
   promptLibraryCount: number;
   onSelectWorkspace: (ws: string) => void;
   onSelectConversation: (id: string) => void;
   onSwitchToDashboard: () => void;
   onSwitchToStarred: () => void;
   onSwitchToPromptLibrary: () => void;
+  onSwitchToServices: () => void;
   onPromptLibraryCountChange: (count: number) => void;
   stats: DashboardStats | null;
   loadingStats: boolean;
@@ -50,12 +63,14 @@ export const BrowseView: React.FC<Props> = ({
   selectedConversationId,
   isStarredView,
   isPromptLibraryView,
+  isServicesView,
   promptLibraryCount,
   onSelectWorkspace,
   onSelectConversation,
   onSwitchToDashboard,
   onSwitchToStarred,
   onSwitchToPromptLibrary,
+  onSwitchToServices,
   onPromptLibraryCountChange,
   stats,
   loadingStats,
@@ -77,6 +92,14 @@ export const BrowseView: React.FC<Props> = ({
   const [artifacts, setArtifacts] = useState<ArtifactItem[]>([]);
   const [selectedArtifact, setSelectedArtifact] = useState<ArtifactItem | null>(null);
   const [showArtifactModal, setShowArtifactModal] = useState(false);
+  const [copiedTurnIndex, setCopiedTurnIndex] = useState<number | null>(null);
+  const copiedResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameSaving, setRenameSaving] = useState(false);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [aiActionError, setAiActionError] = useState<string | null>(null);
 
   const parseImages = (raw: any): Array<{ src: string; width?: number; height?: number }> => {
     if (!raw) return [];
@@ -152,10 +175,27 @@ export const BrowseView: React.FC<Props> = ({
     return [];
   };
 
-  // 切换会话时重置折叠状态
+  // 切换会话时重置折叠状态与 AI 编辑态
   useEffect(() => {
     setExpandedTurns({});
+    setCopiedTurnIndex(null);
+    setRenaming(false);
+    setRenameDraft('');
+    setAiActionError(null);
+    setSummaryOpen(false);
   }, [selectedConversationId]);
+
+  useEffect(() => {
+    if (currentConv?.ai_summary) {
+      setSummaryOpen(true);
+    }
+  }, [currentConv?.id, currentConv?.ai_summary]);
+
+  useEffect(() => {
+    return () => {
+      if (copiedResetTimerRef.current) clearTimeout(copiedResetTimerRef.current);
+    };
+  }, []);
 
   const selectedWorkspaceRef = useRef(selectedWorkspace);
   const convSearchRef = useRef(convSearch);
@@ -302,7 +342,19 @@ export const BrowseView: React.FC<Props> = ({
       });
   }, [selectedConversationId]);
 
+  // 列表刷新后同步当前会话的 AI 元数据（如 sync 后重新拉取）
+  useEffect(() => {
+    if (!selectedConversationId) return;
+    const conv = conversations.find((c) => c.id === selectedConversationId);
+    if (conv) setCurrentConv(conv);
+  }, [conversations, selectedConversationId]);
+
   // 切换收藏状态
+  const applyConversationUpdate = (updated: ConversationItem) => {
+    setCurrentConv(updated);
+    setConversations((prev) => prev.map((c) => (c.id === updated.id ? { ...c, ...updated } : c)));
+  };
+
   const handleToggleStar = async () => {
     if (!selectedConversationId || !currentConv) return;
     try {
@@ -313,6 +365,65 @@ export const BrowseView: React.FC<Props> = ({
       );
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const startRename = () => {
+    if (!currentConv) return;
+    setAiActionError(null);
+    setRenameDraft(currentConv.ai_title || currentConv.title || '');
+    setRenaming(true);
+  };
+
+  const cancelRename = () => {
+    setRenaming(false);
+    setRenameDraft('');
+  };
+
+  const submitRename = async () => {
+    if (!currentConv || !renameDraft.trim()) return;
+    setRenameSaving(true);
+    setAiActionError(null);
+    try {
+      const updated = await renameConversationTitle(currentConv.id, renameDraft.trim());
+      applyConversationUpdate(updated);
+      setRenaming(false);
+    } catch (e) {
+      console.error(e);
+      setAiActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRenameSaving(false);
+    }
+  };
+
+  const handleClearAiTitle = async () => {
+    if (!currentConv?.ai_title) return;
+    setAiActionError(null);
+    try {
+      const updated = await clearConversationAiTitle(currentConv.id);
+      applyConversationUpdate(updated);
+    } catch (e) {
+      console.error(e);
+      setAiActionError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleSummarize = async () => {
+    if (!currentConv) return;
+    setSummarizing(true);
+    setAiActionError(null);
+    try {
+      const updated = await summarizeConversation({
+        conversation: currentConv,
+        messages,
+      });
+      applyConversationUpdate(updated);
+      setSummaryOpen(true);
+    } catch (e) {
+      console.error(e);
+      setAiActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSummarizing(false);
     }
   };
 
@@ -366,6 +477,18 @@ export const BrowseView: React.FC<Props> = ({
     setExpandedTurns((prev) => ({ ...prev, [idx]: !prev[idx] }));
   };
 
+  const copyUserPrompt = async (turnIndex: number, text: string | undefined) => {
+    if (!text?.trim()) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTurnIndex(turnIndex);
+      if (copiedResetTimerRef.current) clearTimeout(copiedResetTimerRef.current);
+      copiedResetTimerRef.current = setTimeout(() => setCopiedTurnIndex(null), 1500);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden theme-bg-main">
       {/* 第一栏：工作区列表 */}
@@ -389,7 +512,7 @@ export const BrowseView: React.FC<Props> = ({
           <button
             onClick={onSwitchToDashboard}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-              !selectedWorkspace && !isStarredView && !isPromptLibraryView
+              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
                 : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
             }`}
@@ -421,6 +544,20 @@ export const BrowseView: React.FC<Props> = ({
           </button>
 
           <button
+            onClick={onSwitchToServices}
+            className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              isServicesView
+                ? 'bg-emerald-600/15 text-emerald-500 border border-emerald-500/30 shadow-xs font-semibold'
+                : 'theme-text-muted hover:text-emerald-500 hover:theme-bg-card'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Server className="h-4 w-4" />
+              <span>{t('nav.services')}</span>
+            </div>
+          </button>
+
+          <button
             onClick={onSwitchToStarred}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isStarredView
@@ -446,7 +583,7 @@ export const BrowseView: React.FC<Props> = ({
             const shortName = ws.workspace_path
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : t('nav.uncategorized');
-            const isActive = !isStarredView && !isPromptLibraryView && ws.workspace_path === selectedWorkspace;
+            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
@@ -524,7 +661,11 @@ export const BrowseView: React.FC<Props> = ({
       </aside>
 
       {/* 右侧主内容区域 */}
-      {isPromptLibraryView ? (
+      {isServicesView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <ServicesView />
+        </main>
+      ) : isPromptLibraryView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <PromptLibraryView onPromptCountChange={onPromptLibraryCountChange} />
         </main>
@@ -605,6 +746,11 @@ export const BrowseView: React.FC<Props> = ({
                           <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
                         )}
                         <span>{conv.title || t('conv.untitled')}</span>
+                        {conv.ai_title && (
+                          <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
+                            AI
+                          </span>
+                        )}
                       </div>
                     </div>
 
@@ -641,19 +787,122 @@ export const BrowseView: React.FC<Props> = ({
                         <span>{t('conv.backAnalysis')}</span>
                       </button>
                     </div>
-                    <h2 className="text-base font-bold theme-text-main truncate flex items-center gap-2">
-                      <span>{currentConv.title || t('conv.untitled')}</span>
+                    <h2 className="text-base font-bold theme-text-main truncate flex items-center gap-2 min-w-0">
+                      {renaming ? (
+                        <form
+                          className="flex items-center gap-2 min-w-0 flex-1"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            submitRename();
+                          }}
+                        >
+                          <input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            disabled={renameSaving}
+                            className="flex-1 min-w-0 px-2 py-1 text-sm font-semibold theme-bg-input border theme-border rounded-md theme-text-main focus:outline-none focus:border-blue-500"
+                            placeholder={t('conv.renamePlaceholder')}
+                          />
+                          <button
+                            type="submit"
+                            disabled={renameSaving || !renameDraft.trim()}
+                            className="px-2 py-1 text-xs rounded-md bg-blue-600 text-white disabled:opacity-50 cursor-pointer"
+                          >
+                            {renameSaving ? t('conv.saving') : t('conv.save')}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelRename}
+                            className="px-2 py-1 text-xs rounded-md border theme-border theme-text-muted cursor-pointer"
+                          >
+                            {t('conv.cancel')}
+                          </button>
+                        </form>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={startRename}
+                            disabled={summarizing}
+                            title={t('conv.renameHint')}
+                            className="group min-w-0 flex items-center gap-1.5 text-left cursor-pointer disabled:opacity-50"
+                          >
+                            <span className="truncate group-hover:text-blue-500 transition-colors">
+                              {currentConv.title || t('conv.untitled')}
+                            </span>
+                            <Pencil className="h-3.5 w-3.5 shrink-0 theme-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+                          </button>
+                          {currentConv.ai_title && (
+                            <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
+                              AI
+                            </span>
+                          )}
+                          {currentConv.ai_summary_stale && (
+                            <span
+                              className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/15 text-amber-600 border border-amber-500/30"
+                              title={t('conv.summaryStaleHint')}
+                            >
+                              {t('conv.summaryStale')}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </h2>
                     <div className="flex items-center gap-2 text-xs theme-text-muted mt-1 min-w-0">
                       <span className="shrink-0">{getSourceBadge(currentConv.source_app)}</span>
-                      <span className="truncate font-mono min-w-0">{currentConv.workspace_path}</span>
+                      <span
+                        className="truncate font-mono min-w-0"
+                        title={currentConv.workspace_path}
+                      >
+                        {currentConv.workspace_path}
+                      </span>
                       <span className="shrink-0">·</span>
-                      <span className="shrink-0 whitespace-nowrap">{t('conv.messages', { n: messages.length })}</span>
+                      <span className="shrink-0 whitespace-nowrap">
+                        {t('conv.messages', { n: messages.length })}
+                      </span>
                     </div>
+                    {currentConv.ai_title &&
+                      currentConv.source_title &&
+                      currentConv.ai_title !== currentConv.source_title && (
+                        <div
+                          className="mt-1 text-[11px] theme-text-sub leading-snug line-clamp-2"
+                          title={currentConv.source_title}
+                        >
+                          <span className="theme-text-muted">{t('conv.sourceTitle')}：</span>
+                          <span className="break-all">{currentConv.source_title}</span>
+                        </div>
+                      )}
+                    {aiActionError && (
+                      <div className="mt-1 text-[11px] text-red-500 truncate" title={aiActionError}>
+                        {aiActionError}
+                      </div>
+                    )}
                   </div>
 
-                  {/* 顶部操作区：正序/倒序 + 展开/折叠全部 + 实施方案 + 收藏按钮 */}
+                  {/* 顶部操作区 */}
                   <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+                    <button
+                      onClick={handleSummarize}
+                      disabled={summarizing || loadingConv || messages.length === 0 || renaming}
+                      title={t('conv.summarizeHint')}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
+                    >
+                      <Sparkles className={`h-3.5 w-3.5 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
+                      <span>{summarizing ? t('conv.summarizing') : t('conv.summarize')}</span>
+                    </button>
+
+                    {currentConv.ai_summary && (
+                      <button
+                        onClick={() => setSummaryOpen((v) => !v)}
+                        title={t('conv.toggleSummary')}
+                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                      >
+                        <AlignLeft className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                        <span>{summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}</span>
+                      </button>
+                    )}
+
                     {/* 正序 / 倒序切换按钮 */}
                     <button
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
@@ -721,6 +970,49 @@ export const BrowseView: React.FC<Props> = ({
                   </div>
                 </div>
 
+                {summaryOpen && currentConv.ai_summary && (
+                  <div className="px-4 py-3 border-b theme-border theme-bg-sub/60">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2 text-xs font-semibold theme-text-main">
+                          <AlignLeft className="h-3.5 w-3.5 text-violet-500" />
+                          <span>{t('conv.summaryTitle')}</span>
+                          {currentConv.ai_summary_stale && (
+                            <span className="font-medium text-amber-600">{t('conv.summaryStale')}</span>
+                          )}
+                          {currentConv.ai_model && (
+                            <span className="font-mono font-normal theme-text-muted">
+                              · {currentConv.ai_model}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {currentConv.ai_title && (
+                            <button
+                              type="button"
+                              onClick={handleClearAiTitle}
+                              className="text-[11px] theme-text-muted hover:text-red-500 cursor-pointer"
+                              title={t('conv.clearAiTitleHint')}
+                            >
+                              {t('conv.clearAiTitle')}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setSummaryOpen(false)}
+                            className="text-[11px] theme-text-muted hover:theme-text-main cursor-pointer"
+                          >
+                            {t('conv.hideSummary')}
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap">
+                        {currentConv.ai_summary}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* 消息轮次滚动流（默认显示用户消息，Agent 消息折叠在用户轮次内） */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {loadingConv ? (
@@ -761,6 +1053,36 @@ export const BrowseView: React.FC<Props> = ({
                                 <span className="text-[10px] font-mono theme-text-muted">
                                   {formatTime(userMsg.created_at)}
                                 </span>
+                              )}
+                              {userMsg?.text?.trim() && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    copyUserPrompt(turn.origIndex, userMsg.text);
+                                  }}
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border transition-all cursor-pointer ${
+                                    copiedTurnIndex === turn.origIndex
+                                      ? 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30'
+                                      : 'theme-text-muted theme-border-sub hover:theme-text-main hover:border-blue-500/40 hover:bg-blue-500/10'
+                                  }`}
+                                  title={
+                                    copiedTurnIndex === turn.origIndex
+                                      ? t('conv.copied')
+                                      : t('conv.copyPrompt')
+                                  }
+                                >
+                                  {copiedTurnIndex === turn.origIndex ? (
+                                    <Check className="h-3 w-3" />
+                                  ) : (
+                                    <Copy className="h-3 w-3" />
+                                  )}
+                                  <span className="text-[10px] font-medium">
+                                    {copiedTurnIndex === turn.origIndex
+                                      ? t('conv.copied')
+                                      : t('conv.copy')}
+                                  </span>
+                                </button>
                               )}
                             </div>
 

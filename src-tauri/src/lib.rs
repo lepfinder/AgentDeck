@@ -4,18 +4,24 @@ pub mod db;
 pub mod http_server;
 pub mod importers;
 pub mod media_archive;
+pub mod service_config;
+pub mod service_discovery;
+pub mod service_http;
+pub mod service_manager;
 pub mod sync;
 
 use db::{
-    clear_workspace_analysis, create_prompt, delete_prompt, fetch_conversation_messages,
-    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_analysis_messages,
+    clear_conversation_ai_title, clear_workspace_analysis, create_prompt, delete_prompt,
+    fetch_conversation_by_id, fetch_conversation_messages, fetch_conversations,
+    fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_analysis_messages,
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, record_prompt_use,
-    save_workspace_fine_blocks, save_workspace_module_blocks, save_workspace_report,
-    search_global_messages, toggle_prompt_star, toggle_star_session, update_prompt,
-    AnalysisUserMessage, ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState,
-    MessageItem, PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats,
-    WorkspaceFineBlock, WorkspaceModuleBlock, WorkspaceStat, get_conversation_artifacts,
-    get_workspace_artifacts, WorkspaceArtifactItem,
+    save_conversation_ai_summary, save_workspace_fine_blocks, save_workspace_module_blocks,
+    save_workspace_report, search_global_messages, set_conversation_ai_status, toggle_prompt_star,
+    toggle_star_session, update_conversation_ai_title, update_prompt, AnalysisUserMessage,
+    ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState, MessageItem,
+    PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats, WorkspaceFineBlock,
+    WorkspaceModuleBlock, WorkspaceStat, get_conversation_artifacts, get_workspace_artifacts,
+    WorkspaceArtifactItem,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -261,6 +267,74 @@ async fn get_workspace_artifacts_cmd(
 fn toggle_star(conversation_id: String, state: State<'_, DbState>) -> Result<bool, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     toggle_star_session(&conn, &conversation_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_conversation_ai_title_cmd(
+    conversation_id: String,
+    ai_title: String,
+    state: State<'_, DbState>,
+) -> Result<ConversationItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    update_conversation_ai_title(&conn, &conversation_id, &ai_title).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_conversation_ai_title_cmd(
+    conversation_id: String,
+    state: State<'_, DbState>,
+) -> Result<ConversationItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    clear_conversation_ai_title(&conn, &conversation_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_conversation_ai_summary_cmd(
+    conversation_id: String,
+    ai_title: Option<String>,
+    summary: String,
+    status: String,
+    based_on_content_hash: Option<String>,
+    model: Option<String>,
+    error: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<ConversationItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    save_conversation_ai_summary(
+        &conn,
+        &conversation_id,
+        ai_title.as_deref(),
+        &summary,
+        &status,
+        based_on_content_hash.as_deref(),
+        model.as_deref(),
+        error.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_conversation_ai_status_cmd(
+    conversation_id: String,
+    status: String,
+    error: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<(), String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    set_conversation_ai_status(&conn, &conversation_id, &status, error.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_conversation_item(
+    conversation_id: String,
+) -> Result<Option<ConversationItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_conversation_by_id(&conn, &conversation_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1297,6 +1371,11 @@ pub fn run() {
             get_conversation_artifacts_cmd,
             get_workspace_artifacts_cmd,
             toggle_star,
+            update_conversation_ai_title_cmd,
+            clear_conversation_ai_title_cmd,
+            save_conversation_ai_summary_cmd,
+            set_conversation_ai_status_cmd,
+            get_conversation_item,
             search_messages,
             trigger_sync,
             set_auto_sync_interval,
@@ -1322,7 +1401,23 @@ pub fn run() {
             save_app_config_cmd,
             open_url_cmd,
             list_ide_apps_cmd,
-            open_workspace_in_ide_cmd
+            open_workspace_in_ide_cmd,
+            service_manager::service_list,
+            service_manager::service_status,
+            service_manager::service_start,
+            service_manager::service_stop,
+            service_manager::service_restart,
+            service_manager::service_open,
+            service_manager::service_open_in_ide,
+            service_manager::service_detect_ides,
+            service_manager::service_tail_log,
+            service_manager::service_pick_folder,
+            service_manager::service_scan_project,
+            service_manager::service_probe_candidate,
+            service_manager::service_upsert,
+            service_manager::service_rename_project,
+            service_manager::service_rename_service,
+            service_manager::service_remove
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
@@ -1330,7 +1425,7 @@ pub fn run() {
             }
 
             // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给前端图片与外部服务无缝调用）
-            http_server::start_http_server(8788);
+            http_server::start_http_server(app.handle().clone(), 8788);
 
             // 启动后台多源智能监听线程（每 60 秒探测数据源 mtime 变动，实现无感实时同步）
             let app_handle = app.handle().clone();

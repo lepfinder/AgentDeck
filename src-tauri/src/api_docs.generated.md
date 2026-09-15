@@ -329,6 +329,73 @@
 
 ---
 
+### 9. 本地服务管理 (Local Services)
+
+> **前置条件**: AgentDeck Desktop 必须正在运行（`127.0.0.1:8788` 可达）。
+> 数据模型为 **Project → Services**；服务键为 `{projectId}/{serviceId}`（例如 `voxlab/main`）。
+> 启停为异步受理：`POST .../start|stop|restart` 返回 **202**，用 `GET` 状态轮询直到 `running` / `stopped`。
+
+#### 列出全部服务状态
+- **请求方法**: `GET /api/services`
+- **调用示例**:
+  ```bash
+  curl http://127.0.0.1:8788/api/services
+  ```
+- **返回**: `{ "ok": true, "data": { "total": N, "services": [ /* ServiceStatus */ ] } }`
+
+#### 按项目列出
+- **请求方法**: `GET /api/services/projects`
+- **返回**: 每个项目含 `serviceCount` / `runningCount` / 子服务摘要
+
+#### 单个服务状态
+- **请求方法**: `GET /api/services/{projectId}/{serviceId}`
+- **示例**: `GET /api/services/voxlab/main`
+
+#### 日志尾部
+- **请求方法**: `GET /api/services/{projectId}/{serviceId}/logs?lines=80`
+
+#### 启动 / 停止 / 重启 / 打开
+- `POST /api/services/{projectId}/{serviceId}/start` → **202**
+- `POST /api/services/{projectId}/{serviceId}/stop` （可选 body `{ "force": true }`）→ **202**
+- `POST /api/services/{projectId}/{serviceId}/restart` → **202**
+- `POST /api/services/{projectId}/{serviceId}/open` → 用系统浏览器打开 `openUrl`
+
+#### 注册 / 更新服务
+- **请求方法**: `POST /api/services`
+- **请求体**:
+  ```json
+  {
+    "project": {
+      "id": "myapp",
+      "name": "MyApp",
+      "projectDir": "/Users/you/workspace/personal/MyApp"
+    },
+    "service": {
+      "id": "core",
+      "name": "Core API",
+      "start": { "command": ["npm", "run", "core"], "cwd": "{projectDir}", "env": {} },
+      "pidFile": "{projectDir}/data/core.pid",
+      "logFile": "{projectDir}/data/core.log",
+      "ports": [3001],
+      "health": { "url": "http://localhost:3001/", "statusOk": true, "timeoutSecs": 90, "pollIntervalSecs": 2 },
+      "openUrl": "http://localhost:3001",
+      "stop": { "graceSecs": 8, "cleanupPorts": [3001] }
+    }
+  }
+  ```
+- 同一 `project.id` 下可多次 upsert 不同 `service.id`（例如 `core` + `desktop`）
+- Agent 应自行读项目代码组装 payload；桌面端引导式 scan/probe 仅走 Tauri，**不**通过 HTTP 暴露
+
+#### 重命名（仅展示名，不改 id）
+- `PATCH /api/services/projects/{projectId}` body `{ "name": "新项目名" }`
+- `PATCH /api/services/{projectId}/{serviceId}` body `{ "name": "新服务名" }`
+
+#### 删除服务
+- **请求方法**: `DELETE /api/services/{projectId}/{serviceId}`
+- 会强制停止后再从配置移除；项目下无服务时一并删除项目条目
+
+---
+
 ## 快速调用示例
 
 ### Python 脚本
