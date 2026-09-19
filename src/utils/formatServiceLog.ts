@@ -112,6 +112,15 @@ export function parseLogLineTimestamp(line: string): number | null {
   return Number.isFinite(ms) ? ms : null
 }
 
+/**
+ * Signature used for ignore matching. Strips leading timestamps so recurring
+ * errors (each logged with a fresh `[YYYY-MM-DD HH:mm:ss]` prefix) collapse
+ * into one signature and stay ignored across polls.
+ */
+export function errorSignature(line: string): string {
+  return line.trim().replace(/^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*/, '')
+}
+
 /** Compact Chinese relative time, e.g. `刚刚` / `3 分钟前`. */
 export function formatErrorAgo(atMs: number | null | undefined, nowMs = Date.now()): string {
   if (atMs == null || !Number.isFinite(atMs)) return '未知时间'
@@ -139,7 +148,7 @@ export function analyzeServiceLogErrors(
   const ignored = options?.ignoredSignatures
   const errorIndices = findErrorLineIndices(lines).filter((idx) => {
     if (!ignored || ignored.size === 0) return true
-    return !ignored.has(lines[idx]?.trim() ?? '')
+    return !ignored.has(errorSignature(lines[idx] ?? ''))
   })
 
   let latestAtMs: number | null = null

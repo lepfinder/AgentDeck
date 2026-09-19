@@ -35,7 +35,6 @@ impl Default for BackupConfig {
 pub struct AppConfig {
     #[serde(default)]
     pub backup: BackupConfig,
-    pub auto_sync_interval_mins: Option<u64>,
     pub theme: Option<String>,
     pub ai_config: Option<serde_json::Value>,
 }

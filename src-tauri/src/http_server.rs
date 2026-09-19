@@ -2,7 +2,8 @@ use crate::db::{
     allowed_prompt_category_values, create_prompt, delete_prompt, fetch_conversation_messages,
     fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_detail_stats,
     fetch_workspaces, get_database_path, get_prompt, get_short_workspace, list_prompts, prompt_category_options,
-    search_global_messages, update_prompt, PromptAgentItem, PromptInput,
+    merge_workspace, search_global_messages, update_prompt, PromptAgentItem, PromptInput,
+    move_conversation,
 };
 use crate::service_http;
 use crate::sync::execute_sync;
@@ -130,6 +131,42 @@ fn handle_connection(app: AppHandle, mut stream: TcpStream) {
                         "message": res.message
                     }),
                 );
+                return;
+            }
+            if method == "POST" && path == "/api/workspaces/merge" {
+                #[derive(serde::Deserialize)]
+                struct MergeBody {
+                    source_path: String,
+                    target_path: String,
+                }
+                match serde_json::from_str::<MergeBody>(&body) {
+                    Ok(req) => match open_write_conn() {
+                        Ok(conn) => match merge_workspace(&conn, &req.source_path, &req.target_path) {
+                            Ok(result) => send_json(&mut stream, 200, json!({ "ok": true, "result": result })),
+                            Err(e) => send_api_error(&mut stream, 400, "MERGE_FAILED", &e.to_string(), None),
+                        },
+                        Err(e) => send_json(&mut stream, 500, json!({"ok": false, "error": e})),
+                    },
+                    Err(e) => send_api_error(&mut stream, 400, "INVALID_JSON", &e.to_string(), None),
+                }
+                return;
+            }
+            if method == "POST" && path == "/api/conversations/move" {
+                #[derive(serde::Deserialize)]
+                struct MoveBody {
+                    conversation_id: String,
+                    target_path: String,
+                }
+                match serde_json::from_str::<MoveBody>(&body) {
+                    Ok(req) => match open_write_conn() {
+                        Ok(conn) => match move_conversation(&conn, &req.conversation_id, &req.target_path) {
+                            Ok(result) => send_json(&mut stream, 200, json!({ "ok": true, "result": result })),
+                            Err(e) => send_api_error(&mut stream, 400, "MOVE_FAILED", &e.to_string(), None),
+                        },
+                        Err(e) => send_json(&mut stream, 500, json!({"ok": false, "error": e})),
+                    },
+                    Err(e) => send_api_error(&mut stream, 400, "INVALID_JSON", &e.to_string(), None),
+                }
                 return;
             }
             send_json(
@@ -519,7 +556,8 @@ fn route_get(
                                 "codex_cnt": w.codex_cnt,
                                 "wb_cnt": w.wb_cnt,
                                 "hermes_cnt": w.hermes_cnt,
-                                "mimo_cnt": w.mimo_cnt
+                                "mimo_cnt": w.mimo_cnt,
+                                "windsurf_cnt": w.windsurf_cnt
                             })
                         })
                         .collect();
@@ -925,6 +963,7 @@ pub(crate) fn build_daily_summary(
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as source_app,
             m.role,
@@ -1198,6 +1237,7 @@ pub(crate) fn build_recent_activity(
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as source_app,
             m.role,
@@ -1773,4 +1813,3 @@ mod tests {
         assert_eq!(res_expanded["total_messages"], 3);
     }
 }
-

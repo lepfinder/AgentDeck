@@ -56,6 +56,13 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     };
 
+    // state.vscdb 可达数 GB：默认 LIKE 大小写不敏感，无法利用 key 索引，
+    // 每次前缀匹配都会全表扫描。开启大小写敏感后 LIKE 走索引范围搜索。
+    if let Err(e) = cursor_conn.pragma_update(None, "case_sensitive_like", "ON") {
+        eprintln!("[Cursor Importer] 开启 case_sensitive_like 失败，前缀查询将退化为全表扫描: {}", e);
+    }
+    let _ = cursor_conn.busy_timeout(std::time::Duration::from_secs(5));
+
     let mut existing_map: HashMap<String, (String, i64)> = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(
         "SELECT id, COALESCE(updated_at, created_at, ''), message_count FROM conversations WHERE id LIKE 'cursor:%'",
@@ -132,6 +139,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let hash_map = OnceLock::new();
     let slug_map = OnceLock::new();
     let uuid_map_cache: OnceLock<HashMap<String, String>> = OnceLock::new();
+    let image_index: OnceLock<CursorImageIndex> = OnceLock::new();
 
     if !meta_ok {
         // JSON1 不可用时回退旧路径：全量拉 value
@@ -173,6 +181,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
                 &hash_map,
                 &slug_map,
                 &uuid_map_cache,
+                &image_index,
                 &mut stats,
             ) {
                 eprintln!("[Cursor Importer] 处理失败 {}: {}", key, e);
@@ -214,6 +223,7 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
             &hash_map,
             &slug_map,
             &uuid_map_cache,
+            &image_index,
             &mut stats,
         ) {
             eprintln!("[Cursor Importer] 处理失败 {}: {}", key, e);
@@ -239,6 +249,7 @@ fn process_cursor_composer(
     hash_map: &OnceLock<HashMap<String, String>>,
     slug_map: &OnceLock<HashMap<String, String>>,
     uuid_map_cache: &OnceLock<HashMap<String, String>>,
+    image_index: &OnceLock<CursorImageIndex>,
     stats: &mut ImporterStats,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let composer_id = match key.split(':').nth(1) {
@@ -301,6 +312,8 @@ fn process_cursor_composer(
         headers,
         created_at.clone(),
         &mut title,
+        image_index,
+        ws_storage_dir,
     );
     if messages.is_empty() {
         stats.skipped_count += 1;
@@ -544,6 +557,8 @@ fn extract_messages(
     headers: &[Value],
     created_at: Option<String>,
     title: &mut String,
+    image_index: &OnceLock<CursorImageIndex>,
+    ws_storage_dir: &Path,
 ) -> Vec<RawMessage> {
     let mut bubble_map = HashMap::new();
     let query_prefix = format!("bubbleId:{}:%", composer_id);
@@ -608,7 +623,8 @@ fn extract_messages(
             .filter(|s| !s.is_empty());
 
         let tool_results = bubble.get("toolResults").map(|v| v.to_string());
-        let images_json = extract_cursor_bubble_images(bubble, composer_id);
+        let images_json =
+            extract_cursor_bubble_images(bubble, composer_id, image_index, ws_storage_dir);
 
         if text.is_empty() && thinking.is_none() && tool_results.is_none() && images_json.is_none() {
             continue;
@@ -651,33 +667,53 @@ fn extract_messages(
     messages
 }
 
-fn find_cursor_image_path(image_uuid: &str) -> Option<std::path::PathBuf> {
-    if image_uuid.is_empty() {
-        return None;
+/// workspaceStorage 文件名索引：(小写文件名, 路径)。
+/// 原实现对每张图片都重新 WalkDir 整棵目录树（数千个文件），
+/// 全量解析时会产生上百万次 syscall；改为整个同步轮次只扫描一次，
+/// 之后在内存中做子串匹配。
+type CursorImageIndex = Vec<(String, std::path::PathBuf)>;
+
+fn load_cursor_image_index(ws_storage_dir: &Path) -> CursorImageIndex {
+    let mut index = CursorImageIndex::new();
+    if !ws_storage_dir.is_dir() {
+        return index;
     }
-    let home = dirs::home_dir()?;
-    let ws_storage = home.join("Library/Application Support/Cursor/User/workspaceStorage");
-    if !ws_storage.exists() {
+    for entry in walkdir::WalkDir::new(ws_storage_dir)
+        .max_depth(3)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if let Some(fname) = path.file_name() {
+            index.push((fname.to_string_lossy().to_lowercase(), path.to_path_buf()));
+        }
+    }
+    index
+}
+
+fn find_cursor_image_path(
+    image_uuid: &str,
+    index: &CursorImageIndex,
+) -> Option<std::path::PathBuf> {
+    if image_uuid.is_empty() || index.is_empty() {
         return None;
     }
     let clean_uuid = image_uuid.trim().to_lowercase();
-    for entry in walkdir::WalkDir::new(&ws_storage).max_depth(3) {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(fname) = path.file_name() {
-                    let name = fname.to_string_lossy().to_lowercase();
-                    if name.contains(&clean_uuid) {
-                        return Some(path.to_path_buf());
-                    }
-                }
-            }
-        }
-    }
-    None
+    index
+        .iter()
+        .find(|(name, _)| name.contains(&clean_uuid))
+        .map(|(_, path)| path.clone())
 }
 
-fn extract_cursor_bubble_images(bubble: &Value, composer_id: &str) -> Option<String> {
+fn extract_cursor_bubble_images(
+    bubble: &Value,
+    composer_id: &str,
+    image_index: &OnceLock<CursorImageIndex>,
+    ws_storage_dir: &Path,
+) -> Option<String> {
     let images_arr = bubble.get("images")?.as_array()?;
     let mut list = Vec::new();
     for img in images_arr {
@@ -686,7 +722,8 @@ fn extract_cursor_bubble_images(bubble: &Value, composer_id: &str) -> Option<Str
         let h = dim.and_then(|d| d.get("height")).and_then(|v| v.as_i64());
         let uuid = img.get("uuid").and_then(|v| v.as_str()).unwrap_or("");
         if !uuid.is_empty() {
-            let orig_path = find_cursor_image_path(uuid);
+            let index = image_index.get_or_init(|| load_cursor_image_index(ws_storage_dir));
+            let orig_path = find_cursor_image_path(uuid, index);
             let src_uri = if let Some(ref p) = orig_path {
                 crate::media_archive::archive_image_file(p, "cursor", composer_id)
                     .unwrap_or_else(|| format!("/cursor-image/{}", uuid))

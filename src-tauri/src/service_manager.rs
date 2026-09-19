@@ -13,9 +13,8 @@ use tauri::{AppHandle, Emitter};
 
 use crate::service_config::{
     build_port_owners, find_runtime, iter_runtimes, make_service_key, migrate_v1_json,
-    parse_config_json, parse_service_key, ProjectDefinition, ServiceDefinition,
-    ServiceRegistrationPayload, ServiceRuntime, ServicesConfig, StartConfig, HealthConfig,
-    StopConfig, PreStartConfig,
+    parse_config_json, parse_service_key, ProjectDefinition, ServiceRegistrationPayload,
+    ServiceRuntime, ServicesConfig, HealthConfig, StopConfig,
 };
 
 pub use crate::service_config::{
@@ -290,131 +289,12 @@ pub fn resolve_executable(cmd: &str, path_var: &str) -> String {
 }
 
 
-fn miloco_service_def() -> ServiceDefinition {
-    ServiceDefinition {
-        id: "main".into(),
-        name: "Xiaomi Miloco".into(),
-        start: StartConfig {
-            command: vec![
-                "{projectDir}/backend/.venv/bin/python".into(),
-                "-m".into(),
-                "miloco.main".into(),
-            ],
-            cwd: "{projectDir}/backend".into(),
-            env: HashMap::new(),
-            require_path: Some("{projectDir}/backend/.venv/bin/python".into()),
-        },
-        pre_start: None,
-        pid_file: "{projectDir}/data/main.pid".into(),
-        log_file: "{projectDir}/data/main.log".into(),
-        ports: vec![1810],
-        health: HealthConfig {
-            url: "http://127.0.0.1:1810/health".into(),
-            contains: Some("\"ok\"".into()),
-            status_ok: true,
-            fallback_urls: vec![],
-            accept_http_codes: vec!["200".into()],
-            timeout_secs: 60,
-            poll_interval_secs: 2,
-        },
-        open_url: "http://localhost:1810".into(),
-        stop: Some(StopConfig {
-            grace_secs: 15,
-            cleanup_ports: vec![1810],
-        }),
-    }
-}
-
-fn default_config(home: &Path) -> ServicesConfig {
-    let personal = home.join("workspace/personal");
-    let voxlab_dir = personal.join("VoxLab");
-    let repomind_dir = personal.join("RepoMind");
-    let miloco_dir = home.join("workspace/github/xiaomi-miloco");
-    let voxlab_python = home
-        .join("miniconda3/envs/voxlab/bin/python")
-        .to_string_lossy()
-        .into_owned();
-
+/// Fresh installs start with an empty registry; users register services
+/// via the agentdeck-services skill or the registration wizard.
+fn empty_config() -> ServicesConfig {
     ServicesConfig {
         version: 2,
-        projects: vec![
-            ProjectDefinition {
-                id: "voxlab".into(),
-                name: "VoxLab".into(),
-                project_dir: voxlab_dir.to_string_lossy().into_owned(),
-                services: vec![ServiceDefinition {
-                    id: "main".into(),
-                    name: "VoxLab".into(),
-                    start: StartConfig {
-                        command: vec![voxlab_python, "main.py".into()],
-                        cwd: "{projectDir}".into(),
-                        env: HashMap::from([("DEV_MODE".into(), "false".into())]),
-                        require_path: None,
-                    },
-                    pre_start: Some(PreStartConfig {
-                        when: "frontendStale".into(),
-                        command: vec!["npm".into(), "run".into(), "build".into()],
-                        cwd: "{projectDir}/dashboard".into(),
-                    }),
-                    pid_file: "{projectDir}/data/main.pid".into(),
-                    log_file: "{projectDir}/data/main.log".into(),
-                    ports: vec![8001],
-                    health: HealthConfig {
-                        url: "http://127.0.0.1:8001/health".into(),
-                        contains: Some("\"ok\"".into()),
-                        status_ok: false,
-                        fallback_urls: vec![],
-                        accept_http_codes: vec![],
-                        timeout_secs: 120,
-                        poll_interval_secs: 2,
-                    },
-                    open_url: "http://localhost:8001".into(),
-                    stop: Some(StopConfig {
-                        grace_secs: 15,
-                        cleanup_ports: vec![8001],
-                    }),
-                }],
-            },
-            ProjectDefinition {
-                id: "repomind".into(),
-                name: "RepoMind".into(),
-                project_dir: repomind_dir.to_string_lossy().into_owned(),
-                services: vec![ServiceDefinition {
-                    id: "main".into(),
-                    name: "RepoMind".into(),
-                    start: StartConfig {
-                        command: vec!["npm".into(), "run".into(), "dev".into()],
-                        cwd: "{projectDir}".into(),
-                        env: HashMap::new(),
-                        require_path: None,
-                    },
-                    pre_start: None,
-                    pid_file: "{projectDir}/data/main.pid".into(),
-                    log_file: "{projectDir}/data/main.log".into(),
-                    ports: vec![3000, 3001],
-                    health: HealthConfig {
-                        url: "http://localhost:3001/".into(),
-                        contains: None,
-                        status_ok: true,
-                        fallback_urls: vec![],
-                        accept_http_codes: vec!["200".into(), "404".into()],
-                        timeout_secs: 90,
-                        poll_interval_secs: 2,
-                    },
-                    open_url: "http://localhost:3000".into(),
-                    stop: Some(StopConfig {
-                        grace_secs: 8,
-                        cleanup_ports: vec![3000, 3001],
-                    }),
-                }],
-            },
-            ProjectDefinition {
-                id: "miloco".into(),
-                name: "Xiaomi Miloco".into(),
-                project_dir: miloco_dir.to_string_lossy().into_owned(),
-                services: vec![miloco_service_def()],
-            },
-        ],
+        projects: vec![],
     }
 }
 
@@ -433,10 +313,10 @@ fn load_config(app: &AppHandle) -> Result<ServicesConfig, String> {
                 .and_then(|raw| migrate_v1_json(&raw).ok())
             {
                 Some(imported) => imported,
-                None => default_config(&home),
+                None => empty_config(),
             }
         } else {
-            default_config(&home)
+            empty_config()
         };
 
         let json = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
@@ -444,63 +324,7 @@ fn load_config(app: &AppHandle) -> Result<ServicesConfig, String> {
         return Ok(config);
     }
     let raw = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut config = parse_config_json(&raw)?;
-    if migrate_config(&mut config) {
-        if let Ok(json) = serde_json::to_string_pretty(&config) {
-            let _ = fs::write(config_path(app), json);
-        }
-    }
-    Ok(config)
-}
-
-/// Patch older v2 configs in-memory.
-fn migrate_config(config: &mut ServicesConfig) -> bool {
-    let mut changed = false;
-    for project in &mut config.projects {
-        if project.id == "repomind" {
-            for svc in &mut project.services {
-                if svc.health.url.contains(":3000") {
-                    svc.health.url = "http://localhost:3001/".into();
-                    changed = true;
-                }
-                if svc.health.url.contains("127.0.0.1:3001") {
-                    svc.health.url = "http://localhost:3001/".into();
-                    changed = true;
-                }
-                if !svc.health.fallback_urls.is_empty() {
-                    svc.health.fallback_urls.clear();
-                    changed = true;
-                }
-                if svc.health.accept_http_codes.is_empty() {
-                    svc.health.accept_http_codes = vec!["200".into(), "404".into()];
-                    changed = true;
-                }
-                if let Some(stop) = svc.stop.as_mut() {
-                    if stop.grace_secs > 8 {
-                        stop.grace_secs = 8;
-                        changed = true;
-                    }
-                    if !stop.cleanup_ports.contains(&3000) || !stop.cleanup_ports.contains(&3001) {
-                        stop.cleanup_ports = vec![3000, 3001];
-                        changed = true;
-                    }
-                }
-            }
-        }
-    }
-    if !config.projects.iter().any(|p| p.id == "miloco") {
-        if let Some(home) = dirs::home_dir() {
-            let miloco_dir = home.join("workspace/github/xiaomi-miloco");
-            config.projects.push(ProjectDefinition {
-                id: "miloco".into(),
-                name: "Xiaomi Miloco".into(),
-                project_dir: miloco_dir.to_string_lossy().into_owned(),
-                services: vec![miloco_service_def()],
-            });
-            changed = true;
-        }
-    }
-    changed
+    parse_config_json(&raw)
 }
 
 // ── Process / port probes ────────────────────────────────────────────────────
@@ -2240,12 +2064,10 @@ mod tests {
     }
 
     #[test]
-    fn default_config_contains_miloco() {
-        let home = PathBuf::from("/Users/test");
-        let cfg = default_config(&home);
-        assert!(cfg.projects.iter().any(|p| p.id == "miloco"));
-        let miloco = cfg.projects.iter().find(|p| p.id == "miloco").unwrap();
-        assert_eq!(miloco.services[0].ports, vec![1810]);
+    fn empty_config_has_no_projects() {
+        let cfg = empty_config();
+        assert!(cfg.projects.is_empty());
+        assert_eq!(cfg.version, 2);
         assert_eq!(make_service_key("voxlab", "main"), "voxlab/main");
     }
 }

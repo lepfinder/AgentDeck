@@ -4,6 +4,8 @@ pub mod db;
 pub mod http_server;
 pub mod importers;
 pub mod media_archive;
+pub mod prompt_catalog;
+pub mod quota;
 pub mod service_config;
 pub mod service_discovery;
 pub mod service_http;
@@ -14,25 +16,24 @@ use db::{
     clear_conversation_ai_title, clear_workspace_analysis, create_prompt, delete_prompt,
     fetch_conversation_by_id, fetch_conversation_messages, fetch_conversations,
     fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_analysis_messages,
-    fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, record_prompt_use,
+    fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, list_prompts_ex,
+    merge_workspace, record_prompt_use,
+    move_conversation,
     save_conversation_ai_summary, save_workspace_fine_blocks, save_workspace_module_blocks,
     save_workspace_report, search_global_messages, set_conversation_ai_status, toggle_prompt_star,
-    toggle_star_session, update_conversation_ai_title, update_prompt, AnalysisUserMessage,
+    toggle_star_session, update_conversation_ai_title, update_prompt, update_prompt_preview_size,
+    AnalysisUserMessage,
     ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState, MessageItem,
     PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats, WorkspaceFineBlock,
     WorkspaceModuleBlock, WorkspaceStat, get_conversation_artifacts, get_workspace_artifacts,
-    WorkspaceArtifactItem,
+    WorkspaceArtifactItem, WorkspaceMergeResult,
+    ConversationMoveResult,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use sync::{
-    collect_agent_sources, execute_sync, get_agent_source_paths, AgentSourceInfo,
-    SyncResultInfo,
+    collect_agent_sources, execute_sync, AgentSourceInfo, SyncResultInfo,
 };
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
-
-static AUTO_SYNC_INTERVAL_SECS: AtomicU64 = AtomicU64::new(60);
 
 #[tauri::command]
 async fn get_workspace_analysis_messages(
@@ -124,14 +125,16 @@ async fn list_prompts_cmd(
     search: Option<String>,
     category: Option<String>,
     starred_only: Option<bool>,
+    lite: Option<bool>,
 ) -> Result<Vec<PromptItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_read_connection().map_err(|e| e.to_string())?;
-        list_prompts(
+        list_prompts_ex(
             &conn,
             search.as_deref(),
             category.as_deref(),
             starred_only.unwrap_or(false),
+            lite.unwrap_or(true),
         )
         .map_err(|e| e.to_string())
     })
@@ -153,6 +156,42 @@ async fn get_prompt_cmd(id: i64) -> Result<PromptItem, String> {
 fn create_prompt_cmd(input: PromptInput, state: State<'_, DbState>) -> Result<PromptItem, String> {
     let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
     create_prompt(&conn, &input).map_err(|e| e.to_string())
+}
+
+/// 校验并归档本地图片到 ~/.agentdeck/media/prompts/uploads/，返回 /media Web 路径。
+fn import_prompt_preview_image_path(path: &std::path::Path) -> Result<String, String> {
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return Err("仅支持 png / jpg / jpeg / webp / gif 图片".into());
+    }
+    media_archive::archive_image_file(&path, "prompts", "uploads")
+        .ok_or_else(|| "图片导入失败，请重试".to_string())
+}
+
+/// 文件选择器方式导入；用户取消时返回 None。
+#[tauri::command]
+fn pick_prompt_preview_image_cmd() -> Result<Option<String>, String> {
+    let picked = rfd::FileDialog::new()
+        .add_filter("图片", &["png", "jpg", "jpeg", "webp", "gif"])
+        .pick_file();
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+    import_prompt_preview_image_path(&path).map(Some)
+}
+
+/// 拖拽方式导入：接收 Tauri 拖放事件给出的本地文件路径。
+#[tauri::command]
+fn import_prompt_preview_image_cmd(path: String) -> Result<String, String> {
+    let path = std::path::PathBuf::from(path);
+    if !path.is_file() {
+        return Err("文件不存在或不可访问".into());
+    }
+    import_prompt_preview_image_path(&path)
 }
 
 #[tauri::command]
@@ -184,6 +223,69 @@ fn record_prompt_use_cmd(id: i64, state: State<'_, DbState>) -> Result<PromptIte
 }
 
 #[tauri::command]
+fn update_prompt_preview_size_cmd(
+    id: i64,
+    width: i64,
+    height: i64,
+    state: State<'_, DbState>,
+) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    update_prompt_preview_size(&conn, id, width, height).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn sync_gpt_image_catalog_cmd(
+    app_handle: tauri::AppHandle,
+) -> Result<prompt_catalog::CatalogSyncResult, String> {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_write_connection().map_err(|e| e.to_string())?;
+        let progress = Box::new(move |p: prompt_catalog::CatalogSyncProgress| {
+            let _ = handle.emit("prompt-catalog-sync-progress", p);
+        });
+        prompt_catalog::sync_gpt_image_catalog_with_progress(&conn, Some(progress))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn cache_prompt_previews_cmd(limit: Option<u32>) -> Result<usize, String> {
+    let lim = limit.unwrap_or(40) as usize;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_write_connection().map_err(|e| e.to_string())?;
+        prompt_catalog::cache_missing_previews(&conn, lim)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn warm_prompt_preview_cache_cmd(
+    batch_size: Option<u32>,
+    max_batches: Option<u32>,
+) -> Result<usize, String> {
+    let batch = batch_size.unwrap_or(40) as usize;
+    let batches = max_batches.unwrap_or(20) as usize;
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_write_connection().map_err(|e| e.to_string())?;
+        prompt_catalog::warm_preview_cache(&conn, batch, batches)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_uncached_prompt_previews_cmd() -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        prompt_catalog::count_uncached_previews(&conn)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn get_workspace_detail(
     workspace_path: String,
 ) -> Result<WorkspaceDetailStats, String> {
@@ -205,6 +307,26 @@ async fn list_workspaces(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn merge_workspace_cmd(
+    source_path: String,
+    target_path: String,
+    state: State<'_, DbState>,
+) -> Result<WorkspaceMergeResult, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    merge_workspace(&conn, &source_path, &target_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn move_conversation_cmd(
+    conversation_id: String,
+    target_path: String,
+    state: State<'_, DbState>,
+) -> Result<ConversationMoveResult, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    move_conversation(&conn, &conversation_id, &target_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -295,6 +417,7 @@ fn save_conversation_ai_summary_cmd(
     summary: String,
     status: String,
     based_on_content_hash: Option<String>,
+    based_on_message_count: Option<i64>,
     model: Option<String>,
     error: Option<String>,
     state: State<'_, DbState>,
@@ -307,6 +430,7 @@ fn save_conversation_ai_summary_cmd(
         &summary,
         &status,
         based_on_content_hash.as_deref(),
+        based_on_message_count,
         model.as_deref(),
         error.as_deref(),
     )
@@ -1116,12 +1240,11 @@ async fn trigger_sync(
 }
 
 #[tauri::command]
-fn set_auto_sync_interval(seconds: u64) -> Result<u64, String> {
-    if !(15..=3600).contains(&seconds) {
-        return Err("自动同步频率需在 15 到 3600 秒之间".to_string());
-    }
-    AUTO_SYNC_INTERVAL_SECS.store(seconds, Ordering::Relaxed);
-    Ok(seconds)
+async fn get_quota_snapshot(force: Option<bool>) -> Result<quota::QuotaSnapshot, String> {
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || quota::fetch_quota_snapshot(force))
+        .await
+        .map_err(|e| format!("额度查询失败: {e}"))
 }
 
 #[tauri::command]
@@ -1360,12 +1483,21 @@ pub fn run() {
             list_prompts_cmd,
             get_prompt_cmd,
             create_prompt_cmd,
+            pick_prompt_preview_image_cmd,
+            import_prompt_preview_image_cmd,
             update_prompt_cmd,
             delete_prompt_cmd,
             toggle_prompt_star_cmd,
             record_prompt_use_cmd,
+            update_prompt_preview_size_cmd,
+            sync_gpt_image_catalog_cmd,
+            cache_prompt_previews_cmd,
+            warm_prompt_preview_cache_cmd,
+            count_uncached_prompt_previews_cmd,
             get_workspace_detail,
             list_workspaces,
+            merge_workspace_cmd,
+            move_conversation_cmd,
             list_conversations,
             get_conversation_messages,
             get_conversation_artifacts_cmd,
@@ -1378,7 +1510,7 @@ pub fn run() {
             get_conversation_item,
             search_messages,
             trigger_sync,
-            set_auto_sync_interval,
+            get_quota_snapshot,
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
@@ -1426,54 +1558,6 @@ pub fn run() {
 
             // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给前端图片与外部服务无缝调用）
             http_server::start_http_server(app.handle().clone(), 8788);
-
-            // 启动后台多源智能监听线程（每 60 秒探测数据源 mtime 变动，实现无感实时同步）
-            let app_handle = app.handle().clone();
-            std::thread::spawn(move || {
-                let mut last_mtimes: HashMap<std::path::PathBuf, std::time::SystemTime> =
-                    HashMap::new();
-                let mut last_sync_at = std::time::Instant::now()
-                    .checked_sub(std::time::Duration::from_secs(60))
-                    .unwrap_or_else(std::time::Instant::now);
-                // 首次填充初始时间戳
-                for src in get_agent_source_paths() {
-                    if let Ok(meta) = src.metadata() {
-                        if let Ok(mtime) = meta.modified() {
-                            last_mtimes.insert(src, mtime);
-                        }
-                    }
-                }
-
-                loop {
-                    let interval_secs = AUTO_SYNC_INTERVAL_SECS.load(Ordering::Relaxed);
-                    std::thread::sleep(std::time::Duration::from_secs(interval_secs));
-                    let sources = get_agent_source_paths();
-                    let mut changed = false;
-
-                    for src in sources {
-                        if let Ok(meta) = src.metadata() {
-                            if let Ok(mtime) = meta.modified() {
-                                if let Some(prev) = last_mtimes.get(&src) {
-                                    if *prev != mtime {
-                                        changed = true;
-                                        last_mtimes.insert(src.clone(), mtime);
-                                    }
-                                } else {
-                                    changed = true;
-                                    last_mtimes.insert(src.clone(), mtime);
-                                }
-                            }
-                        }
-                    }
-
-                    if changed && last_sync_at.elapsed() >= std::time::Duration::from_secs(20) {
-                        last_sync_at = std::time::Instant::now();
-                        let _ = app_handle.emit("sync-started", ());
-                        let result = execute_sync(false);
-                        let _ = app_handle.emit("sync-completed", result);
-                    }
-                }
-            });
 
             Ok(())
         })

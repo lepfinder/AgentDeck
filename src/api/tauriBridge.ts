@@ -3,6 +3,8 @@ import type {
   DashboardStats,
   DailyTimelineStats,
   WorkspaceStat,
+  WorkspaceMergeResult,
+  ConversationMoveResult,
   ConversationItem,
   MessageItem,
   ArtifactItem,
@@ -19,10 +21,12 @@ import type {
   AppConfig,
   PromptItem,
   PromptInput,
+  CatalogSyncResult,
   IdeAppStatus,
   AgentSourceInfo,
   LlmCallLogItem,
   LlmUsageSummary,
+  QuotaSnapshot,
 } from '../types';
 
 export const isTauri = () => {
@@ -60,6 +64,40 @@ export const api = {
     }
     const res = await fetch(`/api/workspaces?q=${encodeURIComponent(search || '')}`);
     return await res.json();
+  },
+
+  async mergeWorkspace(sourcePath: string, targetPath: string): Promise<WorkspaceMergeResult> {
+    if (isTauri()) {
+      return await invoke<WorkspaceMergeResult>('merge_workspace_cmd', {
+        sourcePath,
+        targetPath,
+      });
+    }
+    const res = await fetch('/api/workspaces/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: sourcePath, target_path: targetPath }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    return data.result;
+  },
+
+  async moveConversation(conversationId: string, targetPath: string): Promise<ConversationMoveResult> {
+    if (isTauri()) {
+      return await invoke<ConversationMoveResult>('move_conversation_cmd', {
+        conversationId,
+        targetPath,
+      });
+    }
+    const res = await fetch('/api/conversations/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversation_id: conversationId, target_path: targetPath }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    return data.result;
   },
 
   async listConversations(
@@ -147,6 +185,7 @@ export const api = {
     summary: string;
     status: string;
     basedOnContentHash?: string | null;
+    basedOnMessageCount?: number | null;
     model?: string | null;
     error?: string | null;
   }): Promise<ConversationItem> {
@@ -157,6 +196,7 @@ export const api = {
         summary: payload.summary,
         status: payload.status,
         basedOnContentHash: payload.basedOnContentHash ?? null,
+        basedOnMessageCount: payload.basedOnMessageCount ?? null,
         model: payload.model ?? null,
         error: payload.error ?? null,
       });
@@ -212,11 +252,11 @@ export const api = {
     return await res.json();
   },
 
-  async setAutoSyncInterval(seconds: number): Promise<number> {
+  async getQuotaSnapshot(force = false): Promise<QuotaSnapshot> {
     if (isTauri()) {
-      return await invoke<number>('set_auto_sync_interval', { seconds });
+      return await invoke<QuotaSnapshot>('get_quota_snapshot', { force });
     }
-    return seconds;
+    return { generated_at: new Date().toISOString(), providers: [] };
   },
 
   async testLlmConnection(
@@ -555,13 +595,15 @@ export const api = {
   async listPrompts(
     search?: string,
     category?: string,
-    starredOnly?: boolean
+    starredOnly?: boolean,
+    lite = true
   ): Promise<PromptItem[]> {
     if (isTauri()) {
       return await invoke<PromptItem[]>('list_prompts_cmd', {
         search: search || null,
         category: category || null,
         starredOnly: !!starredOnly,
+        lite,
       });
     }
     return [];
@@ -579,6 +621,22 @@ export const api = {
       return await invoke<PromptItem>('create_prompt_cmd', { input });
     }
     throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  /** 选择本地图片并归档到媒体库，返回 /media/prompts/uploads/… 路径；取消返回 null */
+  async pickPromptPreviewImage(): Promise<string | null> {
+    if (isTauri()) {
+      return await invoke<string | null>('pick_prompt_preview_image_cmd');
+    }
+    throw new Error('仅在客户端环境下支持本地图片上传');
+  },
+
+  /** 拖拽导入：按本地文件路径归档图片，返回 /media/prompts/uploads/… 路径 */
+  async importPromptPreviewImage(path: string): Promise<string> {
+    if (isTauri()) {
+      return await invoke<string>('import_prompt_preview_image_cmd', { path });
+    }
+    throw new Error('仅在客户端环境下支持本地图片上传');
   },
 
   async updatePrompt(id: number, input: PromptInput): Promise<PromptItem> {
@@ -607,6 +665,45 @@ export const api = {
       return await invoke<PromptItem>('record_prompt_use_cmd', { id });
     }
     throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  /** 写回封面图原始宽高（渲染元数据，仅变化时落库） */
+  async updatePromptPreviewSize(id: number, width: number, height: number): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('update_prompt_preview_size_cmd', { id, width, height });
+    }
+    return false;
+  },
+
+  async syncGptImageCatalog(): Promise<CatalogSyncResult> {
+    if (isTauri()) {
+      return await invoke<CatalogSyncResult>('sync_gpt_image_catalog_cmd');
+    }
+    throw new Error('仅在客户端环境下支持目录同步');
+  },
+
+  async cachePromptPreviews(limit = 40): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('cache_prompt_previews_cmd', { limit });
+    }
+    return 0;
+  },
+
+  async warmPromptPreviewCache(batchSize = 40, maxBatches = 20): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('warm_prompt_preview_cache_cmd', {
+        batchSize,
+        maxBatches,
+      });
+    }
+    return 0;
+  },
+
+  async countUncachedPromptPreviews(): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('count_uncached_prompt_previews_cmd');
+    }
+    return 0;
   },
 
   services: {

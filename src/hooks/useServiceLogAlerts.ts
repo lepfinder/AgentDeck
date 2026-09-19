@@ -36,44 +36,62 @@ export function useServiceLogAlerts(
   const [ignoreEpoch, setIgnoreEpoch] = useState(0);
   const servicesRef = useRef(services);
   servicesRef.current = services;
+  // Re-entrancy guard: the 4s poll and ignore-triggered rescans can overlap.
+  // While a scan is in flight, later calls are coalesced into one trailing rescan
+  // (so an ignore applied mid-scan still takes effect immediately after).
+  const scanningRef = useRef(false);
+  const rescanNeededRef = useRef(false);
 
   const scan = useCallback(async () => {
-    const list = servicesRef.current.filter(isWatchable);
-    if (list.length === 0) {
-      setAlerts({});
+    if (scanningRef.current) {
+      rescanNeededRef.current = true;
       return;
     }
+    scanningRef.current = true;
+    try {
+      const list = servicesRef.current.filter(isWatchable);
+      if (list.length === 0) {
+        setAlerts({});
+        return;
+      }
 
-    const entries = await Promise.all(
-      list.map(async (svc) => {
-        try {
-          const raw = await tailLog(svc.id, 200);
-          const ignored = getIgnoredSignatures(svc.id);
-          const { errorIndices, latestAtMs, latestLine } = analyzeServiceLogErrors(raw, {
-            ignoredSignatures: ignored.size > 0 ? ignored : undefined,
-          });
-          if (errorIndices.length === 0) {
+      const entries = await Promise.all(
+        list.map(async (svc) => {
+          try {
+            const raw = await tailLog(svc.id, 200);
+            const ignored = getIgnoredSignatures(svc.id);
+            const { errorIndices, latestAtMs, latestLine } = analyzeServiceLogErrors(raw, {
+              ignoredSignatures: ignored.size > 0 ? ignored : undefined,
+            });
+            if (errorIndices.length === 0) {
+              return [svc.id, null] as const;
+            }
+            return [
+              svc.id,
+              {
+                count: errorIndices.length,
+                latestAtMs,
+                latestLine,
+              } satisfies ServiceLogAlert,
+            ] as const;
+          } catch {
             return [svc.id, null] as const;
           }
-          return [
-            svc.id,
-            {
-              count: errorIndices.length,
-              latestAtMs,
-              latestLine,
-            } satisfies ServiceLogAlert,
-          ] as const;
-        } catch {
-          return [svc.id, null] as const;
-        }
-      }),
-    );
+        }),
+      );
 
-    const next: Record<string, ServiceLogAlert> = {};
-    for (const [id, alert] of entries) {
-      if (alert) next[id] = alert;
+      const next: Record<string, ServiceLogAlert> = {};
+      for (const [id, alert] of entries) {
+        if (alert) next[id] = alert;
+      }
+      setAlerts(next);
+    } finally {
+      scanningRef.current = false;
     }
-    setAlerts(next);
+    if (rescanNeededRef.current) {
+      rescanNeededRef.current = false;
+      void scan();
+    }
   }, [tailLog]);
 
   useEffect(() => {

@@ -56,8 +56,6 @@ interface Props {
   onClose: () => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
-  autoSyncIntervalSec: number;
-  onAutoSyncIntervalChange: (seconds: number) => void;
   totalConversations?: number;
   totalMessages?: number;
   appVersion?: string;
@@ -67,8 +65,6 @@ export const SettingsModal: React.FC<Props> = ({
   onClose,
   theme,
   onToggleTheme,
-  autoSyncIntervalSec,
-  onAutoSyncIntervalChange,
   totalConversations = 0,
   totalMessages = 0,
   appVersion = 'unknown',
@@ -123,6 +119,10 @@ export const SettingsModal: React.FC<Props> = ({
   });
   const [disableThinking, setDisableThinking] = useState<boolean>(() => {
     return localStorage.getItem('agentdeck_ai_disable_thinking') !== 'false';
+  });
+  const [batchConcurrency, setBatchConcurrency] = useState<number>(() => {
+    const raw = Number(localStorage.getItem('agentdeck_batch_concurrency'));
+    return Number.isFinite(raw) && raw >= 1 ? Math.min(10, Math.floor(raw)) : 2;
   });
 
   const [selectedProviderId, setSelectedProviderId] = useState<string>(() => {
@@ -396,6 +396,12 @@ export const SettingsModal: React.FC<Props> = ({
     const next = !disableThinking;
     setDisableThinking(next);
     localStorage.setItem('agentdeck_ai_disable_thinking', String(next));
+  };
+
+  const handleBatchConcurrencyChange = (value: number) => {
+    const clamped = Math.max(1, Math.min(10, value));
+    setBatchConcurrency(clamped);
+    localStorage.setItem('agentdeck_batch_concurrency', String(clamped));
   };
 
   // 单个模型测试连接（通过 Rust 原生端点发起，彻底避免 WebKit/浏览器 CORS 拦截）
@@ -692,6 +698,23 @@ export const SettingsModal: React.FC<Props> = ({
                       <span className="text-[10px] font-mono theme-text-sub">
                         {customModels[fallbackProvider.id] || fallbackProvider.defaultModel}
                       </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1 text-[11px] theme-text-muted">
+                    <span className="theme-text-muted" title={t('settings.batchConcurrencyHint')}>
+                      {t('settings.batchConcurrency')}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={1}
+                        max={10}
+                        value={batchConcurrency}
+                        onChange={(e) => handleBatchConcurrencyChange(Number(e.target.value))}
+                        className="w-28 accent-blue-600 cursor-pointer"
+                      />
+                      <span className="font-mono font-bold theme-text-main w-4 text-center">{batchConcurrency}</span>
                     </div>
                   </div>
 
@@ -1165,32 +1188,6 @@ export const SettingsModal: React.FC<Props> = ({
                         {totalMessages.toLocaleString()}
                       </div>
                     </div>
-                  </div>
-                </div>
-
-                <div className="theme-bg-sub border theme-border rounded-xl p-4 space-y-3">
-                  <div>
-                    <div className="text-xs font-semibold theme-text-main">{t('settings.syncFreq')}</div>
-                    <p className="text-[11px] theme-text-muted mt-1">
-                      {t('settings.syncFreqHint')}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <CustomSelect<number>
-                      value={autoSyncIntervalSec}
-                      onChange={(val) => onAutoSyncIntervalChange(val)}
-                      options={[
-                        { value: 30, label: t('settings.sec30'), subLabel: t('settings.highFreq') },
-                        { value: 60, label: t('settings.sec60'), subLabel: t('settings.recommended') },
-                        { value: 120, label: t('settings.sec120'), subLabel: t('settings.powerSave') },
-                        { value: 300, label: t('settings.sec300'), subLabel: t('settings.lowFreq') },
-                      ]}
-                      className="min-w-[130px]"
-                    />
-                    <span className="text-[11px] theme-text-sub">
-                      {t('settings.syncDefaultHint')}
-                    </span>
                   </div>
                 </div>
 
@@ -1731,7 +1728,7 @@ export const SettingsModal: React.FC<Props> = ({
                   </div>
                   <div className="flex justify-between py-1 border-b theme-border-sub">
                     <span className="theme-text-muted">{t('settings.agents')}</span>
-                    <span className="font-medium theme-text-main">Antigravity, Cursor, Claude Code, Codex, Hermes, WorkBuddy, Xiaomi MiMo</span>
+                    <span className="font-medium theme-text-main">Antigravity, Cursor, Claude Code, Codex, Hermes, WorkBuddy, Xiaomi MiMo, Windsurf</span>
                   </div>
                 </div>
               </div>

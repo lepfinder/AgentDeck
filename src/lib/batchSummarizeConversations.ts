@@ -80,23 +80,33 @@ export function selectConversationsForBatch(
   return selected.slice(0, max);
 }
 
-export function estimateBatchSeconds(count: number): number {
-  // 粗算：每条约 4–8 秒，取中位 6
-  return Math.max(0, count) * 6;
+/** 读取批量总结并行度（localStorage），默认 2，范围 1–10。 */
+export function getBatchConcurrency(): number {
+  const raw = Number(localStorage.getItem('agentdeck_batch_concurrency'));
+  if (!Number.isFinite(raw) || raw < 1) return 2;
+  return Math.min(10, Math.floor(raw));
+}
+
+export function estimateBatchSeconds(count: number, concurrency = 1): number {
+  // 粗算：每条约 4–8 秒，取中位 6；并行时除以并行度
+  const total = Math.max(0, count) * 6;
+  return Math.ceil(total / Math.max(1, concurrency));
 }
 
 /**
- * 串行批量总结命名。可取消；单条失败不中断。
- */
+ * 批量总结命名（并行）。可取消；单条失败不中断。
+*/
 export async function runBatchSummarize(params: {
   conversations: ConversationItem[];
   fetchMessages: (conversationId: string) => Promise<MessageItem[]>;
   onProgress: (progress: BatchProgress) => void;
   shouldCancel: () => boolean;
   onConversationUpdated?: (updated: ConversationItem) => void;
+  concurrency?: number;
 }): Promise<BatchProgress> {
   const { conversations, fetchMessages, onProgress, shouldCancel, onConversationUpdated } =
     params;
+  const concurrency = Math.max(1, Math.min(10, params.concurrency ?? 2));
 
   if (!getServiceLlmConfig()) {
     throw new Error('未配置 AI，请先在设置中填写 API Key');
@@ -124,39 +134,21 @@ export async function runBatchSummarize(params: {
 
   emit();
 
-  for (let i = 0; i < conversations.length; i++) {
-    if (shouldCancel()) {
-      progress.cancelled = true;
-      for (let j = i; j < progress.items.length; j++) {
-        if (progress.items[j].status === 'queued') {
-          progress.items[j] = { ...progress.items[j], status: 'skip', error: '已取消' };
-          progress.skip += 1;
-          progress.done += 1;
-        }
-      }
-      break;
-    }
+  const processItem = async (i: number) => {
+    if (shouldCancel() || progress.cancelled) return;
 
     const conv = conversations[i];
-    progress.currentId = conv.id;
     progress.items[i] = { ...progress.items[i], status: 'running' };
     emit();
 
     try {
       const messages = await fetchMessages(conv.id);
-      if (shouldCancel()) {
-        progress.cancelled = true;
+      if (shouldCancel() || progress.cancelled) {
         progress.items[i] = { ...progress.items[i], status: 'skip', error: '已取消' };
         progress.skip += 1;
         progress.done += 1;
-        for (let j = i + 1; j < progress.items.length; j++) {
-          if (progress.items[j].status === 'queued') {
-            progress.items[j] = { ...progress.items[j], status: 'skip', error: '已取消' };
-            progress.skip += 1;
-            progress.done += 1;
-          }
-        }
-        break;
+        emit();
+        return;
       }
 
       const hasUserText = messages.some(
@@ -171,7 +163,7 @@ export async function runBatchSummarize(params: {
         progress.skip += 1;
         progress.done += 1;
         emit();
-        continue;
+        return;
       }
 
       const updated = await summarizeConversation({ conversation: conv, messages });
@@ -189,9 +181,32 @@ export async function runBatchSummarize(params: {
       progress.error += 1;
       progress.done += 1;
     }
-
-    progress.currentId = null;
     emit();
+  };
+
+  // 并行 worker pool：concurrency 个 worker 抢占式处理队列
+  let nextIndex = 0;
+  const worker = async () => {
+    while (!shouldCancel() && !progress.cancelled) {
+      const i = nextIndex++;
+      if (i >= conversations.length) break;
+      await processItem(i);
+    }
+  };
+
+  const workerCount = Math.min(concurrency, conversations.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+
+  // 取消后标记剩余 queued 为 skip
+  if (shouldCancel() || progress.cancelled) {
+    progress.cancelled = true;
+    for (let j = 0; j < progress.items.length; j++) {
+      if (progress.items[j].status === 'queued') {
+        progress.items[j] = { ...progress.items[j], status: 'skip', error: '已取消' };
+        progress.skip += 1;
+        progress.done += 1;
+      }
+    }
   }
 
   progress.finished = true;

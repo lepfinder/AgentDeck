@@ -25,7 +25,8 @@ import {
   ArrowLeft,
   ArrowUpDown,
   Maximize2,
-  X,
+ Minimize2,
+ X,
   FileText,
   Copy,
   Check,
@@ -34,6 +35,9 @@ import {
   Layers,
   Loader2,
   StopCircle,
+  ArrowRightLeft,
+  CheckCircle2,
+  FolderInput,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
 import {
@@ -45,6 +49,7 @@ import {
   DEFAULT_BATCH_SUMMARIZE_OPTIONS,
   estimateBatchSeconds,
   fetchConversationMessages,
+  getBatchConcurrency,
   runBatchSummarize,
   selectConversationsForBatch,
   type BatchProgress,
@@ -96,6 +101,16 @@ export const BrowseView: React.FC<Props> = ({
   const [currentConv, setCurrentConv] = useState<ConversationItem | null>(null);
 
   const [wsSearch, setWsSearch] = useState('');
+  // 工作区合并 / 重命名
+  const [mergeSource, setMergeSource] = useState<WorkspaceStat | null>(null);
+  const [mergeMode, setMergeMode] = useState<'existing' | 'rename'>('existing');
+  const [mergeTarget, setMergeTarget] = useState('');
+  const [mergeBusy, setMergeBusy] = useState(false);
+  const [mergeToast, setMergeToast] = useState<string | null>(null);
+  // 会话移动到其他工作区
+  const [moveConv, setMoveConv] = useState<ConversationItem | null>(null);
+  const [moveConvTarget, setMoveConvTarget] = useState('');
+  const [moveConvBusy, setMoveConvBusy] = useState(false);
   const [convSearch, setConvSearch] = useState('');
   const [loadingConv, setLoadingConv] = useState(false);
   const [starredCount, setStarredCount] = useState(0);
@@ -259,6 +274,63 @@ export const BrowseView: React.FC<Props> = ({
     loadWorkspaces();
   }, [wsSearch]);
 
+  const handleMergeWorkspace = async () => {
+    if (!mergeSource || !mergeTarget.trim()) return;
+    setMergeBusy(true);
+    try {
+      const result = await api.mergeWorkspace(mergeSource.workspace_path, mergeTarget.trim());
+      setMergeToast(
+        t('ws.mergeSuccess', {
+          n: result.moved_conversations,
+          target: result.target_path.split('/').slice(-1)[0] || result.target_path,
+        })
+      );
+      setMergeSource(null);
+      setMergeTarget('');
+      await loadWorkspaces();
+      onRefreshStats?.();
+      // 若正浏览源工作区，跳到合并后的目标
+      if (selectedWorkspace === result.source_path) {
+        onSelectWorkspace(result.target_path);
+        onSelectConversation('');
+      }
+    } catch (e) {
+      console.error(e);
+      setMergeToast(t('ws.mergeFailed'));
+    } finally {
+      setMergeBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!mergeToast) return;
+    const id = window.setTimeout(() => setMergeToast(null), 3500);
+    return () => window.clearTimeout(id);
+  }, [mergeToast]);
+
+  const handleMoveConversation = async () => {
+    if (!moveConv || !moveConvTarget.trim()) return;
+    setMoveConvBusy(true);
+    try {
+      const result = await api.moveConversation(moveConv.id, moveConvTarget.trim());
+      setMergeToast(
+        t('conv.moveSuccess', {
+          target: result.target_path.split('/').slice(-1)[0] || result.target_path,
+        })
+      );
+      setMoveConv(null);
+      setMoveConvTarget('');
+      await loadConversations();
+      await loadWorkspaces();
+      onRefreshStats?.();
+    } catch (e) {
+      console.error(e);
+      setMergeToast(t('conv.moveFailed'));
+    } finally {
+      setMoveConvBusy(false);
+    }
+  };
+
   const loadingConvsRef = useRef(false);
   // 加载会话列表（带并发锁）
   const loadConversations = async () => {
@@ -297,7 +369,8 @@ export const BrowseView: React.FC<Props> = ({
   }, [selectedWorkspace, isStarredView]);
 
   const batchCandidates = selectConversationsForBatch(conversations, batchOpts);
-  const batchEstimateSec = estimateBatchSeconds(batchCandidates.length);
+  const batchConcurrency = getBatchConcurrency();
+  const batchEstimateSec = estimateBatchSeconds(batchCandidates.length, batchConcurrency);
 
   const openBatchConfirm = () => {
     if (isStarredView || !selectedWorkspace || batchRunning) return;
@@ -442,11 +515,12 @@ export const BrowseView: React.FC<Props> = ({
     try {
       await runBatchSummarize({
         conversations: targets,
-        fetchMessages: fetchConversationMessages,
-        shouldCancel: () => batchCancelRef.current,
-        onProgress: setBatchProgress,
-        onConversationUpdated: applyConversationUpdate,
-      });
+       fetchMessages: fetchConversationMessages,
+       shouldCancel: () => batchCancelRef.current,
+       onProgress: setBatchProgress,
+       onConversationUpdated: applyConversationUpdate,
+       concurrency: batchConcurrency,
+     });
     } catch (e) {
       setBatchError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -542,6 +616,8 @@ export const BrowseView: React.FC<Props> = ({
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-cyan-500/15 text-cyan-500 border border-cyan-500/30 rounded">WorkBuddy</span>;
       case 'mimo':
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-rose-500/15 text-rose-500 border border-rose-500/30 rounded">MiMo</span>;
+      case 'windsurf':
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-sky-500/15 text-sky-500 border border-sky-500/30 rounded">Windsurf</span>;
       default:
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted rounded">{source}</span>;
     }
@@ -694,8 +770,21 @@ export const BrowseView: React.FC<Props> = ({
                   isActive
                     ? 'bg-blue-600/15 border-blue-500/50 theme-text-main font-semibold shadow-xs'
                     : 'bg-transparent border-transparent hover:theme-bg-card theme-text-muted hover:theme-text-main'
-                }`}
+                } group relative`}
               >
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMergeSource(ws);
+                    setMergeMode('existing');
+                    setMergeTarget('');
+                  }}
+                  title={t('ws.merge')}
+                  className="absolute top-2 right-2 p-1 rounded-md theme-text-muted hover:theme-text-main hover:theme-bg-card opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                >
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                </button>
                 <div className="flex items-center justify-between">
                   <span className="font-bold theme-text-main text-xs truncate pr-1">{shortName}</span>
                   {ws.last_updated && (
@@ -744,6 +833,11 @@ export const BrowseView: React.FC<Props> = ({
                   {(ws.mimo_cnt ?? 0) > 0 && (
                     <span className="px-1 py-0.2 text-[9px] bg-rose-500/15 text-rose-500 rounded font-mono">
                       MiMo {ws.mimo_cnt}
+                    </span>
+                  )}
+                  {(ws.windsurf_cnt ?? 0) > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-sky-500/15 text-sky-500 rounded font-mono">
+                      Windsurf {ws.windsurf_cnt}
                     </span>
                   )}
                 </div>
@@ -847,10 +941,22 @@ export const BrowseView: React.FC<Props> = ({
                     className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
                       isSelected
                         ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
-                        : 'theme-bg-card border-transparent hover:theme-border theme-text-muted hover:theme-text-main shadow-2xs'
-                    }`}
+                      : 'theme-bg-card border-transparent hover:theme-border theme-text-muted hover:theme-text-main shadow-2xs'
+                   } group relative`}
                   >
-                    <div className="flex items-start justify-between gap-1.5">
+                   <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setMoveConv(conv);
+                        setMoveConvTarget('');
+                      }}
+                      title={t('conv.moveTo')}
+                      className="absolute top-2 right-2 p-1 rounded-md theme-text-muted hover:theme-text-main hover:theme-bg-card opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                    >
+                      <FolderInput className="h-3.5 w-3.5" />
+                    </button>
+                   <div className="flex items-start justify-between gap-1.5">
                       <div className="font-medium line-clamp-2 theme-text-main flex items-center gap-1">
                         {conv.is_starred && (
                           <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
@@ -1000,36 +1106,32 @@ export const BrowseView: React.FC<Props> = ({
                   </div>
 
                   {/* 顶部操作区 */}
-                  <div className="flex items-center gap-2 shrink-0 whitespace-nowrap">
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       onClick={handleSummarize}
                       disabled={summarizing || loadingConv || messages.length === 0 || renaming}
-                      title={t('conv.summarizeHint')}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
+                      title={summarizing ? t('conv.summarizing') : t('conv.summarize')}
+                      className="flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
                     >
-                      <Sparkles className={`h-3.5 w-3.5 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
-                      <span>{summarizing ? t('conv.summarizing') : t('conv.summarize')}</span>
+                      <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
                     </button>
 
                     {currentConv.ai_summary && (
                       <button
                         onClick={() => setSummaryOpen((v) => !v)}
-                        title={t('conv.toggleSummary')}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                        title={summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}
+                        className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
                       >
-                        <AlignLeft className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                        <span>{summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}</span>
+                        <AlignLeft className="h-4 w-4 shrink-0" />
                       </button>
                     )}
 
-                    {/* 正序 / 倒序切换按钮 */}
                     <button
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
                       title={sortOrder === 'asc' ? t('conv.sortTitleAsc') : t('conv.sortTitleDesc')}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                      className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
                     >
-                      <ArrowUpDown className="h-3.5 w-3.5 text-blue-500 shrink-0" />
-                      <span>{sortOrder === 'asc' ? t('conv.sortAsc') : t('conv.sortDesc')}</span>
+                      <ArrowUpDown className="h-4 w-4 shrink-0" />
                     </button>
 
                     <button
@@ -1046,13 +1148,22 @@ export const BrowseView: React.FC<Props> = ({
                         }
                         setExpandedTurns(next);
                       }}
-                      className="px-2.5 py-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-xs font-medium theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                      title={
+                        messageTurns.length > 0 &&
+                        Object.keys(expandedTurns).length === messageTurns.length &&
+                        Object.values(expandedTurns).every(Boolean)
+                          ? t('conv.collapseAll')
+                          : t('conv.expandAll')
+                      }
+                      className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
                     >
                       {messageTurns.length > 0 &&
                       Object.keys(expandedTurns).length === messageTurns.length &&
-                      Object.values(expandedTurns).every(Boolean)
-                        ? t('conv.collapseAll')
-                        : t('conv.expandAll')}
+                      Object.values(expandedTurns).every(Boolean) ? (
+                        <Minimize2 className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <Maximize2 className="h-4 w-4 shrink-0" />
+                      )}
                     </button>
 
                     {artifacts.length > 0 && (
@@ -1063,28 +1174,27 @@ export const BrowseView: React.FC<Props> = ({
                           }
                           setShowArtifactModal(true);
                         }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold bg-emerald-500/10 border-emerald-500/35 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0"
-                        title="查看本会话制定的实施方案与产物文档"
+                        title={t('conv.artifactsBtn', { n: artifacts.length })}
+                        className="flex items-center justify-center p-1.5 rounded-lg border bg-emerald-500/10 border-emerald-500/35 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20 transition-all cursor-pointer shadow-xs shrink-0"
                       >
-                        <FileText className="h-3.5 w-3.5 shrink-0" />
-                        <span>实施方案 ({artifacts.length})</span>
+                        <FileText className="h-4 w-4 shrink-0" />
                       </button>
                     )}
 
                     <button
                       onClick={handleToggleStar}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all cursor-pointer shadow-xs whitespace-nowrap shrink-0 ${
+                      title={currentConv.is_starred ? t('conv.starredBtn') : t('conv.star')}
+                      className={`flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 ${
                         currentConv.is_starred
                           ? 'bg-amber-500/15 border-amber-500/40 text-amber-500'
                           : 'theme-bg-sub hover:opacity-80 theme-border theme-text-main'
                       }`}
                     >
                       <Star
-                        className={`h-3.5 w-3.5 shrink-0 ${
+                        className={`h-4 w-4 shrink-0 ${
                           currentConv.is_starred ? 'fill-amber-400 text-amber-400' : 'theme-text-sub'
                         }`}
                       />
-                      <span>{currentConv.is_starred ? t('conv.starredBtn') : t('conv.star')}</span>
                     </button>
                   </div>
                 </div>
@@ -1102,6 +1212,17 @@ export const BrowseView: React.FC<Props> = ({
                           {currentConv.ai_model && (
                             <span className="font-mono font-normal theme-text-muted">
                               · {currentConv.ai_model}
+                            </span>
+                          )}
+                          {currentConv.ai_generated_at && (
+                            <span className="font-normal theme-text-muted">
+                              · {t('conv.summaryGeneratedAt', { time: formatBeijingTime(currentConv.ai_generated_at) })}
+                            </span>
+                          )}
+                          {currentConv.ai_new_message_count != null &&
+                            currentConv.ai_new_message_count > 0 && (
+                            <span className="font-normal text-amber-600">
+                              · {t('conv.newMessagesSince', { n: currentConv.ai_new_message_count })}
                             </span>
                           )}
                         </div>
@@ -1724,6 +1845,187 @@ export const BrowseView: React.FC<Props> = ({
         currentArtifact={selectedArtifact}
         onSelectArtifact={(art) => setSelectedArtifact(art)}
       />
+      {mergeSource && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={() => !mergeBusy && setMergeSource(null)}
+        >
+          <div
+            className="w-full max-w-md theme-bg-card border theme-border rounded-2xl shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-sm font-bold theme-text-main">{t('ws.mergeTitle')}</h3>
+              <p className="text-[11px] theme-text-muted mt-1">{t('ws.mergeHint')}</p>
+            </div>
+
+            <div className="theme-bg-sub border theme-border rounded-lg p-3 space-y-1">
+              <div className="text-[10px] theme-text-muted">{t('ws.mergeSource')}</div>
+              <div className="text-xs theme-text-main font-mono break-all">{mergeSource.workspace_path}</div>
+              <div className="text-[10px] theme-text-sub mt-1">
+                {t('ws.mergeSourceCount', { n: mergeSource.cnt })}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMergeMode('existing')}
+                className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                  mergeMode === 'existing'
+                    ? 'bg-blue-600/15 border-blue-500/50 text-blue-500'
+                    : 'theme-bg-sub theme-border theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                {t('ws.mergeToExisting')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMergeMode('rename')}
+                className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                  mergeMode === 'rename'
+                    ? 'bg-blue-600/15 border-blue-500/50 text-blue-500'
+                    : 'theme-bg-sub theme-border theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                {t('ws.renameToNew')}
+              </button>
+            </div>
+
+            {mergeMode === 'existing' ? (
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                <label className="text-[11px] font-medium theme-text-muted block">{t('ws.mergePickTarget')}</label>
+                {workspaces
+                  .filter((w) => w.workspace_path !== mergeSource.workspace_path)
+                  .map((w) => {
+                    const name = w.workspace_path.split('/').slice(-1)[0] || w.workspace_path;
+                    const selected = mergeTarget === w.workspace_path;
+                    return (
+                      <button
+                        key={w.workspace_path}
+                        type="button"
+                        onClick={() => setMergeTarget(w.workspace_path)}
+                        className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors cursor-pointer ${
+                          selected
+                            ? 'bg-blue-600/15 border-blue-500/50 text-blue-500 font-semibold'
+                            : 'theme-bg-sub theme-border theme-text-muted hover:theme-text-main'
+                        }`}
+                      >
+                        <div className="font-bold truncate">{name}</div>
+                        <div className="text-[10px] theme-text-sub truncate font-mono">{w.workspace_path}</div>
+                      </button>
+                    );
+                  })}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-medium theme-text-muted block">{t('ws.mergeNewPath')}</label>
+                <input
+                  value={mergeTarget}
+                  onChange={(e) => setMergeTarget(e.target.value)}
+                  placeholder={t('ws.mergeNewPathPh')}
+                  className="w-full px-3 py-2 text-sm theme-bg-input border theme-border rounded-lg theme-text-main font-mono focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+
+            <p className="text-[10px] theme-text-sub leading-relaxed">{t('ws.mergeAnalysisNote')}</p>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setMergeSource(null)}
+                disabled={mergeBusy}
+                className="px-4 py-2 text-xs font-medium theme-bg-sub border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {t('ws.mergeCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleMergeWorkspace}
+                disabled={mergeBusy || !mergeTarget.trim()}
+                className="px-4 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {mergeBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                <span>{mergeBusy ? t('ws.merging') : t('ws.mergeConfirm')}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {mergeToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-2.5 bg-slate-900/90 text-white text-xs font-medium rounded-xl shadow-2xl border border-white/10 backdrop-blur-md">
+          <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+          <span>{mergeToast}</span>
+        </div>
+      )}
+      {moveConv && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={() => !moveConvBusy && setMoveConv(null)}
+        >
+          <div
+            className="w-full max-w-md theme-bg-card border theme-border rounded-2xl shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="text-sm font-bold theme-text-main">{t('conv.moveTitle')}</h3>
+              <p className="text-[11px] theme-text-muted mt-1">{t('conv.moveHint')}</p>
+            </div>
+
+            <div className="theme-bg-sub border theme-border rounded-lg p-3 space-y-1">
+              <div className="text-[10px] theme-text-muted">{t('conv.moveSession')}</div>
+              <div className="text-xs theme-text-main truncate">{moveConv.title || t('conv.untitled')}</div>
+              <div className="text-[10px] theme-text-sub font-mono truncate mt-1">{moveConv.id}</div>
+            </div>
+
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              <label className="text-[11px] font-medium theme-text-muted block">{t('conv.movePickTarget')}</label>
+              {workspaces
+                .filter((w) => w.workspace_path !== selectedWorkspace)
+                .map((w) => {
+                  const name = w.workspace_path.split('/').slice(-1)[0] || w.workspace_path;
+                  const selected = moveConvTarget === w.workspace_path;
+                  return (
+                    <button
+                      key={w.workspace_path}
+                      type="button"
+                      onClick={() => setMoveConvTarget(w.workspace_path)}
+                      className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors cursor-pointer ${
+                        selected
+                          ? 'bg-blue-600/15 border-blue-500/50 text-blue-500 font-semibold'
+                          : 'theme-bg-sub theme-border theme-text-muted hover:theme-text-main'
+                      }`}
+                    >
+                      <div className="font-bold truncate">{name}</div>
+                      <div className="text-[10px] theme-text-sub truncate font-mono">{w.workspace_path}</div>
+                    </button>
+                  );
+                })}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setMoveConv(null)}
+                disabled={moveConvBusy}
+                className="px-4 py-2 text-xs font-medium theme-bg-sub border theme-border rounded-lg theme-text-muted hover:theme-text-main transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {t('ws.mergeCancel')}
+              </button>
+              <button
+                type="button"
+                onClick={handleMoveConversation}
+                disabled={moveConvBusy || !moveConvTarget.trim()}
+                className="px-4 py-2 text-xs font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-500 transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {moveConvBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                <span>{moveConvBusy ? t('ws.merging') : t('conv.moveConfirm')}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

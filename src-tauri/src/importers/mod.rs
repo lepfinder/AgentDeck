@@ -12,6 +12,7 @@ pub mod codex;
 pub mod cursor;
 pub mod hermes;
 pub mod mimo;
+pub mod windsurf;
 pub mod workbuddy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,6 +310,15 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
     let total_msg_count = conv.messages.len() as i64;
     let content_hash = conversation_content_hash(conv);
     let workspace_path = canonicalize_workspace_path(&conv.workspace_path);
+    // 套用工作区别名：项目重命名合并后，源日志中的旧路径自动映射到新路径，
+    // 防止后续同步把已合并的工作区重新拆分出来
+    let workspace_path =
+        crate::db::resolve_workspace_alias(conn, &workspace_path).unwrap_or(workspace_path);
+    // 会话级覆盖优先：用户把单条会话移到别的项目后，以此为准不被源日志覆盖
+    let workspace_path = match crate::db::conversation_workspace_override(conn, &conv.id) {
+        Ok(Some(override_path)) => override_path,
+        _ => workspace_path,
+    };
 
     let norm_created = normalize_to_iso(conv.created_at.clone());
     let norm_updated = normalize_to_iso(conv.updated_at.clone()).or_else(|| norm_created.clone());
@@ -583,6 +593,10 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
 /// 统一同步引擎调度器
 pub struct SyncEngine;
 
+fn sync_log_ts() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
 impl SyncEngine {
     pub fn run_all(
         conn: &Connection,
@@ -596,12 +610,13 @@ impl SyncEngine {
         let mut all_stats = Vec::new();
 
         println!(
-            "[AgentDeck SyncEngine] 🚀 开始纯 Rust 原生全源扫描同步 (incremental: {})...",
+            "[{}] [AgentDeck SyncEngine] 🚀 开始纯 Rust 原生全源扫描同步 (incremental: {})...",
+            sync_log_ts(),
             incremental
         );
 
         type ImporterFn = fn(&Connection, bool) -> ImporterStats;
-        let importers: [(&str, ImporterFn); 7] = [
+        let importers: [(&str, ImporterFn); 8] = [
             ("Antigravity", antigravity::sync),
             ("Cursor", cursor::sync),
             ("Claude", claude::sync),
@@ -609,13 +624,15 @@ impl SyncEngine {
             ("Hermes", hermes::sync),
             ("WorkBuddy", workbuddy::sync),
             ("MiMo", mimo::sync),
+            ("Windsurf", windsurf::sync),
         ];
 
         for (name, importer) in importers {
             let src_start = Instant::now();
             let stat = importer(conn, incremental);
             println!(
-                "[AgentDeck SyncEngine] └─ {} 完成 ({}ms) => 新增 {}, 更新 {}, 跳过 {}, 错误 {}",
+                "[{}] [AgentDeck SyncEngine] └─ {} 完成 ({}ms) => 新增 {}, 更新 {}, 跳过 {}, 错误 {}",
+                sync_log_ts(),
                 name,
                 src_start.elapsed().as_millis(),
                 stat.new_count,
@@ -632,7 +649,8 @@ impl SyncEngine {
         }
 
         println!(
-            "[AgentDeck SyncEngine] ✅ 同步完成 (耗时: {}ms) => 新增: {}, 更新: {}, 跳过: {}, 错误: {}",
+            "[{}] [AgentDeck SyncEngine] ✅ 同步完成 (耗时: {}ms) => 新增: {}, 更新: {}, 跳过: {}, 错误: {}",
+            sync_log_ts(),
             start.elapsed().as_millis(),
             total_new,
             total_updated,
@@ -796,4 +814,3 @@ mod tests {
         assert_eq!(canon, "/Users/xiyangxie/workspace/chuhai/notix");
     }
 }
-

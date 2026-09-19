@@ -10,6 +10,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import {
+  errorSignature,
   findErrorLineIndices,
   formatErrorAgo,
   formatServiceLog,
@@ -27,10 +28,6 @@ interface ServiceConsoleProps {
   ignoredSignatures?: ReadonlySet<string>;
   ignoreEpoch?: number;
   onIgnoreErrors?: (signatures: string[]) => void;
-}
-
-function errorSignature(line: string): string {
-  return line.trim();
 }
 
 export function ServiceConsole({

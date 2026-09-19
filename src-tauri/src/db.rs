@@ -35,6 +35,7 @@ pub struct WorkspaceStat {
     pub wb_cnt: i64,
     pub hermes_cnt: i64,
     pub mimo_cnt: i64,
+    pub windsurf_cnt: i64,
     pub message_count: i64,
     pub user_message_count: i64,
     pub last_updated: Option<String>,
@@ -55,6 +56,8 @@ pub struct ConversationItem {
     pub ai_summary_stale: bool,
     pub ai_model: Option<String>,
     pub ai_generated_at: Option<String>,
+    /// 总结之后新增的消息条数（当前 message_count - 总结时 message_count）；无摘要或无新增时为 None
+    pub ai_new_message_count: Option<i64>,
     pub content_hash: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -337,6 +340,7 @@ pub struct WorkspaceDetailStats {
     pub wb_conversation_count: i64,
     pub hermes_conversation_count: i64,
     pub mimo_conversation_count: i64,
+    pub windsurf_conversation_count: i64,
     pub user_message_count: i64,
     pub message_count: i64,
     pub agent_breakdown: String,
@@ -430,6 +434,14 @@ pub fn open_read_connection() -> Result<Connection> {
     Ok(conn)
 }
 
+/// 打开独立写连接（后台同步任务用，避免占用 DbState 主锁过久）
+pub fn open_write_connection() -> Result<Connection> {
+    let db_path = get_database_path();
+    let conn = Connection::open(&db_path)?;
+    apply_write_pragmas(&conn);
+    Ok(conn)
+}
+
 pub fn get_database_path() -> PathBuf {
     // 1. 若设置了环境变量 AGENTDECK_DB_PATH，直接遵循外部指定
     if let Ok(env_path) = std::env::var("AGENTDECK_DB_PATH") {
@@ -459,6 +471,22 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             workspace_path TEXT PRIMARY KEY,
             display_name TEXT,
             last_updated TEXT
+        );
+
+        -- 工作区别名：项目在磁盘上重命名后，把旧路径永久映射到新路径。
+        -- 同步导入时套用该映射，避免源日志中的旧路径把已合并的工作区"复活"。
+        CREATE TABLE IF NOT EXISTS workspace_aliases (
+            old_path TEXT PRIMARY KEY,
+            new_path TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        -- 会话级工作区覆盖：用户把单条会话移动到别的项目后，
+        -- 同步重导时以此为准，不被源日志里的原工作区覆盖。
+        CREATE TABLE IF NOT EXISTS conversation_workspace_overrides (
+            conversation_id TEXT PRIMARY KEY,
+            workspace_path TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS conversations (
@@ -565,11 +593,24 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             content TEXT NOT NULL DEFAULT '',
-            category TEXT NOT NULL DEFAULT 'coding',
+            category TEXT NOT NULL DEFAULT 'image',
             tags_json TEXT NOT NULL DEFAULT '[]',
             source_url TEXT,
             source_note TEXT,
             notes TEXT,
+            preview_url TEXT,
+            preview_local TEXT,
+            origin TEXT NOT NULL DEFAULT 'user',
+            external_id TEXT,
+            genre TEXT,
+            styles_json TEXT NOT NULL DEFAULT '[]',
+            scenes_json TEXT NOT NULL DEFAULT '[]',
+            featured INTEGER NOT NULL DEFAULT 0,
+            github_url TEXT,
+            prompt_preview TEXT,
+            content_hash TEXT,
+            preview_width INTEGER,
+            preview_height INTEGER,
             is_starred INTEGER NOT NULL DEFAULT 0,
             use_count INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL,
@@ -648,6 +689,47 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE conversations ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+
+    // 会话 AI 摘要：记录总结时的消息条数，用于展示"总结后新增 N 条"
+    let _ = conn.execute(
+        "ALTER TABLE conversation_ai ADD COLUMN based_on_message_count INTEGER",
+        [],
+    );
+
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_url TEXT", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_local TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE prompts ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN external_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN genre TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE prompts ADD COLUMN styles_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE prompts ADD COLUMN scenes_json TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE prompts ADD COLUMN featured INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN github_url TEXT", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN prompt_preview TEXT", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN content_hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_width INTEGER", []);
+    let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_height INTEGER", []);
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_prompts_external_id ON prompts(external_id) WHERE external_id IS NOT NULL AND external_id != ''",
+        [],
+    );
+    // 旧细分类收敛为 text / image / video
+    let _ = conn.execute(
+        "UPDATE prompts SET category = 'text' WHERE category IN ('coding','research','writing','product','agent','persona','meta')",
         [],
     );
 
@@ -863,6 +945,8 @@ fn source_to_label_and_color(app: &str) -> (&'static str, &'static str) {
         "hermes" => ("Hermes", "#8b5cf6"),
         "codex" => ("Codex", "#ec4899"),
         "workbuddy" => ("WorkBuddy", "#06b6d4"),
+        "mimo" => ("MiMo", "#f43f5e"),
+        "windsurf" => ("Windsurf", "#0ea5e9"),
         _ => ("Other", "#64748b"),
     }
 }
@@ -997,6 +1081,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as app,
             COUNT(*) as cnt
@@ -1037,6 +1122,7 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as app,
             SUM(message_count) as cnt
@@ -1591,6 +1677,7 @@ pub fn fetch_workspaces(
             SUM(CASE WHEN COALESCE(source_app, '') = 'workbuddy' OR source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END) as wb_cnt,
             SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END) as hermes_cnt,
             SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END) as mimo_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'windsurf' OR source_types LIKE '%windsurf%' THEN 1 ELSE 0 END) as windsurf_cnt,
             SUM(message_count) as message_count,
             SUM(user_message_count) as user_message_count,
             MAX(updated_at) as last_updated
@@ -1615,9 +1702,10 @@ pub fn fetch_workspaces(
                 wb_cnt: row.get(6).unwrap_or(0),
                 hermes_cnt: row.get(7).unwrap_or(0),
                 mimo_cnt: row.get(8).unwrap_or(0),
-                message_count: row.get(9).unwrap_or(0),
-                user_message_count: row.get(10).unwrap_or(0),
-                last_updated: to_beijing_iso(row.get(11)?),
+                windsurf_cnt: row.get(9).unwrap_or(0),
+                message_count: row.get(10).unwrap_or(0),
+                user_message_count: row.get(11).unwrap_or(0),
+                last_updated: to_beijing_iso(row.get(12)?),
             })
         },
     )?;
@@ -1626,6 +1714,220 @@ pub fn fetch_workspaces(
         list.push(r);
     }
     Ok(list)
+}
+
+/// 解析工作区别名链（old → new → newer…）；无别名时原样返回。
+/// 迭代上限防御异常数据成环。
+pub fn resolve_workspace_alias(conn: &Connection, path: &str) -> Result<String> {
+    let mut current = path.to_string();
+    for _ in 0..16 {
+        let next: Option<String> = match conn.query_row(
+            "SELECT new_path FROM workspace_aliases WHERE old_path = ?1",
+            params![&current],
+            |r| r.get(0),
+        ) {
+            Ok(v) => Some(v),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e),
+        };
+        match next {
+            Some(n) if n != current => current = n,
+            _ => break,
+        }
+    }
+    Ok(current)
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceMergeResult {
+    pub source_path: String,
+    pub target_path: String,
+    pub moved_conversations: usize,
+    pub moved_analysis_blocks: usize,
+    /// true = 目标已有 AI 分析，保留目标并丢弃源侧产物
+    pub kept_target_analysis: bool,
+}
+
+/// 合并 / 重命名工作区：把 source 的全部会话与 AI 分析产物并入 target，
+/// 并写入持久别名，保证后续同步导入旧路径时自动落到 target。
+pub fn merge_workspace(
+    conn: &Connection,
+    source_path: &str,
+    target_path: &str,
+) -> Result<WorkspaceMergeResult> {
+    use crate::importers::canonicalize_workspace_path;
+
+    let source = canonicalize_workspace_path(source_path);
+    let mut target = canonicalize_workspace_path(target_path);
+    if source.is_empty() || target.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "workspace path cannot be empty".into(),
+        ));
+    }
+
+    // target 自身可能已是别名（曾被合并过），解析到最终真实路径
+    target = resolve_workspace_alias(conn, &target)?;
+    if source == target {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "source and target workspace are the same".into(),
+        ));
+    }
+
+    let source_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversations WHERE workspace_path = ?1",
+        params![&source],
+        |r| r.get(0),
+    )?;
+    if source_count == 0 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "source workspace has no conversations".into(),
+        ));
+    }
+
+    let tx = conn.unchecked_transaction()?;
+
+    let moved_conversations = tx.execute(
+        "UPDATE conversations SET workspace_path = ?1 WHERE workspace_path = ?2",
+        params![&target, &source],
+    )? as usize;
+
+    // AI 分析产物冲突策略：目标已有则保留目标（可重新生成），否则整体搬运
+    let target_fine: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM workspace_blocks_fine WHERE workspace_path = ?1",
+        params![&target],
+        |r| r.get(0),
+    )?;
+    let target_modules: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM workspace_blocks_modules WHERE workspace_path = ?1",
+        params![&target],
+        |r| r.get(0),
+    )?;
+    let target_report: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM workspace_reports WHERE workspace_path = ?1",
+        params![&target],
+        |r| r.get(0),
+    )?;
+    let kept_target_analysis = target_fine > 0 || target_modules > 0 || target_report > 0;
+
+    let mut moved_analysis_blocks = 0usize;
+    if kept_target_analysis {
+        tx.execute(
+            "DELETE FROM workspace_blocks_fine WHERE workspace_path = ?1",
+            params![&source],
+        )?;
+        tx.execute(
+            "DELETE FROM workspace_blocks_modules WHERE workspace_path = ?1",
+            params![&source],
+        )?;
+        tx.execute(
+            "DELETE FROM workspace_reports WHERE workspace_path = ?1",
+            params![&source],
+        )?;
+    } else {
+        moved_analysis_blocks += tx.execute(
+            "UPDATE workspace_blocks_fine SET workspace_path = ?1 WHERE workspace_path = ?2",
+            params![&target, &source],
+        )? as usize;
+        moved_analysis_blocks += tx.execute(
+            "UPDATE workspace_blocks_modules SET workspace_path = ?1 WHERE workspace_path = ?2",
+            params![&target, &source],
+        )? as usize;
+        tx.execute(
+            "UPDATE workspace_reports SET workspace_path = ?1 WHERE workspace_path = ?2",
+            params![&target, &source],
+        )?;
+    }
+
+    // 持久别名：同步导入旧路径时自动映射（链式别名在 resolve 时逐跳解析）
+    let now = chrono::Utc::now().to_rfc3339();
+    tx.execute(
+        r#"
+        INSERT INTO workspace_aliases (old_path, new_path, created_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(old_path) DO UPDATE SET
+            new_path = excluded.new_path,
+            created_at = excluded.created_at
+        "#,
+        params![&source, &target, &now],
+    )?;
+
+    // workspaces 表已退化为兼容残留，同步清理源路径
+    tx.execute(
+        "DELETE FROM workspaces WHERE workspace_path = ?1",
+        params![&source],
+    )?;
+
+    tx.commit()?;
+
+    Ok(WorkspaceMergeResult {
+        source_path: source,
+        target_path: target,
+        moved_conversations,
+        moved_analysis_blocks,
+        kept_target_analysis,
+    })
+}
+
+/// 读取会话级工作区覆盖（同步导入时以此为准）。无覆盖返回 None。
+pub fn conversation_workspace_override(conn: &Connection, conversation_id: &str) -> Result<Option<String>> {
+    match conn.query_row(
+        "SELECT workspace_path FROM conversation_workspace_overrides WHERE conversation_id = ?1",
+        params![conversation_id],
+        |r| r.get(0),
+    ) {
+        Ok(v) => Ok(Some(v)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationMoveResult {
+    pub conversation_id: String,
+    pub target_path: String,
+}
+
+/// 把单条会话移动到目标工作区，并写入覆盖记录，保证后续同步不回退。
+pub fn move_conversation(
+    conn: &Connection,
+    conversation_id: &str,
+    target_path: &str,
+) -> Result<ConversationMoveResult> {
+    use crate::importers::canonicalize_workspace_path;
+
+    let target = canonicalize_workspace_path(target_path);
+    if target.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "target workspace path cannot be empty".into(),
+        ));
+    }
+    // 目标自身可能已被合并过，解析到最终真实路径
+    let target = resolve_workspace_alias(conn, &target)?;
+
+    let changed = conn.execute(
+        "UPDATE conversations SET workspace_path = ?1 WHERE id = ?2",
+        params![&target, conversation_id],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO conversation_workspace_overrides (conversation_id, workspace_path, updated_at)
+        VALUES (?1, ?2, ?3)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            workspace_path = excluded.workspace_path,
+            updated_at = excluded.updated_at
+        "#,
+        params![conversation_id, &target, &now],
+    )?;
+
+    Ok(ConversationMoveResult {
+        conversation_id: conversation_id.to_string(),
+        target_path: target,
+    })
 }
 
 pub fn fetch_conversations(
@@ -1646,6 +1948,7 @@ pub fn fetch_conversations(
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -1661,7 +1964,8 @@ pub fn fetch_conversations(
             c.message_count,
             c.user_message_count,
             c.parse_status,
-            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
+            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred,
+            ai.based_on_message_count
         FROM conversations c
         LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE (?1 = 0 OR (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) > 0)
@@ -1688,6 +1992,15 @@ pub fn fetch_conversations(
             let based_on: Option<String> = row.get(7)?;
             let content_hash: String = row.get(10)?;
             let is_starred_cnt: i64 = row.get(16)?;
+            let based_on_msg_count: Option<i64> = row.get(17)?;
+            let msg_count: i64 = row.get(13)?;
+            let ai_new_message_count = match based_on_msg_count {
+                Some(b) if b > 0 => {
+                    let diff = msg_count - b;
+                    if diff > 0 { Some(diff) } else { None }
+                }
+                _ => None,
+            };
             let raw_created: Option<String> = row.get(11)?;
             let raw_updated: Option<String> = row.get(12)?;
             let raw_ai_generated: Option<String> = row.get(9)?;
@@ -1720,10 +2033,11 @@ pub fn fetch_conversations(
                 content_hash,
                 created_at: to_beijing_iso(raw_created),
                 updated_at: to_beijing_iso(raw_updated),
-                message_count: row.get(13)?,
+                message_count: msg_count,
                 user_message_count: row.get(14)?,
                 parse_status: row.get(15)?,
                 is_starred: is_starred_cnt > 0,
+                ai_new_message_count,
             })
         },
     )?;
@@ -1854,6 +2168,7 @@ pub fn save_conversation_ai_summary(
     summary: &str,
     status: &str,
     based_on_content_hash: Option<&str>,
+    based_on_message_count: Option<i64>,
     model: Option<&str>,
     error: Option<&str>,
 ) -> Result<ConversationItem> {
@@ -1877,15 +2192,16 @@ pub fn save_conversation_ai_summary(
     conn.execute(
         r#"
         INSERT INTO conversation_ai (
-            conversation_id, ai_title, summary, status,
-            based_on_content_hash, model, error, generated_at, updated_at
+           conversation_id, ai_title, summary, status,
+            based_on_content_hash, based_on_message_count, model, error, generated_at, updated_at
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
         ON CONFLICT(conversation_id) DO UPDATE SET
             ai_title = COALESCE(excluded.ai_title, conversation_ai.ai_title),
             summary = excluded.summary,
             status = excluded.status,
             based_on_content_hash = excluded.based_on_content_hash,
+            based_on_message_count = excluded.based_on_message_count,
             model = COALESCE(excluded.model, conversation_ai.model),
             error = excluded.error,
             generated_at = COALESCE(excluded.generated_at, conversation_ai.generated_at),
@@ -1896,13 +2212,14 @@ pub fn save_conversation_ai_summary(
             title_opt,
             summary,
             status,
-            based_on_content_hash,
-            model,
-            error,
-            generated_at,
-            now,
-        ],
-    )?;
+           based_on_content_hash,
+            based_on_message_count,
+           model,
+           error,
+           generated_at,
+           now,
+       ],
+   )?;
 
     fetch_conversation_by_id(conn, conversation_id)?
         .ok_or(rusqlite::Error::QueryReturnedNoRows)
@@ -1957,6 +2274,7 @@ pub fn fetch_conversation_by_id(
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -1972,7 +2290,8 @@ pub fn fetch_conversation_by_id(
             c.message_count,
             c.user_message_count,
             c.parse_status,
-            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred
+            (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred,
+            ai.based_on_message_count
         FROM conversations c
         LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE c.id = ?1
@@ -1984,6 +2303,15 @@ pub fn fetch_conversation_by_id(
         let based_on: Option<String> = row.get(7)?;
         let content_hash: String = row.get(10)?;
         let is_starred_cnt: i64 = row.get(16)?;
+        let based_on_msg_count: Option<i64> = row.get(17)?;
+        let msg_count: i64 = row.get(13)?;
+        let ai_new_message_count = match based_on_msg_count {
+            Some(b) if b > 0 => {
+                let diff = msg_count - b;
+                if diff > 0 { Some(diff) } else { None }
+            }
+            _ => None,
+        };
         let raw_created: Option<String> = row.get(11)?;
         let raw_updated: Option<String> = row.get(12)?;
         let raw_ai_generated: Option<String> = row.get(9)?;
@@ -2016,10 +2344,11 @@ pub fn fetch_conversation_by_id(
             content_hash,
             created_at: to_beijing_iso(raw_created),
             updated_at: to_beijing_iso(raw_updated),
-            message_count: row.get(13)?,
+            message_count: msg_count,
             user_message_count: row.get(14)?,
             parse_status: row.get(15)?,
             is_starred: is_starred_cnt > 0,
+            ai_new_message_count,
         })
     })?;
 
@@ -2076,6 +2405,7 @@ pub fn search_global_messages(
                    WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                    WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                    WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                   WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                    ELSE 'antigravity'
                END as source_app,
                c.workspace_path,
@@ -2135,11 +2465,12 @@ pub fn fetch_workspace_detail_stats(
         wb_cnt,
         hermes_cnt,
         mimo_cnt,
+        windsurf_cnt,
         user_message_count,
         message_count,
         first_active,
         last_active
-    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
+    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
         r#"
         SELECT
             COUNT(*),
@@ -2160,6 +2491,7 @@ pub fn fetch_workspace_detail_stats(
             SUM(CASE WHEN COALESCE(source_app, '') = 'workbuddy' OR source_types LIKE '%workbuddy%' THEN 1 ELSE 0 END),
             SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END),
             SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'windsurf' OR source_types LIKE '%windsurf%' THEN 1 ELSE 0 END),
             COALESCE(SUM(user_message_count), 0),
             COALESCE(SUM(message_count), 0),
             MIN(created_at),
@@ -2178,13 +2510,14 @@ pub fn fetch_workspace_detail_stats(
                 r.get(5).unwrap_or(0),
                 r.get(6).unwrap_or(0),
                 r.get(7).unwrap_or(0),
-                r.get(8)?,
+                r.get(8).unwrap_or(0),
                 r.get(9)?,
                 r.get(10)?,
                 r.get(11)?,
+                r.get(12)?,
             ))
         }
-    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
+    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
 
     let mut breakdown_parts = Vec::new();
     if ag_cnt > 0 {
@@ -2207,6 +2540,9 @@ pub fn fetch_workspace_detail_stats(
     }
     if mimo_cnt > 0 {
         breakdown_parts.push(format!("MiMo {}", mimo_cnt));
+    }
+    if windsurf_cnt > 0 {
+        breakdown_parts.push(format!("Windsurf {}", windsurf_cnt));
     }
     let agent_breakdown = if breakdown_parts.is_empty() {
         format!("共 {} 会话", conversation_count)
@@ -2415,6 +2751,7 @@ pub fn fetch_workspace_detail_stats(
         wb_conversation_count: wb_cnt,
         hermes_conversation_count: hermes_cnt,
         mimo_conversation_count: mimo_cnt,
+        windsurf_conversation_count: windsurf_cnt,
         user_message_count,
         message_count,
         agent_breakdown,
@@ -2674,6 +3011,20 @@ pub struct PromptItem {
     pub source_url: Option<String>,
     pub source_note: Option<String>,
     pub notes: Option<String>,
+    pub preview_url: Option<String>,
+    pub preview_local: Option<String>,
+    pub origin: String,
+    pub external_id: Option<String>,
+    pub genre: Option<String>,
+    pub styles: Vec<String>,
+    pub scenes: Vec<String>,
+    pub featured: bool,
+    pub github_url: Option<String>,
+    pub prompt_preview: Option<String>,
+    pub content_hash: Option<String>,
+    /// 封面图原始宽高（渲染元数据，用于 Feed 占位与分列估算）
+    pub preview_width: Option<i64>,
+    pub preview_height: Option<i64>,
     pub is_starred: bool,
     pub use_count: i64,
     pub created_at: String,
@@ -2692,12 +3043,19 @@ pub struct PromptAgentItem {
     pub content_preview: Option<String>,
     pub category: String,
     pub tags: Vec<String>,
+    pub origin: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub scenes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2707,31 +3065,11 @@ pub struct PromptCategoryOption {
 }
 
 pub fn default_prompt_category() -> String {
-    "coding".to_string()
+    "image".to_string()
 }
 
 pub fn prompt_category_options() -> Vec<PromptCategoryOption> {
     vec![
-        PromptCategoryOption {
-            value: "coding".into(),
-            label: "编程".into(),
-        },
-        PromptCategoryOption {
-            value: "research".into(),
-            label: "研究".into(),
-        },
-        PromptCategoryOption {
-            value: "writing".into(),
-            label: "写作".into(),
-        },
-        PromptCategoryOption {
-            value: "product".into(),
-            label: "产品 / 设计".into(),
-        },
-        PromptCategoryOption {
-            value: "agent".into(),
-            label: "Agent / 自动化".into(),
-        },
         PromptCategoryOption {
             value: "image".into(),
             label: "生图".into(),
@@ -2741,12 +3079,8 @@ pub fn prompt_category_options() -> Vec<PromptCategoryOption> {
             label: "生视频".into(),
         },
         PromptCategoryOption {
-            value: "persona".into(),
-            label: "角色 / 人格".into(),
-        },
-        PromptCategoryOption {
-            value: "meta".into(),
-            label: "元提示词".into(),
+            value: "text".into(),
+            label: "文本".into(),
         },
     ]
 }
@@ -2763,7 +3097,13 @@ pub fn normalize_prompt_category(raw: &str) -> Result<String, String> {
     let cat = if trimmed.is_empty() {
         default_prompt_category()
     } else {
-        trimmed.to_string()
+        // 兼容旧细分类
+        match trimmed {
+            "coding" | "research" | "writing" | "product" | "agent" | "persona" | "meta" => {
+                "text".to_string()
+            }
+            other => other.to_string(),
+        }
     };
     if allowed_prompt_category_values().iter().any(|v| v == &cat) {
         Ok(cat)
@@ -2784,18 +3124,30 @@ fn prompt_content_preview(content: &str) -> String {
     )
 }
 
+fn parse_json_str_list(raw: &str) -> Vec<String> {
+    serde_json::from_str(raw).unwrap_or_default()
+}
+
 impl PromptAgentItem {
     pub fn list_from(item: &PromptItem) -> Self {
         Self {
             id: item.id,
             title: item.title.clone(),
             content: None,
-            content_preview: Some(prompt_content_preview(&item.content)),
+            content_preview: Some(
+                item.prompt_preview
+                    .clone()
+                    .unwrap_or_else(|| prompt_content_preview(&item.content)),
+            ),
             category: item.category.clone(),
             tags: item.tags.clone(),
+            origin: item.origin.clone(),
             source_url: item.source_url.clone(),
             source_note: item.source_note.clone(),
             notes: item.notes.clone(),
+            preview_url: item.preview_url.clone(),
+            genre: item.genre.clone(),
+            scenes: item.scenes.clone(),
         }
     }
 
@@ -2807,9 +3159,13 @@ impl PromptAgentItem {
             content_preview: None,
             category: item.category.clone(),
             tags: item.tags.clone(),
+            origin: item.origin.clone(),
             source_url: item.source_url.clone(),
             source_note: item.source_note.clone(),
             notes: item.notes.clone(),
+            preview_url: item.preview_url.clone(),
+            genre: item.genre.clone(),
+            scenes: item.scenes.clone(),
         }
     }
 }
@@ -2830,31 +3186,54 @@ pub struct PromptInput {
     #[serde(default)]
     pub notes: Option<String>,
     #[serde(default)]
+    pub preview_url: Option<String>,
+    /// 本地归档预览图（/media/prompts/uploads/…）。
+    /// None = 调用方未提供（更新时保留原值）；Some("") = 显式清除。
+    #[serde(default)]
+    pub preview_local: Option<String>,
+    #[serde(default)]
     pub is_starred: bool,
 }
 
 fn row_to_prompt_item(row: &rusqlite::Row<'_>) -> Result<PromptItem> {
     let tags_json: String = row.get(4)?;
-    let tags: Vec<String> = serde_json::from_str(&tags_json).unwrap_or_default();
+    let styles_json: String = row.get(13)?;
+    let scenes_json: String = row.get(14)?;
     Ok(PromptItem {
         id: row.get(0)?,
         title: row.get(1)?,
         content: row.get(2)?,
         category: row.get(3)?,
-        tags,
+        tags: parse_json_str_list(&tags_json),
         source_url: row.get(5)?,
         source_note: row.get(6)?,
         notes: row.get(7)?,
-        is_starred: row.get::<_, i64>(8)? != 0,
-        use_count: row.get(9)?,
-        created_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        last_used_at: row.get(12)?,
+        preview_url: row.get(8)?,
+        preview_local: row.get(9)?,
+        origin: row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "user".into()),
+        external_id: row.get(11)?,
+        genre: row.get(12)?,
+        styles: parse_json_str_list(&styles_json),
+        scenes: parse_json_str_list(&scenes_json),
+        featured: row.get::<_, i64>(15)? != 0,
+        github_url: row.get(16)?,
+        prompt_preview: row.get(17)?,
+        content_hash: row.get(18)?,
+        preview_width: row.get(19)?,
+        preview_height: row.get(20)?,
+        is_starred: row.get::<_, i64>(21)? != 0,
+        use_count: row.get(22)?,
+        created_at: row.get(23)?,
+        updated_at: row.get(24)?,
+        last_used_at: row.get(25)?,
     })
 }
 
 const PROMPT_SELECT: &str = r#"
     SELECT id, title, content, category, tags_json, source_url, source_note, notes,
+           preview_url, preview_local, origin, external_id, genre, styles_json, scenes_json,
+           featured, github_url, prompt_preview, content_hash,
+           preview_width, preview_height,
            is_starred, use_count, created_at, updated_at, last_used_at
     FROM prompts
 "#;
@@ -2865,13 +3244,24 @@ pub fn list_prompts(
     category: Option<&str>,
     starred_only: bool,
 ) -> Result<Vec<PromptItem>> {
+    list_prompts_ex(conn, search, category, starred_only, false)
+}
+
+/// lite=true 时清空正文，Feed 列表更轻；详情请用 get_prompt。
+pub fn list_prompts_ex(
+    conn: &Connection,
+    search: Option<&str>,
+    category: Option<&str>,
+    starred_only: bool,
+    lite: bool,
+) -> Result<Vec<PromptItem>> {
     let mut list = Vec::new();
     let sql = format!(
         r#"{PROMPT_SELECT}
-        WHERE (?1 IS NULL OR ?1 = '' OR title LIKE '%' || ?1 || '%' OR content LIKE '%' || ?1 || '%' OR tags_json LIKE '%' || ?1 || '%')
+        WHERE (?1 IS NULL OR ?1 = '' OR title LIKE '%' || ?1 || '%' OR content LIKE '%' || ?1 || '%' OR tags_json LIKE '%' || ?1 || '%' OR genre LIKE '%' || ?1 || '%' OR scenes_json LIKE '%' || ?1 || '%')
           AND (?2 IS NULL OR ?2 = '' OR category = ?2)
           AND (?3 = 0 OR is_starred = 1)
-        ORDER BY is_starred DESC, updated_at DESC, id DESC"#
+        ORDER BY is_starred DESC, featured DESC, updated_at DESC, id DESC"#
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
@@ -2883,7 +3273,11 @@ pub fn list_prompts(
         row_to_prompt_item,
     )?;
     for r in rows.flatten() {
-        list.push(r);
+        let mut item = r;
+        if lite {
+            item.content = String::new();
+        }
+        list.push(item);
     }
     Ok(list)
 }
@@ -2905,12 +3299,24 @@ pub fn create_prompt(conn: &Connection, input: &PromptInput) -> Result<PromptIte
     })?;
     let now = Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    let preview_local = input
+        .preview_local
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     conn.execute(
         r#"
         INSERT INTO prompts (
             title, content, category, tags_json, source_url, source_note, notes,
+            preview_url, preview_local, origin, external_id, genre, styles_json, scenes_json,
+            featured, github_url, prompt_preview, content_hash,
             is_starred, use_count, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9)
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7,
+            ?8, ?11, 'user', NULL, NULL, '[]', '[]',
+            0, NULL, NULL, NULL,
+            ?9, 0, ?10, ?10
+        )
         "#,
         params![
             title,
@@ -2920,8 +3326,10 @@ pub fn create_prompt(conn: &Connection, input: &PromptInput) -> Result<PromptIte
             input.source_url,
             input.source_note,
             input.notes,
+            input.preview_url,
             if input.is_starred { 1 } else { 0 },
             now,
+            preview_local,
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -2940,6 +3348,8 @@ pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<
     })?;
     let now = Utc::now().to_rfc3339();
     let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    // 用户编辑不碰 origin / external_id / catalog 同步字段；
+    // preview_local 仅在调用方显式提供时更新（None 保留，空串清除）
     let changed = conn.execute(
         r#"
         UPDATE prompts SET
@@ -2950,9 +3360,11 @@ pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<
             source_url = ?5,
             source_note = ?6,
             notes = ?7,
-            is_starred = ?8,
-            updated_at = ?9
-        WHERE id = ?10
+            preview_url = ?8,
+            preview_local = CASE WHEN ?12 IS NULL THEN preview_local ELSE NULLIF(?12, '') END,
+            is_starred = ?9,
+            updated_at = ?10
+        WHERE id = ?11
         "#,
         params![
             title,
@@ -2962,9 +3374,11 @@ pub fn update_prompt(conn: &Connection, id: i64, input: &PromptInput) -> Result<
             input.source_url,
             input.source_note,
             input.notes,
+            input.preview_url,
             if input.is_starred { 1 } else { 0 },
             now,
             id,
+            input.preview_local.as_deref().map(str::trim),
         ],
     )?;
     if changed == 0 {
@@ -2991,6 +3405,29 @@ pub fn toggle_prompt_star(conn: &Connection, id: i64) -> Result<bool> {
         params![next, now, id],
     )?;
     Ok(next != 0)
+}
+
+/// 写回封面图原始宽高（渲染元数据）。仅当值变化时更新；不触碰 updated_at，
+/// 避免纯渲染信息把记录顶到「最近更新」。
+pub fn update_prompt_preview_size(
+    conn: &Connection,
+    id: i64,
+    width: i64,
+    height: i64,
+) -> Result<bool> {
+    if width <= 0 || height <= 0 {
+        return Ok(false);
+    }
+    let changed = conn.execute(
+        r#"
+        UPDATE prompts
+        SET preview_width = ?1, preview_height = ?2
+        WHERE id = ?3
+          AND (preview_width IS NOT ?1 OR preview_height IS NOT ?2)
+        "#,
+        params![width, height, id],
+    )?;
+    Ok(changed > 0)
 }
 
 pub fn record_prompt_use(conn: &Connection, id: i64) -> Result<PromptItem> {
@@ -3054,6 +3491,7 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
                 WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 ELSE 'antigravity'
             END as source_app,
             c.title as conv_title,
@@ -3404,4 +3842,3 @@ pub fn get_workspace_artifacts(
     }
     Ok(list)
 }
-

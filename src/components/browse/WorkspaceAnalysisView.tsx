@@ -172,6 +172,13 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
         </span>
       );
     }
+    if (s.includes('windsurf')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/25">
+          Windsurf
+        </span>
+      );
+    }
     if (s.includes('claude')) {
       return (
         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25">

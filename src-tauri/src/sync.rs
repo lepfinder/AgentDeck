@@ -1,6 +1,5 @@
 use crate::importers::{ImporterStats, SyncEngine};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12,82 +11,6 @@ pub struct SyncResultInfo {
     pub error_count: u32,
     pub message: String,
     pub details: Vec<ImporterStats>,
-}
-
-/// 获取用户主目录下各 Agent 的关键路径与活跃文件（用于高灵敏度变动检测）
-pub fn get_agent_source_paths() -> Vec<PathBuf> {
-    let mut paths = Vec::new();
-    if let Some(home) = dirs::home_dir() {
-        // 1. Cursor
-        let cursor_db =
-            home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb");
-        if cursor_db.exists() {
-            paths.push(cursor_db);
-        }
-        let cursor_wal =
-            home.join("Library/Application Support/Cursor/User/globalStorage/state.vscdb-wal");
-        if cursor_wal.exists() {
-            paths.push(cursor_wal);
-        }
-
-        // 2. Antigravity: 探测 Antigravity (桌面端) 与 Antigravity IDE 的 brain 目录及最新活跃 transcript.jsonl
-        let ag_brain_dirs = [
-            home.join(".gemini/antigravity/brain"),
-            home.join(".gemini/antigravity-ide/brain"),
-        ];
-        for brain_dir in ag_brain_dirs {
-            if brain_dir.is_dir() {
-                paths.push(brain_dir.clone());
-                if let Ok(entries) = std::fs::read_dir(&brain_dir) {
-                    for e in entries.flatten().take(50) {
-                        let transcript = e.path().join(".system_generated/logs/transcript.jsonl");
-                        if transcript.is_file() {
-                            paths.push(transcript);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 3. Claude Code
-        let claude_dir = home.join(".claude/projects");
-        if claude_dir.is_dir() {
-            paths.push(claude_dir);
-        }
-
-        // 4. Codex
-        let codex_dir = home.join(".codex/sessions");
-        if codex_dir.is_dir() {
-            paths.push(codex_dir);
-        }
-
-        // 5. Hermes
-        let hermes_db = home.join(".hermes/state.db");
-        if hermes_db.exists() {
-            paths.push(hermes_db);
-        }
-        let hermes_wal = home.join(".hermes/state.db-wal");
-        if hermes_wal.exists() {
-            paths.push(hermes_wal);
-        }
-
-        // 6. WorkBuddy
-        let wb_dir = home.join(".workbuddy/projects");
-        if wb_dir.is_dir() {
-            paths.push(wb_dir);
-        }
-
-        // 7. Xiaomi MiMo Desktop (mimocode.db)
-        let mimo_db = home.join(".local/share/mimocode/mimocode.db");
-        if mimo_db.exists() {
-            paths.push(mimo_db.clone());
-        }
-        let mimo_wal = home.join(".local/share/mimocode/mimocode.db-wal");
-        if mimo_wal.exists() {
-            paths.push(mimo_wal);
-        }
-    }
-    paths
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +124,20 @@ pub fn collect_agent_sources(conn: &rusqlite::Connection) -> Vec<AgentSourceInfo
                 make_info(
                     "Library/Application Support/Xiaomi MiMo/db/artifacts.db",
                     "交付产物索引",
+                ),
+            ],
+        ),
+        (
+            "windsurf",
+            "Windsurf",
+            vec![
+                make_info(
+                    ".codeium/windsurf/cascade",
+                    "Cascade 会话轨迹 (加密 protobuf)",
+                ),
+                make_info(
+                    ".codeium/windsurf/implicit",
+                    "Implicit 轨迹 (加密 protobuf)",
                 ),
             ],
         ),
@@ -361,7 +298,8 @@ pub fn execute_sync(full: bool) -> SyncResultInfo {
         }
         want_full = PENDING_FULL.swap(false, Ordering::SeqCst);
         println!(
-            "[AgentDeck SyncEngine] 检测到排队请求，继续执行 (full: {})...",
+            "[{}] [AgentDeck SyncEngine] 检测到排队请求，继续执行 (full: {})...",
+            chrono::Local::now().format("%H:%M:%S"),
             want_full
         );
     }
@@ -395,7 +333,8 @@ mod tests {
         .unwrap();
 
         let sources = collect_agent_sources(&conn);
-        assert_eq!(sources.len(), 7);
+        // cursor / antigravity / claude / codex / hermes / workbuddy / mimo / windsurf
+        assert_eq!(sources.len(), 8);
 
         let cursor_info = sources.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor_info.name, "Cursor");
@@ -418,4 +357,3 @@ mod tests {
         println!("execute_sync(false) finished in {:?}: {:?}", t0.elapsed(), res);
     }
 }
-

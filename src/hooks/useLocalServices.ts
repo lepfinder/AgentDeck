@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { api } from '../api/tauriBridge';
 
@@ -109,18 +109,42 @@ export function useLocalServices() {
 
   const projectGroups = useMemo(() => groupServicesByProject(services), [services]);
 
+  // Guard against overlapping refreshes (5s base + 2s pending + action events
+  // can all fire concurrently) and stale responses overwriting fresh ones.
+  // Calls that arrive mid-flight coalesce into one trailing refresh so
+  // action-complete events are never dropped.
+  const inFlightRef = useRef(false);
+  const refreshNeededRef = useRef(false);
+  const latestReqRef = useRef(0);
+
   const refresh = useCallback(async () => {
+    if (inFlightRef.current) {
+      refreshNeededRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
+    const reqId = ++latestReqRef.current;
     setRefreshing(true);
     try {
       const list = await api.services.status();
+      if (reqId !== latestReqRef.current) return; // a newer request superseded us
       setServices(list);
       setError(null);
     } catch (err) {
       console.error('[useLocalServices] refresh failed:', err);
-      setError(err instanceof Error ? err.message : '加载服务状态失败');
+      if (reqId === latestReqRef.current) {
+        setError(err instanceof Error ? err.message : '加载服务状态失败');
+      }
     } finally {
-      setRefreshing(false);
-      setInitializing(false);
+      if (reqId === latestReqRef.current) {
+        setRefreshing(false);
+        setInitializing(false);
+      }
+      inFlightRef.current = false;
+    }
+    if (refreshNeededRef.current) {
+      refreshNeededRef.current = false;
+      void refresh();
     }
   }, []);
 
@@ -147,19 +171,18 @@ export function useLocalServices() {
       .detectIdes()
       .then((detected) => setIdes(detected))
       .catch((err: unknown) => console.error('[useLocalServices] detectIdes failed:', err));
-    const interval = setInterval(() => void refresh(), 5000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
     };
   }, [refresh]);
 
   const hasPending = services.some((s) => s.state === 'starting' || s.state === 'stopping');
 
+  // Single interval whose period adapts: 2s while an action is pending, 5s otherwise.
   useEffect(() => {
-    if (!hasPending) return;
-    const fast = setInterval(() => void refresh(), 2000);
-    return () => clearInterval(fast);
+    const period = hasPending ? 2000 : 5000;
+    const interval = setInterval(() => void refresh(), period);
+    return () => clearInterval(interval);
   }, [hasPending, refresh]);
 
   useEffect(() => {

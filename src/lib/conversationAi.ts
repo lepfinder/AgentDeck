@@ -192,6 +192,7 @@ ${transcript}`;
       summary,
       status: 'ok',
       basedOnContentHash: conversation.content_hash || null,
+      basedOnMessageCount: conversation.message_count ?? null,
       model: result.provider_used,
       error: null,
     });

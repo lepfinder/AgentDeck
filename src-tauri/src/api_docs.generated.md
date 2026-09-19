@@ -1,4 +1,4 @@
-# AgentDeck REST API 接口规范与集成文档 (v0.3.7)
+# AgentDeck REST API 接口规范与集成文档 (v0.3.11)
 
 > **鉴权说明 (Authentication)**: 
 > 当前版本 API **无需 Token 校验 (No Token Required)**。
@@ -24,7 +24,7 @@
     "ok": true,
     "status": "ok",
     "app": "AgentDeck",
-    "version": "0.3.7",
+    "version": "0.3.11",
     "cursor_available": true,
     "ai_available": true,
     "stats": {
@@ -39,7 +39,7 @@
 
 ### 2. 全局大盘统计 (Dashboard Stats)
 - **请求方法**: `GET /api/stats`
-- **功能说明**: 获取全量会话数、用户提问数、智能体工具（Antigravity、Cursor、Claude Code、Codex、WorkBuddy）占比分布及工作区统计。
+- **功能说明**: 获取全量会话数、用户提问数、智能体工具（Antigravity、Cursor、Claude Code、Codex、WorkBuddy、MiMo、Windsurf）占比分布及工作区统计。
 - **调用示例**:
   ```bash
   curl http://127.0.0.1:8788/api/stats
@@ -127,7 +127,7 @@
 - **请求方法**: `GET /api/conversations`
 - **查询参数**:
   - `workspace` (*string, 可选*): 限定工作区路径
-  - `source` (*string, 可选*): 限定工具源 (`antigravity` / `cursor` / `claude` / `codex` / `workbuddy`)
+  - `source` (*string, 可选*): 限定工具源 (`antigravity` / `cursor` / `claude` / `codex` / `workbuddy` / `mimo` / `windsurf`)
   - `limit` (*number, 可选*): 限制返回条数 (默认 50)
   - `offset` (*number, 可选*): 分页偏移量 (默认 0)
 - **调用示例**:

@@ -511,7 +511,7 @@ function generateLocalRuleBasedModules(fineBlocks: WorkspaceFineBlock[]): Worksp
       id: 'mod-sync',
       title: '多源协同与数据同步引擎',
       summary: '实现多 Agent 历史会话扫描、增量文件探测、跨源数据归一化与高效同步管道。',
-      matchPatterns: [/sync|importer|cursor|claude|codex|hermes|workbuddy|antigravity|pipeline|fetch|reader|同步|扫描|导入|管道|采集/i],
+      matchPatterns: [/sync|importer|cursor|claude|codex|hermes|workbuddy|antigravity|windsurf|mimo|pipeline|fetch|reader|同步|扫描|导入|管道|采集/i],
       matchedIds: [],
       dates: [],
       keywords: new Set(['数据同步', '多源导入', '增量扫描', '协议解析']),

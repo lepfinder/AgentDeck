@@ -16,8 +16,13 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
+import { QuotaBar } from './components/common/QuotaBar';
 
-const AUTO_SYNC_INTERVAL_KEY = 'agentdeck_auto_sync_interval_sec';
+/** 自动同步脉冲 — 与 QuotaBar 同款：仅前台调度，自适应 2–5 分钟。 */
+const AUTO_SYNC_FLOOR_MS = 2 * 60_000;
+const AUTO_SYNC_ACTIVE_MS = 5 * 60_000;
+/** 两次非手动同步之间的最小间隔。 */
+const AUTO_SYNC_MIN_GAP_MS = 2 * 60_000;
 
 const SettingsModal = lazy(() =>
   import('./components/settings/SettingsModal').then((m) => ({ default: m.SettingsModal }))
@@ -25,11 +30,6 @@ const SettingsModal = lazy(() =>
 
 function prefetchSettingsModal() {
   void import('./components/settings/SettingsModal');
-}
-
-function getInitialAutoSyncIntervalSec(): number {
-  const saved = Number(localStorage.getItem(AUTO_SYNC_INTERVAL_KEY) || '60');
-  return Number.isFinite(saved) && saved >= 15 ? saved : 60;
 }
 
 export function App() {
@@ -44,7 +44,6 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncToast, setSyncToast] = useState<string | null>(null);
-  const [autoSyncIntervalSec, setAutoSyncIntervalSec] = useState<number>(getInitialAutoSyncIntervalSec);
 
   const showSyncToast = (message: string, durationMs: number) => {
     setSyncToast(message);
@@ -100,13 +99,6 @@ export function App() {
       root.setAttribute('data-theme', 'dark');
     }
   }, [theme]);
-
-  useEffect(() => {
-    localStorage.setItem(AUTO_SYNC_INTERVAL_KEY, String(autoSyncIntervalSec));
-    api.setAutoSyncInterval(autoSyncIntervalSec).catch((err) => {
-      console.error('Failed to set auto sync interval:', err);
-    });
-  }, [autoSyncIntervalSec]);
 
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
@@ -180,9 +172,82 @@ export function App() {
     };
   }, []);
 
+  // ===== 会话自动同步：仅前台调度，自适应 2–5 分钟（与 QuotaBar 脉冲逻辑一致）=====
+  const syncInFlightRef = useRef(false);
+  const autoSyncRunningRef = useRef(false);
+  const lastAutoSyncAtRef = useRef(0);
+  const lastChangeAtRef = useRef<number | null>(null);
+  const lastUserSyncAtRef = useRef<number | null>(null);
+  const autoSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearAutoSyncTimer = () => {
+    if (autoSyncTimerRef.current) {
+      clearTimeout(autoSyncTimerRef.current);
+      autoSyncTimerRef.current = null;
+    }
+  };
+
+  const nextAutoSyncDelayMs = () => {
+    const now = Date.now();
+    const ages = [lastChangeAtRef.current, lastUserSyncAtRef.current]
+      .filter((t): t is number => t != null)
+      .map((t) => now - t)
+      .filter((a) => a >= 0);
+    if (ages.length === 0) return AUTO_SYNC_FLOOR_MS;
+    return Math.min(...ages) < AUTO_SYNC_ACTIVE_MS ? AUTO_SYNC_FLOOR_MS : AUTO_SYNC_ACTIVE_MS;
+  };
+
+  const runAutoSync = async () => {
+    if (!isTauri() || autoSyncRunningRef.current || syncInFlightRef.current) return;
+    const since = Date.now() - lastAutoSyncAtRef.current;
+    if (lastAutoSyncAtRef.current > 0 && since < AUTO_SYNC_MIN_GAP_MS) return;
+    autoSyncRunningRef.current = true;
+    try {
+      const res = await api.triggerSync(false);
+      lastAutoSyncAtRef.current = Date.now();
+      if (res && (res.new_count > 0 || res.updated_count > 0)) {
+        lastChangeAtRef.current = Date.now();
+      }
+    } catch (err) {
+      console.error('Auto sync failed:', err);
+    } finally {
+      autoSyncRunningRef.current = false;
+    }
+  };
+
+  const scheduleAutoSync = () => {
+    clearAutoSyncTimer();
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    autoSyncTimerRef.current = setTimeout(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void runAutoSync().finally(() => scheduleAutoSync());
+    }, nextAutoSyncDelayMs());
+  };
+
+  useEffect(() => {
+    if (!isTauri()) return;
+    // 前台可见时先补一次增量同步，再进入自适应节奏；隐藏到 Dock 时停表，完全不同步
+    void runAutoSync().finally(() => scheduleAutoSync());
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void runAutoSync().finally(() => scheduleAutoSync());
+      } else {
+        clearAutoSyncTimer();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      clearAutoSyncTimer();
+    };
+  }, []);
+
   // 手动触发同步
   const handleTriggerSync = async (full: boolean = false) => {
-    if (isSyncing) return;
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    lastUserSyncAtRef.current = Date.now();
     setIsSyncing(true);
     try {
       const res = await api.triggerSync(full);
@@ -193,6 +258,7 @@ export function App() {
       console.error('Sync failed:', err);
       showSyncToast(t('header.syncFailed'), 4000);
     } finally {
+      syncInFlightRef.current = false;
       setIsSyncing(false);
     }
   };
@@ -225,7 +291,7 @@ export function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen theme-bg-main theme-text-main overflow-hidden font-sans select-none">
+    <div className="flex flex-col h-screen w-screen theme-bg-main theme-text-main overflow-hidden font-sans">
       {/* 顶部全局导航栏（自定义 macOS 红绿灯留白与原生拖拽区） */}
       <header
         data-tauri-drag-region
@@ -251,8 +317,10 @@ export function App() {
           </span>
         </div>
 
-        {/* 右侧：刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
+        {/* 右侧：额度一瞥 + 刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
         <div className="flex items-center gap-2">
+          <QuotaBar />
+
           {/* 刷新与实时增量同步按钮 */}
           <button
             onClick={() => handleTriggerSync(false)}
@@ -439,8 +507,6 @@ export function App() {
             onClose={() => setIsSettingsOpen(false)}
             theme={theme}
             onToggleTheme={toggleTheme}
-            autoSyncIntervalSec={autoSyncIntervalSec}
-            onAutoSyncIntervalChange={setAutoSyncIntervalSec}
             totalConversations={stats?.total_conversations ?? 0}
             totalMessages={stats?.total_messages ?? 0}
             appVersion={appVersion}

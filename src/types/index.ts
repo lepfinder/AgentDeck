@@ -8,9 +8,23 @@ export interface WorkspaceStat {
   wb_cnt: number;
   hermes_cnt: number;
   mimo_cnt: number;
+  windsurf_cnt: number;
   message_count: number;
   user_message_count: number;
   last_updated?: string;
+}
+
+export interface WorkspaceMergeResult {
+  source_path: string;
+  target_path: string;
+  moved_conversations: number;
+  moved_analysis_blocks: number;
+  kept_target_analysis: boolean;
+}
+
+export interface ConversationMoveResult {
+  conversation_id: string;
+  target_path: string;
 }
 
 export interface ConversationItem {
@@ -27,6 +41,7 @@ export interface ConversationItem {
   ai_summary_stale?: boolean;
   ai_model?: string | null;
   ai_generated_at?: string | null;
+  ai_new_message_count?: number | null;
   content_hash?: string;
   created_at?: string;
   updated_at?: string;
@@ -289,6 +304,7 @@ export interface WorkspaceDetailStats {
   wb_conversation_count: number;
   hermes_conversation_count: number;
   mimo_conversation_count: number;
+  windsurf_conversation_count: number;
   user_message_count: number;
   message_count: number;
   agent_breakdown: string;
@@ -311,16 +327,7 @@ export interface SyncResultInfo {
   message: string;
 }
 
-export type PromptCategory =
-  | 'coding'
-  | 'research'
-  | 'writing'
-  | 'product'
-  | 'agent'
-  | 'image'
-  | 'video'
-  | 'persona'
-  | 'meta';
+export type PromptCategory = 'image' | 'video' | 'text';
 
 export interface PromptItem {
   id: number;
@@ -331,6 +338,20 @@ export interface PromptItem {
   source_url?: string;
   source_note?: string;
   notes?: string;
+  preview_url?: string;
+  preview_local?: string;
+  origin: string;
+  external_id?: string;
+  genre?: string;
+  styles: string[];
+  scenes: string[];
+  featured: boolean;
+  github_url?: string;
+  prompt_preview?: string;
+  content_hash?: string;
+  /** 封面图原始宽高（渲染元数据，用于 Feed 占位与分列估算） */
+  preview_width?: number;
+  preview_height?: number;
   is_starred: boolean;
   use_count: number;
   created_at: string;
@@ -346,7 +367,30 @@ export interface PromptInput {
   source_url?: string;
   source_note?: string;
   notes?: string;
+  preview_url?: string;
+  preview_local?: string;
   is_starred: boolean;
+}
+
+export interface CatalogSyncResult {
+  fetched: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  images_cached: number;
+  message: string;
+}
+
+export interface CatalogSyncProgress {
+  phase: string;
+  message: string;
+  current: number;
+  total: number;
+  percent: number;
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  imagesCached: number;
 }
 
 export interface BackupInfo {
@@ -395,7 +439,6 @@ export interface BackupConfig {
 
 export interface AppConfig {
   backup: BackupConfig;
-  auto_sync_interval_mins?: number;
   theme?: string;
   ai_config?: Record<string, any>;
 }
@@ -443,4 +486,32 @@ export interface LlmUsageSummary {
   fallback_calls: number;
 }
 
+export interface QuotaWindow {
+  id: string;
+  kind: string;
+  scope?: string | null;
+  used_fraction: number;
+  used_percent: number;
+  exhausted: boolean;
+  resets_at?: string | null;
+}
 
+export interface ProviderQuota {
+  id: string;
+  name: string;
+  available: boolean;
+  status: string;
+  message?: string | null;
+  plan?: string | null;
+  credit_balance?: string | null;
+  source?: string | null;
+  observed_at?: string | null;
+  age_seconds?: number | null;
+  windows: QuotaWindow[];
+  headline: string[];
+}
+
+export interface QuotaSnapshot {
+  generated_at: string;
+  providers: ProviderQuota[];
+}
