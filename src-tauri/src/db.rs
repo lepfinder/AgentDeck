@@ -36,6 +36,8 @@ pub struct WorkspaceStat {
     pub hermes_cnt: i64,
     pub mimo_cnt: i64,
     pub windsurf_cnt: i64,
+    pub codebuddy_cnt: i64,
+    pub qoder_cnt: i64,
     pub message_count: i64,
     pub user_message_count: i64,
     pub last_updated: Option<String>,
@@ -81,6 +83,7 @@ pub struct MessageItem {
     pub duration_ms: Option<i64>,
     pub tool_calls_json: Option<String>,
     pub images: Option<String>,
+    pub credit: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -341,6 +344,8 @@ pub struct WorkspaceDetailStats {
     pub hermes_conversation_count: i64,
     pub mimo_conversation_count: i64,
     pub windsurf_conversation_count: i64,
+    pub codebuddy_conversation_count: i64,
+    pub qoder_conversation_count: i64,
     pub user_message_count: i64,
     pub message_count: i64,
     pub agent_breakdown: String,
@@ -517,6 +522,9 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             source TEXT NOT NULL DEFAULT '',
             is_truncated INTEGER NOT NULL DEFAULT 0,
             images TEXT,
+            model_name TEXT,
+            token_count INTEGER,
+            credit REAL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
 
@@ -686,6 +694,10 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     ensure_messages_schema(conn)?;
 
     // 自动兼容性迁移（防止旧表缺少新增字段）
+    // messages 扩展列：模型名 / token 用量 / 积分消耗（CodeBuddy 等来源提供）
+    let _ = conn.execute("ALTER TABLE messages ADD COLUMN model_name TEXT", []);
+    let _ = conn.execute("ALTER TABLE messages ADD COLUMN token_count INTEGER", []);
+    let _ = conn.execute("ALTER TABLE messages ADD COLUMN credit REAL", []);
     let _ = conn.execute("ALTER TABLE conversations ADD COLUMN source_app TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE conversations ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
@@ -910,6 +922,9 @@ fn ensure_messages_schema(conn: &Connection) -> Result<()> {
             source TEXT NOT NULL DEFAULT '',
             is_truncated INTEGER NOT NULL DEFAULT 0,
             images TEXT,
+            model_name TEXT,
+            token_count INTEGER,
+            credit REAL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, step_index);
@@ -947,6 +962,8 @@ fn source_to_label_and_color(app: &str) -> (&'static str, &'static str) {
         "workbuddy" => ("WorkBuddy", "#06b6d4"),
         "mimo" => ("MiMo", "#f43f5e"),
         "windsurf" => ("Windsurf", "#0ea5e9"),
+        "codebuddy" => ("CodeBuddy", "#6C4DFF"),
+        "qoder" => ("Qoder", "#2ADB5C"),
         _ => ("Other", "#64748b"),
     }
 }
@@ -1082,6 +1099,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as app,
             COUNT(*) as cnt
@@ -1123,6 +1142,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as app,
             SUM(message_count) as cnt
@@ -1395,6 +1416,10 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                         WHEN c.source_types LIKE '%codex%' THEN 'codex'
                         WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
                         WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                        WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                        WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                        WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                        WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                         ELSE 'antigravity'
                     END as source_app,
                     c.workspace_path, c.message_count, c.user_message_count, c.updated_at,
@@ -1678,6 +1703,8 @@ pub fn fetch_workspaces(
             SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END) as hermes_cnt,
             SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END) as mimo_cnt,
             SUM(CASE WHEN COALESCE(source_app, '') = 'windsurf' OR source_types LIKE '%windsurf%' THEN 1 ELSE 0 END) as windsurf_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'codebuddy' OR source_types LIKE '%codebuddy%' THEN 1 ELSE 0 END) as codebuddy_cnt,
+            SUM(CASE WHEN COALESCE(source_app, '') = 'qoder' OR source_types LIKE '%qoder%' THEN 1 ELSE 0 END) as qoder_cnt,
             SUM(message_count) as message_count,
             SUM(user_message_count) as user_message_count,
             MAX(updated_at) as last_updated
@@ -1703,9 +1730,11 @@ pub fn fetch_workspaces(
                 hermes_cnt: row.get(7).unwrap_or(0),
                 mimo_cnt: row.get(8).unwrap_or(0),
                 windsurf_cnt: row.get(9).unwrap_or(0),
-                message_count: row.get(10).unwrap_or(0),
-                user_message_count: row.get(11).unwrap_or(0),
-                last_updated: to_beijing_iso(row.get(12)?),
+                codebuddy_cnt: row.get(10).unwrap_or(0),
+                qoder_cnt: row.get(11).unwrap_or(0),
+                message_count: row.get(12).unwrap_or(0),
+                user_message_count: row.get(13).unwrap_or(0),
+                last_updated: to_beijing_iso(row.get(14)?),
             })
         },
     )?;
@@ -1949,6 +1978,8 @@ pub fn fetch_conversations(
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -2059,9 +2090,10 @@ pub fn fetch_conversation_messages(
                 content as text,
                 thinking,
                 created_at,
-                source as model_name,
-                NULL as token_count,
+                COALESCE(model_name, source) as model_name,
+                token_count,
                 NULL as duration_ms,
+                credit,
                 CASE WHEN tool_name IS NOT NULL AND tool_name != '' THEN json_array(json_object('name', tool_name, 'args', tool_args)) ELSE NULL END as tool_calls_json,
                 images
          FROM messages
@@ -2083,8 +2115,9 @@ pub fn fetch_conversation_messages(
             model_name: row.get(7)?,
             token_count: row.get(8)?,
             duration_ms: row.get(9)?,
-            tool_calls_json: row.get(10)?,
-            images: row.get(11)?,
+            tool_calls_json: row.get(11)?,
+            images: row.get(12)?,
+            credit: row.get(10)?,
         })
     })?;
 
@@ -2275,6 +2308,8 @@ pub fn fetch_conversation_by_id(
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -2406,6 +2441,8 @@ pub fn search_global_messages(
                    WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                    WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                    WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                   WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                   WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                    ELSE 'antigravity'
                END as source_app,
                c.workspace_path,
@@ -2466,11 +2503,13 @@ pub fn fetch_workspace_detail_stats(
         hermes_cnt,
         mimo_cnt,
         windsurf_cnt,
+        codebuddy_cnt,
+        qoder_cnt,
         user_message_count,
         message_count,
         first_active,
         last_active
-    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
+    ): (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, Option<String>, Option<String>) = conn.query_row(
         r#"
         SELECT
             COUNT(*),
@@ -2492,6 +2531,8 @@ pub fn fetch_workspace_detail_stats(
             SUM(CASE WHEN COALESCE(source_app, '') = 'hermes' OR source_types LIKE '%hermes%' THEN 1 ELSE 0 END),
             SUM(CASE WHEN COALESCE(source_app, '') = 'mimo' OR source_types LIKE '%mimo%' THEN 1 ELSE 0 END),
             SUM(CASE WHEN COALESCE(source_app, '') = 'windsurf' OR source_types LIKE '%windsurf%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'codebuddy' OR source_types LIKE '%codebuddy%' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN COALESCE(source_app, '') = 'qoder' OR source_types LIKE '%qoder%' THEN 1 ELSE 0 END),
             COALESCE(SUM(user_message_count), 0),
             COALESCE(SUM(message_count), 0),
             MIN(created_at),
@@ -2511,13 +2552,15 @@ pub fn fetch_workspace_detail_stats(
                 r.get(6).unwrap_or(0),
                 r.get(7).unwrap_or(0),
                 r.get(8).unwrap_or(0),
-                r.get(9)?,
-                r.get(10)?,
+                r.get(9).unwrap_or(0),
+                r.get(10).unwrap_or(0),
                 r.get(11)?,
                 r.get(12)?,
+                r.get(13)?,
+                r.get(14)?,
             ))
         }
-    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
+    ).unwrap_or((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, None, None));
 
     let mut breakdown_parts = Vec::new();
     if ag_cnt > 0 {
@@ -2543,6 +2586,12 @@ pub fn fetch_workspace_detail_stats(
     }
     if windsurf_cnt > 0 {
         breakdown_parts.push(format!("Windsurf {}", windsurf_cnt));
+    }
+    if codebuddy_cnt > 0 {
+        breakdown_parts.push(format!("CodeBuddy {}", codebuddy_cnt));
+    }
+    if qoder_cnt > 0 {
+        breakdown_parts.push(format!("Qoder {}", qoder_cnt));
     }
     let agent_breakdown = if breakdown_parts.is_empty() {
         format!("共 {} 会话", conversation_count)
@@ -2752,6 +2801,8 @@ pub fn fetch_workspace_detail_stats(
         hermes_conversation_count: hermes_cnt,
         mimo_conversation_count: mimo_cnt,
         windsurf_conversation_count: windsurf_cnt,
+        codebuddy_conversation_count: codebuddy_cnt,
+        qoder_conversation_count: qoder_cnt,
         user_message_count,
         message_count,
         agent_breakdown,
@@ -3492,6 +3543,8 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as source_app,
             c.title as conv_title,

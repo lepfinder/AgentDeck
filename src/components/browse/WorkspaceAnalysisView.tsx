@@ -179,6 +179,20 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
         </span>
       );
     }
+    if (s.includes('codebuddy')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-violet-500/15 text-violet-600 dark:text-violet-400 border border-violet-500/25">
+          CodeBuddy
+        </span>
+      );
+    }
+    if (s.includes('qoder')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-green-500/15 text-green-600 dark:text-green-400 border border-green-500/25">
+          Qoder
+        </span>
+      );
+    }
     if (s.includes('claude')) {
       return (
         <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/25">

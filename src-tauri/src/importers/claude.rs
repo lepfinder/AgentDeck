@@ -183,6 +183,7 @@ fn parse_claude_jsonl(
                     tool_args: None,
                     duration_ms: None,
                     token_count: None,
+                    credit: None,
                     images: None,
                 });
                 step_idx += 1;
@@ -261,6 +262,7 @@ fn parse_claude_jsonl(
                     tool_args,
                     duration_ms: None,
                     token_count: None,
+                    credit: None,
                     images: None,
                 });
                 step_idx += 1;

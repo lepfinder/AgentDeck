@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod config;
 pub mod db;
+pub mod git_board;
 pub mod http_server;
 pub mod importers;
 pub mod media_archive;
@@ -192,6 +193,22 @@ fn import_prompt_preview_image_cmd(path: String) -> Result<String, String> {
         return Err("文件不存在或不可访问".into());
     }
     import_prompt_preview_image_path(&path)
+}
+
+/// 剪贴板粘贴方式导入：接收前端 paste 事件取出的图片字节（base64 编码）。
+#[tauri::command]
+fn import_prompt_preview_image_bytes_cmd(data: String, ext: String) -> Result<String, String> {
+    use base64::Engine as _;
+
+    let ext = ext.trim_start_matches('.').to_lowercase();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return Err("仅支持 png / jpg / jpeg / webp / gif 图片".into());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map_err(|e| format!("图片数据解码失败: {e}"))?;
+    media_archive::archive_image_bytes(&bytes, &ext, "prompts", "uploads", Some("pasted"))
+        .ok_or_else(|| "图片导入失败，请重试".to_string())
 }
 
 #[tauri::command]
@@ -1335,6 +1352,39 @@ fn open_url_cmd(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 在系统文件管理器中定位目录（macOS: Finder 选中；Windows: 资源管理器选中；Linux: 打开父目录）
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err("路径不存在".into());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(format!("/select,{}", p.display()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(p.parent().unwrap_or(p))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct IdeAppStatus {
     id: String,
@@ -1356,6 +1406,12 @@ fn command_on_path(bin: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn home_data_dir_exists(rel: &str) -> bool {
+    dirs::home_dir()
+        .map(|h| h.join("Library/Application Support").join(rel).exists())
+        .unwrap_or(false)
+}
+
 fn ide_installed(id: &str) -> bool {
     match id {
         "cursor" => macos_app_exists("Cursor") || command_on_path("cursor"),
@@ -1367,6 +1423,16 @@ fn ide_installed(id: &str) -> bool {
         "claude" => command_on_path("claude"),
         "codex" => command_on_path("codex"),
         "mimo" => macos_app_exists("Xiaomi MiMo"),
+        "codebuddy" => {
+            macos_app_exists("CodeBuddy CN")
+                || macos_app_exists("CodeBuddy")
+                || home_data_dir_exists("CodeBuddyExtension")
+        }
+        "qoder" => {
+            macos_app_exists("Qoder IDE")
+                || macos_app_exists("Qoder")
+                || command_on_path("qodercli")
+        }
         _ => false,
     }
 }
@@ -1403,6 +1469,18 @@ fn list_ide_apps_cmd() -> Result<Vec<IdeAppStatus>, String> {
             label: "Xiaomi MiMo".into(),
             kind: "app".into(),
             installed: ide_installed("mimo"),
+        },
+        IdeAppStatus {
+            id: "codebuddy".into(),
+            label: "CodeBuddy".into(),
+            kind: "app".into(),
+            installed: ide_installed("codebuddy"),
+        },
+        IdeAppStatus {
+            id: "qoder".into(),
+            label: "Qoder".into(),
+            kind: "app".into(),
+            installed: ide_installed("qoder"),
         },
     ])
 }
@@ -1459,6 +1537,20 @@ fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), 
             "claude" => open_in_terminal_cli("claude", &workspace_path),
             "codex" => open_in_terminal_cli("codex", &workspace_path),
             "mimo" => open_in_macos_app("Xiaomi MiMo", &workspace_path),
+            "codebuddy" => {
+                if macos_app_exists("CodeBuddy CN") {
+                    open_in_macos_app("CodeBuddy CN", &workspace_path)
+                } else {
+                    open_in_macos_app("CodeBuddy", &workspace_path)
+                }
+            }
+            "qoder" => {
+                if macos_app_exists("Qoder IDE") {
+                    open_in_macos_app("Qoder IDE", &workspace_path)
+                } else {
+                    open_in_macos_app("Qoder", &workspace_path)
+                }
+            }
             _ => Err(format!("不支持的 IDE: {}", ide)),
         }
     }
@@ -1485,6 +1577,7 @@ pub fn run() {
             create_prompt_cmd,
             pick_prompt_preview_image_cmd,
             import_prompt_preview_image_cmd,
+            import_prompt_preview_image_bytes_cmd,
             update_prompt_cmd,
             delete_prompt_cmd,
             toggle_prompt_star_cmd,
@@ -1511,6 +1604,14 @@ pub fn run() {
             search_messages,
             trigger_sync,
             get_quota_snapshot,
+            git_board::get_git_board,
+            git_board::get_git_commits,
+            git_board::get_git_status_files,
+            git_board::get_git_file_diff,
+            git_board::git_stage_all,
+            git_board::git_commit,
+            git_board::git_push,
+            git_board::get_git_pending_diff,
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
@@ -1549,7 +1650,8 @@ pub fn run() {
             service_manager::service_upsert,
             service_manager::service_rename_project,
             service_manager::service_rename_service,
-            service_manager::service_remove
+            service_manager::service_remove,
+            reveal_in_folder
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

@@ -903,6 +903,102 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     };
   }, [editorOpen, formIsMedia, showToast, t]);
 
+  // 编辑器打开时支持直接粘贴剪贴板图片（截图工作流：Cmd+Ctrl+Shift+4 → Cmd+V）
+  useEffect(() => {
+    if (!isTauri() || !editorOpen || !formIsMedia) return;
+
+    const ALLOWED_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+    let busy = false;
+
+    /** macOS 截图在剪贴板中常为 tiff，web <img> 无法展示，经 canvas 转 png 归档 */
+    const reencodeToPng = (blob: Blob): Promise<Blob> =>
+      new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('canvas 2d context unavailable');
+            ctx.drawImage(img, 0, 0);
+            canvas.toBlob(
+              (b) => {
+                URL.revokeObjectURL(url);
+                if (b) resolve(b);
+                else reject(new Error('canvas toBlob failed'));
+              },
+              'image/png'
+            );
+          } catch (e) {
+            URL.revokeObjectURL(url);
+            reject(e);
+          }
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('clipboard image decode failed'));
+        };
+        img.src = url;
+      });
+
+    const bytesToBase64 = (bytes: Uint8Array): string => {
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      return btoa(binary);
+    };
+
+    const onPaste = async (e: ClipboardEvent) => {
+      if (busy || !e.clipboardData) return;
+      const cd = e.clipboardData;
+      const items = Array.from(cd.items);
+      let file: File | null = null;
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          file = item.getAsFile();
+          if (file) break;
+        }
+      }
+      if (!file) return; // 剪贴板无图片，保持默认粘贴行为
+      // 粘贴目标为文本框且剪贴板同时带文本（如网页图文复制）时，保持默认文本粘贴
+      const target = e.target as HTMLElement | null;
+      const inEditable =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable);
+      if (inEditable && cd.getData('text/plain')) return;
+      e.preventDefault();
+      busy = true;
+      setImportingImage(true);
+      try {
+        let blob: Blob = file;
+        if (!ALLOWED_TYPES.has(file.type)) {
+          blob = await reencodeToPng(file);
+        }
+        const ext =
+          blob.type === 'image/jpeg' ? 'jpg' : blob.type.split('/')[1]?.split('+')[0] || 'png';
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        const path = await api.importPromptPreviewImageBytes(bytesToBase64(bytes), ext);
+        setForm((f) => ({ ...f, preview_local: path }));
+        showToast(t('prompt.pastedImage'));
+      } catch (err) {
+        console.error('paste import failed:', err);
+        showToast(t('prompt.uploadImageFailed'));
+      } finally {
+        busy = false;
+        setImportingImage(false);
+      }
+    };
+
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [editorOpen, formIsMedia, showToast, t]);
+
   const handleDelete = async (id: number) => {
     if (!window.confirm(t('prompt.confirmDelete'))) return;
     try {

@@ -679,6 +679,7 @@ fn parse_antigravity_session(
                     tool_args: None,
                     duration_ms: None,
                     token_count: None,
+                    credit: None,
                     images: images_json,
                 });
                 step_idx += 1;
@@ -791,6 +792,7 @@ fn parse_antigravity_session(
                     tool_args: tool_calls_json,
                     duration_ms: None,
                     token_count: None,
+                    credit: None,
                     images: None,
                 });
                 step_idx += 1;

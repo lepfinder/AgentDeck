@@ -141,6 +141,32 @@ pub fn collect_agent_sources(conn: &rusqlite::Connection) -> Vec<AgentSourceInfo
                 ),
             ],
         ),
+        (
+            "codebuddy",
+            "CodeBuddy",
+            vec![
+                make_info(
+                    "Library/Application Support/CodeBuddyExtension/Data",
+                    "会话正文与消息存储 (JSON)",
+                ),
+                make_info(
+                    "Library/Application Support/CodeBuddy CN/codebuddy-sessions.vscdb",
+                    "最近会话元数据 (SQLite)",
+                ),
+                make_info(
+                    "Library/Application Support/CodeBuddy CN/User/globalStorage/tencent-cloud.coding-copilot",
+                    "运行时快照（TODO / 编辑会话 / 文件变更）",
+                ),
+            ],
+        ),
+        (
+            "qoder",
+            "Qoder",
+            vec![
+                make_info(".qoder/projects", "项目与会话历史 (JSONL)"),
+                make_info(".qoder/tmp", "会话附件临时副本（图片等）"),
+            ],
+        ),
     ];
 
     agents
@@ -333,8 +359,8 @@ mod tests {
         .unwrap();
 
         let sources = collect_agent_sources(&conn);
-        // cursor / antigravity / claude / codex / hermes / workbuddy / mimo / windsurf
-        assert_eq!(sources.len(), 8);
+        // cursor / antigravity / claude / codex / hermes / workbuddy / mimo / windsurf / codebuddy / qoder
+        assert_eq!(sources.len(), 10);
 
         let cursor_info = sources.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor_info.name, "Cursor");

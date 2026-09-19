@@ -581,6 +581,8 @@ export const api = {
       { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
       { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
       { id: 'mimo', label: 'Xiaomi MiMo', kind: 'app', installed: false },
+      { id: 'codebuddy', label: 'CodeBuddy', kind: 'app', installed: false },
+      { id: 'qoder', label: 'Qoder', kind: 'app', installed: false },
     ];
   },
 
@@ -590,6 +592,14 @@ export const api = {
       return;
     }
     throw new Error('仅在客户端环境下支持打开 AI IDE');
+  },
+
+  async revealInFolder(path: string): Promise<void> {
+    if (isTauri()) {
+      await invoke('reveal_in_folder', { path });
+      return;
+    }
+    throw new Error('仅在客户端环境下支持打开文件管理器');
   },
 
   async listPrompts(
@@ -635,6 +645,17 @@ export const api = {
   async importPromptPreviewImage(path: string): Promise<string> {
     if (isTauri()) {
       return await invoke<string>('import_prompt_preview_image_cmd', { path });
+    }
+    throw new Error('仅在客户端环境下支持本地图片上传');
+  },
+
+  /** 粘贴导入：将剪贴板图片字节（base64）归档，返回 /media/prompts/uploads/… 路径 */
+  async importPromptPreviewImageBytes(dataB64: string, ext: string): Promise<string> {
+    if (isTauri()) {
+      return await invoke<string>('import_prompt_preview_image_bytes_cmd', {
+        data: dataB64,
+        ext,
+      });
     }
     throw new Error('仅在客户端环境下支持本地图片上传');
   },
@@ -754,5 +775,41 @@ export const api = {
       }),
     remove: (id: string) =>
       invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_remove', { id }),
+  },
+
+  gitBoard: {
+    get: (days?: number) =>
+      invoke<import('../components/gitboard/GitBoardView').GitBoardResponse>('get_git_board', {
+        days: days ?? null,
+      }),
+    commits: (workspacePath: string, limit?: number) =>
+      invoke<import('../components/gitboard/GitBoardView').GitCommitInfo[]>('get_git_commits', {
+        workspacePath,
+        limit: limit ?? null,
+      }),
+    statusFiles: (workspacePath: string, limit?: number) =>
+      invoke<import('../components/gitboard/GitBoardView').GitStatusFilesResponse>(
+        'get_git_status_files',
+        {
+          workspacePath,
+          limit: limit ?? null,
+        }
+      ),
+    fileDiff: (workspacePath: string, path: string, staged: boolean) =>
+      invoke<import('../components/gitboard/GitBoardView').GitFileDiffResponse>('get_git_file_diff', {
+        workspacePath,
+        path,
+        staged,
+      }),
+    pendingDiff: (workspacePath: string) =>
+      invoke<import('../components/gitboard/GitBoardView').GitPendingDiffResponse>(
+        'get_git_pending_diff',
+        { workspacePath }
+      ),
+    stageAll: (workspacePath: string) =>
+      invoke<void>('git_stage_all', { workspacePath }),
+    commit: (workspacePath: string, message: string) =>
+      invoke<string>('git_commit', { workspacePath, message }),
+    push: (workspacePath: string) => invoke<string>('git_push', { workspacePath }),
   },
 };

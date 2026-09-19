@@ -132,7 +132,7 @@ export function getApiDocsMarkdown(): string {
 - **请求方法**: \`GET /api/conversations\`
 - **查询参数**:
   - \`workspace\` (*string, 可选*): 限定工作区路径
-  - \`source\` (*string, 可选*): 限定工具源 (\`antigravity\` / \`cursor\` / \`claude\` / \`codex\` / \`workbuddy\` / \`mimo\` / \`windsurf\`)
+  - \`source\` (*string, 可选*): 限定工具源 (\`antigravity\` / \`cursor\` / \`claude\` / \`codex\` / \`workbuddy\` / \`hermes\` / \`mimo\` / \`windsurf\` / \`codebuddy\` / \`qoder\`)
   - \`limit\` (*number, 可选*): 限制返回条数 (默认 50)
   - \`offset\` (*number, 可选*): 分页偏移量 (默认 0)
 - **调用示例**:

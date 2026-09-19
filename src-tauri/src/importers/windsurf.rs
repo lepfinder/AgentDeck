@@ -194,6 +194,7 @@ fn parse_cascade_file(path: &Path) -> Result<Option<RawConversation>, String> {
                         tool_args,
                         duration_ms: None,
                         token_count: None,
+                        credit: None,
                         images: None,
                     });
                     step_index += 1;
@@ -218,6 +219,7 @@ fn parse_cascade_file(path: &Path) -> Result<Option<RawConversation>, String> {
                         tool_args: Some(serde_json::json!({ "command": cmd }).to_string()),
                         duration_ms: None,
                         token_count: None,
+                        credit: None,
                         images: None,
                     });
                     step_index += 1;
@@ -235,6 +237,7 @@ fn parse_cascade_file(path: &Path) -> Result<Option<RawConversation>, String> {
                         tool_args: None,
                         duration_ms: None,
                         token_count: None,
+                        credit: None,
                         images: None,
                     });
                     step_index += 1;
@@ -258,6 +261,7 @@ fn parse_cascade_file(path: &Path) -> Result<Option<RawConversation>, String> {
                     tool_args: None,
                     duration_ms: None,
                     token_count: None,
+                    credit: None,
                     images: None,
                 });
                 step_index += 1;
@@ -352,6 +356,7 @@ fn text_msg(
         tool_args: None,
         duration_ms: None,
         token_count: None,
+        credit: None,
         images: None,
     }
 }

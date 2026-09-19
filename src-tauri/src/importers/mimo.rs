@@ -326,6 +326,7 @@ fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>,
                 tool_args: None,
                 duration_ms: None,
                 token_count: None,
+                credit: None,
                 images: None,
             });
             step_idx += 1;
@@ -349,6 +350,7 @@ fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>,
                 tool_args: args,
                 duration_ms: None,
                 token_count: None,
+                credit: None,
                 images: None,
             });
             step_idx += 1;

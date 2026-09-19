@@ -8,10 +8,12 @@ use std::time::Instant;
 
 pub mod antigravity;
 pub mod claude;
+pub mod codebuddy;
 pub mod codex;
 pub mod cursor;
 pub mod hermes;
 pub mod mimo;
+pub mod qoder;
 pub mod windsurf;
 pub mod workbuddy;
 
@@ -28,6 +30,8 @@ pub struct RawMessage {
     pub tool_args: Option<String>,
     pub duration_ms: Option<i64>,
     pub token_count: Option<i64>,
+    #[serde(default)]
+    pub credit: Option<f64>,
     pub images: Option<String>,
 }
 
@@ -206,6 +210,9 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
         msg.tool_args.hash(&mut hasher);
         msg.created_at.hash(&mut hasher);
         msg.images.hash(&mut hasher);
+        msg.model_name.hash(&mut hasher);
+        msg.token_count.hash(&mut hasher);
+        msg.credit.map(|c| c.to_bits()).hash(&mut hasher);
     }
     for art in &conv.artifacts {
         art.file_name.hash(&mut hasher);
@@ -399,6 +406,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
         tool_name: Option<String>,
         tool_args: Option<String>,
         images: Option<String>,
+        model_name: Option<String>,
+        token_count: Option<i64>,
+        credit: Option<f64>,
     }
 
     let mut existing_map: HashMap<i64, ExistingMsgSnapshot> = HashMap::new();
@@ -406,7 +416,7 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
         let mut stmt = tx.prepare_cached(
             r#"
             SELECT id, step_index, created_at, role, message_type, content,
-                   thinking, tool_name, tool_args, images
+                   thinking, tool_name, tool_args, images, model_name, token_count, credit
             FROM messages
             WHERE conversation_id = ?
             "#,
@@ -424,6 +434,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                     tool_name: r.get(7).ok(),
                     tool_args: r.get(8).ok(),
                     images: r.get(9).ok(),
+                    model_name: r.get(10).ok(),
+                    token_count: r.get(11).ok(),
+                    credit: r.get(12).ok(),
                 },
             ))
         })?;
@@ -440,9 +453,10 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             r#"
             INSERT INTO messages (
                 conversation_id, step_index, role, message_type, content, thinking,
-                tool_name, tool_args, created_at, source, is_truncated, images
+                tool_name, tool_args, created_at, source, is_truncated, images,
+                model_name, token_count, credit
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, ?11, ?12, ?13, ?14)
             "#,
         )?;
 
@@ -451,7 +465,8 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
             UPDATE messages
             SET role = ?1, message_type = ?2, content = ?3, thinking = ?4,
                 tool_name = ?5, tool_args = ?6, images = ?7,
-                created_at = CASE WHEN created_at IS NOT NULL AND created_at != '' THEN created_at ELSE ?8 END
+                created_at = CASE WHEN created_at IS NOT NULL AND created_at != '' THEN created_at ELSE ?8 END,
+                model_name = ?10, token_count = ?11, credit = ?12
             WHERE id = ?9
             "#,
         )?;
@@ -477,6 +492,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                     || existing.tool_name != msg.tool_name
                     || existing.tool_args != msg.tool_args
                     || existing.images != msg.images
+                    || existing.model_name != msg.model_name
+                    || existing.token_count != msg.token_count
+                    || existing.credit != msg.credit
                     || (existing_created_empty && msg.created_at.is_some());
 
                 if needs_update {
@@ -497,6 +515,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                         &msg.images,
                         fallback_created,
                         existing.id,
+                        &msg.model_name,
+                        &msg.token_count,
+                        &msg.credit,
                     ])?;
                 }
             } else {
@@ -513,6 +534,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                     final_created,
                     &conv.source_app,
                     &msg.images,
+                    &msg.model_name,
+                    &msg.token_count,
+                    &msg.credit,
                 ])?;
             }
         }
@@ -616,7 +640,7 @@ impl SyncEngine {
         );
 
         type ImporterFn = fn(&Connection, bool) -> ImporterStats;
-        let importers: [(&str, ImporterFn); 8] = [
+        let importers: [(&str, ImporterFn); 10] = [
             ("Antigravity", antigravity::sync),
             ("Cursor", cursor::sync),
             ("Claude", claude::sync),
@@ -625,6 +649,8 @@ impl SyncEngine {
             ("WorkBuddy", workbuddy::sync),
             ("MiMo", mimo::sync),
             ("Windsurf", windsurf::sync),
+            ("CodeBuddy", codebuddy::sync),
+            ("Qoder", qoder::sync),
         ];
 
         for (name, importer) in importers {
@@ -693,6 +719,7 @@ mod tests {
             tool_args: None,
             duration_ms: None,
             token_count: None,
+            credit: None,
             images: None,
         };
 

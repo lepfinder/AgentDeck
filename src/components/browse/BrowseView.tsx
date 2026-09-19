@@ -6,6 +6,7 @@ import { useI18n } from '../../i18n';
 import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
 import { OpenInIdeMenu } from './OpenInIdeMenu';
+import { WorkspaceMoreMenu } from './WorkspaceMoreMenu';
 import { DashboardView } from '../dashboard/DashboardView';
 import { PromptLibraryView } from '../prompts/PromptLibraryView';
 import { ArtifactsModal } from './ArtifactsModal';
@@ -35,11 +36,11 @@ import {
   Layers,
   Loader2,
   StopCircle,
-  ArrowRightLeft,
   CheckCircle2,
   FolderInput,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
+import { GitBoardView } from '../gitboard/GitBoardView';
 import {
   clearConversationAiTitle,
   renameConversationTitle,
@@ -63,6 +64,7 @@ interface Props {
   isStarredView: boolean;
   isPromptLibraryView: boolean;
   isServicesView: boolean;
+  isGitBoardView: boolean;
   promptLibraryCount: number;
   onSelectWorkspace: (ws: string) => void;
   onSelectConversation: (id: string) => void;
@@ -82,6 +84,7 @@ export const BrowseView: React.FC<Props> = ({
   isStarredView,
   isPromptLibraryView,
   isServicesView,
+  isGitBoardView,
   promptLibraryCount,
   onSelectWorkspace,
   onSelectConversation,
@@ -354,20 +357,6 @@ export const BrowseView: React.FC<Props> = ({
     loadConversations();
   }, [selectedWorkspace, convSearch, isStarredView]);
 
-  // 仅在切换工作区 / 收藏视图时取消；切勿把 batchRunning 放进依赖，
-  // 否则一点「开始」就会把 cancel 置 true，整批立刻变成「已取消」。
-  const batchWsRef = useRef(selectedWorkspace);
-  const batchStarredRef = useRef(isStarredView);
-  useEffect(() => {
-    const wsChanged = batchWsRef.current !== selectedWorkspace;
-    const starredChanged = batchStarredRef.current !== isStarredView;
-    batchWsRef.current = selectedWorkspace;
-    batchStarredRef.current = isStarredView;
-    if (wsChanged || starredChanged) {
-      batchCancelRef.current = true;
-    }
-  }, [selectedWorkspace, isStarredView]);
-
   const batchCandidates = selectConversationsForBatch(conversations, batchOpts);
   const batchConcurrency = getBatchConcurrency();
   const batchEstimateSec = estimateBatchSeconds(batchCandidates.length, batchConcurrency);
@@ -618,6 +607,10 @@ export const BrowseView: React.FC<Props> = ({
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-rose-500/15 text-rose-500 border border-rose-500/30 rounded">MiMo</span>;
       case 'windsurf':
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-sky-500/15 text-sky-500 border border-sky-500/30 rounded">Windsurf</span>;
+      case 'codebuddy':
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-violet-500/15 text-violet-500 border border-violet-500/30 rounded">CodeBuddy</span>;
+      case 'qoder':
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-green-500/15 text-green-500 border border-green-500/30 rounded">Qoder</span>;
       default:
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted rounded">{source}</span>;
     }
@@ -687,7 +680,7 @@ export const BrowseView: React.FC<Props> = ({
           <button
             onClick={onSwitchToDashboard}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView
+              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
                 : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
             }`}
@@ -758,7 +751,7 @@ export const BrowseView: React.FC<Props> = ({
             const shortName = ws.workspace_path
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : t('nav.uncategorized');
-            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && ws.workspace_path === selectedWorkspace;
+            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
@@ -772,23 +765,18 @@ export const BrowseView: React.FC<Props> = ({
                     : 'bg-transparent border-transparent hover:theme-bg-card theme-text-muted hover:theme-text-main'
                 } group relative`}
               >
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
+                <WorkspaceMoreMenu
+                  workspacePath={ws.workspace_path}
+                  onMerge={() => {
                     setMergeSource(ws);
                     setMergeMode('existing');
                     setMergeTarget('');
                   }}
-                  title={t('ws.merge')}
-                  className="absolute top-2 right-2 p-1 rounded-md theme-text-muted hover:theme-text-main hover:theme-bg-card opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                >
-                  <ArrowRightLeft className="h-3.5 w-3.5" />
-                </button>
+                />
                 <div className="flex items-center justify-between">
                   <span className="font-bold theme-text-main text-xs truncate pr-1">{shortName}</span>
                   {ws.last_updated && (
-                    <span className="text-[10px] theme-text-sub flex-shrink-0">
+                    <span className="text-[10px] theme-text-sub flex-shrink-0 transition-transform duration-200 group-hover:-translate-x-6">
                       {formatRelativeTime(ws.last_updated)}
                     </span>
                   )}
@@ -840,6 +828,16 @@ export const BrowseView: React.FC<Props> = ({
                       Windsurf {ws.windsurf_cnt}
                     </span>
                   )}
+                  {(ws.codebuddy_cnt ?? 0) > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-violet-500/15 text-violet-500 rounded font-mono">
+                      CodeBuddy {ws.codebuddy_cnt}
+                    </span>
+                  )}
+                  {(ws.qoder_cnt ?? 0) > 0 && (
+                    <span className="px-1 py-0.2 text-[9px] bg-green-500/15 text-green-500 rounded font-mono">
+                      Qoder {ws.qoder_cnt}
+                    </span>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
@@ -854,7 +852,11 @@ export const BrowseView: React.FC<Props> = ({
       </aside>
 
       {/* 右侧主内容区域 */}
-      {isServicesView ? (
+      {isGitBoardView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <GitBoardView />
+        </main>
+      ) : isServicesView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <ServicesView />
         </main>

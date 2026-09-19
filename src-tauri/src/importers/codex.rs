@@ -184,6 +184,7 @@ fn parse_codex_file(
                         tool_args: None,
                         duration_ms: None,
                         token_count: None,
+                        credit: None,
                         images: None,
                     });
                     step_idx += 1;
@@ -208,6 +209,7 @@ fn parse_codex_file(
                         tool_args: Some(fn_args),
                         duration_ms: None,
                         token_count: None,
+                        credit: None,
                         images: None,
                     });
                     step_idx += 1;
@@ -248,6 +250,7 @@ fn parse_codex_file(
                 tool_args: None,
                 duration_ms: None,
                 token_count: None,
+                credit: None,
                 images: None,
             });
             step_idx += 1;

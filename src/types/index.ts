@@ -9,6 +9,8 @@ export interface WorkspaceStat {
   hermes_cnt: number;
   mimo_cnt: number;
   windsurf_cnt: number;
+  codebuddy_cnt: number;
+  qoder_cnt: number;
   message_count: number;
   user_message_count: number;
   last_updated?: string;
@@ -69,6 +71,7 @@ export interface MessageItem {
   created_at?: string;
   model_name?: string;
   token_count?: number;
+  credit?: number;
   duration_ms?: number;
   tool_calls_json?: string;
   images?: string | Array<{ src: string; width?: number; height?: number }>;
@@ -305,6 +308,8 @@ export interface WorkspaceDetailStats {
   hermes_conversation_count: number;
   mimo_conversation_count: number;
   windsurf_conversation_count: number;
+  codebuddy_conversation_count: number;
+  qoder_conversation_count: number;
   user_message_count: number;
   message_count: number;
   agent_breakdown: string;

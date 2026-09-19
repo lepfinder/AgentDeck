@@ -17,6 +17,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { QuotaBar } from './components/common/QuotaBar';
+import { GitBoardPill } from './components/gitboard/GitBoardPill';
 
 /** 自动同步脉冲 — 与 QuotaBar 同款：仅前台调度，自适应 2–5 分钟。 */
 const AUTO_SYNC_FLOOR_MS = 2 * 60_000;
@@ -37,6 +38,7 @@ export function App() {
   const [isStarredView, setIsStarredView] = useState(false);
   const [isPromptLibraryView, setIsPromptLibraryView] = useState(false);
   const [isServicesView, setIsServicesView] = useState(false);
+  const [isGitBoardView, setIsGitBoardView] = useState(false);
   const [promptLibraryCount, setPromptLibraryCount] = useState(0);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
@@ -57,6 +59,21 @@ export function App() {
     setIsStarredView(false);
     setIsPromptLibraryView(false);
     setIsServicesView(false);
+    setIsGitBoardView(false);
+  };
+
+  // 顶栏 Git 状态胶囊：点击进入 / 再次点击退出 Git 看板
+  const handleOpenGitBoard = () => {
+    if (isGitBoardView) {
+      setIsGitBoardView(false);
+      return;
+    }
+    setSelectedWorkspace('');
+    setSelectedConversationId('');
+    setIsStarredView(false);
+    setIsPromptLibraryView(false);
+    setIsServicesView(false);
+    setIsGitBoardView(true);
   };
 
   // 顶栏拖拽支持
@@ -288,6 +305,7 @@ export function App() {
     setIsStarredView(false);
     setIsPromptLibraryView(false);
     setIsServicesView(false);
+    setIsGitBoardView(false);
   };
 
   return (
@@ -320,6 +338,9 @@ export function App() {
         {/* 右侧：额度一瞥 + 刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
         <div className="flex items-center gap-2">
           <QuotaBar />
+
+          {/* Git 状态胶囊：活跃工作区 Git 状态一瞥，点击进入 Git 看板 */}
+          <GitBoardPill active={isGitBoardView} onOpen={handleOpenGitBoard} />
 
           {/* 刷新与实时增量同步按钮 */}
           <button
@@ -407,12 +428,14 @@ export function App() {
           isStarredView={isStarredView}
           isPromptLibraryView={isPromptLibraryView}
           isServicesView={isServicesView}
+          isGitBoardView={isGitBoardView}
           promptLibraryCount={promptLibraryCount}
           onSelectWorkspace={(ws) => {
             setSelectedWorkspace(ws);
             setIsStarredView(false);
             setIsPromptLibraryView(false);
             setIsServicesView(false);
+            setIsGitBoardView(false);
           }}
           onSelectConversation={setSelectedConversationId}
           onSwitchToDashboard={() => {
@@ -421,6 +444,7 @@ export function App() {
             setIsStarredView(false);
             setIsPromptLibraryView(false);
             setIsServicesView(false);
+            setIsGitBoardView(false);
           }}
           onSwitchToStarred={() => {
             setSelectedWorkspace('');
@@ -428,6 +452,7 @@ export function App() {
             setIsStarredView(true);
             setIsPromptLibraryView(false);
             setIsServicesView(false);
+            setIsGitBoardView(false);
           }}
           onSwitchToPromptLibrary={() => {
             setSelectedWorkspace('');
@@ -435,6 +460,7 @@ export function App() {
             setIsStarredView(false);
             setIsPromptLibraryView(true);
             setIsServicesView(false);
+            setIsGitBoardView(false);
           }}
           onSwitchToServices={() => {
             setSelectedWorkspace('');
@@ -442,6 +468,7 @@ export function App() {
             setIsStarredView(false);
             setIsPromptLibraryView(false);
             setIsServicesView(true);
+            setIsGitBoardView(false);
           }}
           onPromptLibraryCountChange={setPromptLibraryCount}
           stats={stats}

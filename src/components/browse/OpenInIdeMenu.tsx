@@ -11,6 +11,8 @@ const IDE_HINT_KEYS: Record<string, MessageKey> = {
   claude: 'ide.hint.claude',
   codex: 'ide.hint.codex',
   mimo: 'ide.hint.mimo',
+  codebuddy: 'ide.hint.codebuddy',
+  qoder: 'ide.hint.qoder',
 };
 
 const DEFAULT_IDES: IdeAppStatus[] = [
@@ -19,6 +21,8 @@ const DEFAULT_IDES: IdeAppStatus[] = [
   { id: 'claude', label: 'Claude Code', kind: 'cli', installed: false },
   { id: 'codex', label: 'Codex', kind: 'cli', installed: false },
   { id: 'mimo', label: 'Xiaomi MiMo', kind: 'app', installed: false },
+  { id: 'codebuddy', label: 'CodeBuddy', kind: 'app', installed: false },
+  { id: 'qoder', label: 'Qoder', kind: 'app', installed: false },
 ];
 
 interface Props {

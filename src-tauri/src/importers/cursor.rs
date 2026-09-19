@@ -659,6 +659,7 @@ fn extract_messages(
             tool_args: tool_results,
             duration_ms: None,
             token_count: None,
+            credit: None,
             images: images_json,
         });
         step_idx += 1;

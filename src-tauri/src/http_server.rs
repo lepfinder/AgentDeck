@@ -557,7 +557,9 @@ fn route_get(
                                 "wb_cnt": w.wb_cnt,
                                 "hermes_cnt": w.hermes_cnt,
                                 "mimo_cnt": w.mimo_cnt,
-                                "windsurf_cnt": w.windsurf_cnt
+                                "windsurf_cnt": w.windsurf_cnt,
+                                "codebuddy_cnt": w.codebuddy_cnt,
+                                "qoder_cnt": w.qoder_cnt
                             })
                         })
                         .collect();
@@ -964,6 +966,8 @@ pub(crate) fn build_daily_summary(
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as source_app,
             m.role,
@@ -1238,6 +1242,8 @@ pub(crate) fn build_recent_activity(
                 WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
                 WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
                 ELSE 'antigravity'
             END as source_app,
             m.role,

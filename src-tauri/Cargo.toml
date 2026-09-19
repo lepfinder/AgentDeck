@@ -36,4 +36,7 @@ tar = "0.4"
 rfd = "0.15"
 open = "5"
 base64 = "0.22"
+md5 = "0.7"
 aes-gcm = "0.10"
+# Git 看板：只读状态采集（status/branch/ahead-behind），关闭默认网络特性以缩减体积
+git2 = { version = "0.19", default-features = false }

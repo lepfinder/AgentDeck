@@ -11,7 +11,7 @@
 
 Collect every coding-agent session and message on your machine into one place — manage, search, and analyze them from a single native desktop app. Built with **Tauri 2 + Rust + React**.
 
-Cursor, Antigravity, Claude Code, Codex, Hermes, and WorkBuddy each keep their own logs in separate directories. AgentDeck syncs them read-only into SQLite, mirrors media locally, and exposes a loopback REST API so other agents can query your history too.
+Cursor, Antigravity, Claude Code, Codex, Hermes, WorkBuddy, MiMo, Windsurf, CodeBuddy, and Qoder each keep their own logs in separate directories. AgentDeck syncs them read-only into SQLite, mirrors media locally, and exposes a loopback REST API so other agents can query your history too.
 
 ![AgentDeck dashboard — stats, activity charts, and contribution heatmap](imgs/dashboard.png)
 
@@ -28,7 +28,7 @@ Cursor, Antigravity, Claude Code, Codex, Hermes, and WorkBuddy each keep their o
 - **Spotlight search (⌘K)** -- full-text search across conversations with role filters and jump-to-match navigation.
 - **Prompt library** -- collect external prompts independently (categories, tags, source notes); not tied to a single session.
 - **Project analysis** -- per-workspace retrospective reports and feature-module extraction powered by configurable LLM providers.
-- **Open in AI IDE** -- launch Cursor / Antigravity for the selected workspace, or start Claude Code / Codex in Terminal.
+- **Open in AI IDE** -- launch Cursor / Antigravity / CodeBuddy / Qoder for the selected workspace, or start Claude Code / Codex in Terminal.
 - **Loopback REST API** -- `127.0.0.1:8788`, no token, localhost only; interactive docs at `/docs`.
 - **Backup & media archive** -- SQLite hot snapshots, media mirrored to `~/.agentdeck/media/`.
 - **i18n & themes** -- English + Chinese UI; dark / light theme toggle.
@@ -76,6 +76,10 @@ AgentDeck watches local agent data directories and syncs them into its own SQLit
 | Codex | Session history sync |
 | Hermes | Session history sync |
 | WorkBuddy | Session history sync |
+| MiMo | Session history sync |
+| Windsurf | Session history sync |
+| CodeBuddy | Full session + message sync; model, token usage, and credit cost archived |
+| Qoder | Full session + message sync; model, credit cost, thinking, and image attachments archived |
 
 Data stays on your machine under `~/.agentdeck/`. AgentDeck does not upload sessions to the cloud.
 

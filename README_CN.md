@@ -11,7 +11,7 @@
 
 采集本机所有 coding agent 的会话与消息，在一处完成统一管理、检索与分析。基于 **Tauri 2 + Rust + React** 的原生桌面应用。
 
-Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 各自维护独立的会话目录。AgentDeck 只读同步到 SQLite，媒体本地镜像，并提供回环 REST API，供其他 Agent 实时查询与复盘。
+Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy、MiMo、Windsurf、CodeBuddy、Qoder 各自维护独立的会话目录。AgentDeck 只读同步到 SQLite，媒体本地镜像，并提供回环 REST API，供其他 Agent 实时查询与复盘。
 
 ![AgentDeck 全景大盘 — 统计卡片、活跃图表与贡献热力图](imgs/dashboard.png)
 
@@ -28,7 +28,7 @@ Cursor、Antigravity、Claude Code、Codex、Hermes、WorkBuddy 各自维护独�
 - **Spotlight 搜索（⌘K）** -- 跨会话全文检索，支持角色筛选与跳转定位。
 - **提示词库** -- 独立收藏外部 prompt（分类、标签、来源备注），不绑定某一条会话。
 - **项目分析** -- 按工作区生成复盘报告与功能模块提取，可配置 LLM 供应商。
-- **在 AI IDE 中打开** -- 选中项目后，可从会话列表用 Cursor / Antigravity 打开目录，或在终端启动 Claude Code / Codex。
+- **在 AI IDE 中打开** -- 选中项目后，可从会话列表用 Cursor / Antigravity / CodeBuddy / Qoder 打开目录，或在终端启动 Claude Code / Codex。
 - **本机 REST API** -- `127.0.0.1:8788`，免 Token，仅回环网卡；交互文档见 `/docs`。
 - **备份与媒体归档** -- SQLite 热快照、媒体镜像到 `~/.agentdeck/media/`。
 - **中英双语 + 主题** -- 界面支持中文 / English；深色 / 浅色主题切换。
@@ -76,6 +76,10 @@ AgentDeck 监听本地 Agent 数据目录，将会话同步到自有 SQLite 归�
 | Codex | 会话历史同步 |
 | Hermes | 会话历史同步 |
 | WorkBuddy | 会话历史同步 |
+| MiMo | 会话历史同步 |
+| Windsurf | 会话历史同步 |
+| CodeBuddy | 完整会话与消息同步；模型名 / token 用量 / 积分消耗归档 |
+| Qoder | 完整会话与消息同步；模型名 / 积分消耗 / thinking / 图片附件归档 |
 
 数据默认保存在本机 `~/.agentdeck/`，不会上传到云端。
 
