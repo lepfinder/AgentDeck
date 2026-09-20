@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "AgentDeck",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "identifier": "com.agentdeck.app",
   "build": {
     "frontendDist": "../dist",
@@ -10,6 +10,7 @@
     "beforeBuildCommand": "npm run build && npm run generate:api-docs"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "AgentDeck",

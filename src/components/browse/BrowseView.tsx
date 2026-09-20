@@ -5,6 +5,7 @@ import { formatBeijingTime, formatRelativeTime } from '../../utils/date';
 import { useI18n } from '../../i18n';
 import { listen } from '@tauri-apps/api/event';
 import { WorkspaceAnalysisView } from './WorkspaceAnalysisView';
+import { ProjectHeader } from './ProjectHeader';
 import { OpenInIdeMenu } from './OpenInIdeMenu';
 import { WorkspaceMoreMenu } from './WorkspaceMoreMenu';
 import { DashboardView } from '../dashboard/DashboardView';
@@ -22,7 +23,6 @@ import {
   Wrench,
   Clock,
   Sparkles,
-  BarChart3,
   ArrowLeft,
   ArrowUpDown,
   Maximize2,
@@ -38,6 +38,7 @@ import {
   StopCircle,
   CheckCircle2,
   FolderInput,
+  GitBranch,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
 import { GitBoardView } from '../gitboard/GitBoardView';
@@ -72,6 +73,8 @@ interface Props {
   onSwitchToStarred: () => void;
   onSwitchToPromptLibrary: () => void;
   onSwitchToServices: () => void;
+  /** 从项目分析页跳到该项目的 Git 看板详情 */
+  onOpenGitBoard: (wsPath: string) => void;
   onPromptLibraryCountChange: (count: number) => void;
   stats: DashboardStats | null;
   loadingStats: boolean;
@@ -92,6 +95,7 @@ export const BrowseView: React.FC<Props> = ({
   onSwitchToStarred,
   onSwitchToPromptLibrary,
   onSwitchToServices,
+  onOpenGitBoard,
   onPromptLibraryCountChange,
   stats,
   loadingStats,
@@ -99,6 +103,8 @@ export const BrowseView: React.FC<Props> = ({
 }) => {
   const { t } = useI18n();
   const [workspaces, setWorkspaces] = useState<WorkspaceStat[]>([]);
+  /** 各工作区未提交文件数（git dirty），仅 >0 时展示 */
+  const [wsGitDirty, setWsGitDirty] = useState<Record<string, number>>({});
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [currentConv, setCurrentConv] = useState<ConversationItem | null>(null);
@@ -273,9 +279,35 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
+  /** 拉取各项目未提交文件数（复用 Git 看板探测，365 天窗口覆盖冷项目） */
+  const loadWsGitDirty = async () => {
+    try {
+      const res = await api.gitBoard.get(365);
+      const map: Record<string, number> = {};
+      for (const e of res.entries || []) {
+        const n =
+          (e.staged || 0) + (e.unstaged || 0) + (e.untracked || 0) + (e.conflicts || 0);
+        if (n > 0 && e.workspace_path) map[e.workspace_path] = n;
+      }
+      setWsGitDirty(map);
+    } catch (e) {
+      console.error('loadWsGitDirty failed:', e);
+    }
+  };
+
+  // 离开 Git 模式后刷新侧栏 dirty 计数（提交/推送后可能已变化）
   useEffect(() => {
-    loadWorkspaces();
+    if (!isGitBoardView) void loadWsGitDirty();
+  }, [isGitBoardView]);
+
+  useEffect(() => {
+    void loadWorkspaces();
   }, [wsSearch]);
+
+  // 首次进入加载侧栏未提交数
+  useEffect(() => {
+    void loadWsGitDirty();
+  }, []);
 
   const handleMergeWorkspace = async () => {
     if (!mergeSource || !mergeTarget.trim()) return;
@@ -618,6 +650,111 @@ export const BrowseView: React.FC<Props> = ({
 
   const formatTime = formatBeijingTime;
 
+  /** 会话列表（品字型左下 / 收藏视图左侧共用） */
+  const renderConversationList = () => (
+    <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
+      <div className="p-3 border-b theme-border space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-xs font-bold theme-text-main flex items-center gap-1.5">
+            {isStarredView ? (
+              <>
+                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                <span>{t('nav.starred')}</span>
+              </>
+            ) : (
+              <>
+                <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
+                <span>{t('conv.list', { n: conversations.length })}</span>
+              </>
+            )}
+          </div>
+          {selectedWorkspace && !isStarredView && (
+            <div className="flex items-center gap-1.5">
+              <OpenInIdeMenu workspacePath={selectedWorkspace} />
+            </div>
+          )}
+        </div>
+        <div className="relative">
+          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
+          <input
+            type="text"
+            placeholder={t('conv.search')}
+            value={convSearch}
+            onChange={(e) => setConvSearch(e.target.value)}
+            className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
+          />
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+        {conversations.map((conv) => {
+          const isSelected = conv.id === selectedConversationId;
+          const batchItem = batchProgress?.items.find((i) => i.id === conv.id);
+          return (
+            <div
+              key={conv.id}
+              onClick={() => {
+                // 点击会话：进入所属项目的品字型页并定位该会话
+                if (conv.workspace_path) onSelectWorkspace(conv.workspace_path);
+                onSelectConversation(conv.id);
+              }}
+              className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                isSelected
+                  ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
+                  : 'theme-bg-card border-transparent hover:theme-border theme-text-muted hover:theme-text-main shadow-2xs'
+              } group relative`}
+            >
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMoveConv(conv);
+                  setMoveConvTarget('');
+                }}
+                title={t('conv.moveTo')}
+                className="absolute top-2 right-2 p-1 rounded-md theme-text-muted hover:theme-text-main hover:theme-bg-card opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+              >
+                <FolderInput className="h-3.5 w-3.5" />
+              </button>
+              <div className="flex items-start justify-between gap-1.5">
+                <div className="font-medium line-clamp-2 theme-text-main flex items-center gap-1">
+                  {conv.is_starred && (
+                    <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
+                  )}
+                  <span>{conv.title || t('conv.untitled')}</span>
+                  {conv.ai_title && (
+                    <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
+                      AI
+                    </span>
+                  )}
+                  {batchItem?.status === 'running' && (
+                    <Loader2 className="h-3 w-3 shrink-0 text-violet-500 animate-spin" />
+                  )}
+                  {batchItem?.status === 'ok' && (
+                    <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+                  )}
+                  {batchItem?.status === 'error' && (
+                    <span className="shrink-0 text-[9px] font-semibold text-red-500">!</span>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center justify-between mt-2 pt-2 border-t theme-border-sub text-[10px] theme-text-sub">
+                <div className="flex items-center gap-1.5">
+                  {getSourceBadge(conv.source_app)}
+                  <span>{formatTime(conv.updated_at || conv.created_at)}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span>{t('conv.userN', { n: conv.user_message_count })}</span>
+                  <span>·</span>
+                  <span>{t('nav.messageCount', { n: conv.message_count })}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+
   // 会话消息按 User Turn 轮次进行分组
   interface MessageTurn {
     origIndex: number;
@@ -751,7 +888,8 @@ export const BrowseView: React.FC<Props> = ({
             const shortName = ws.workspace_path
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : t('nav.uncategorized');
-            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && ws.workspace_path === selectedWorkspace;
+            const dirtyCnt = wsGitDirty[ws.workspace_path] ?? 0;
+            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
@@ -775,11 +913,22 @@ export const BrowseView: React.FC<Props> = ({
                 />
                 <div className="flex items-center justify-between">
                   <span className="font-bold theme-text-main text-xs truncate pr-1">{shortName}</span>
-                  {ws.last_updated && (
-                    <span className="text-[10px] theme-text-sub flex-shrink-0 transition-transform duration-200 group-hover:-translate-x-6">
-                      {formatRelativeTime(ws.last_updated)}
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1.5 flex-shrink-0 transition-transform duration-200 group-hover:-translate-x-6">
+                    {dirtyCnt > 0 && (
+                      <span
+                        title={t('ws.uncommitted', { n: dirtyCnt })}
+                        className="inline-flex items-center gap-0.5 px-1.5 py-0.2 text-[9px] font-mono font-semibold rounded bg-orange-500/15 text-orange-500 border border-orange-500/30"
+                      >
+                        <GitBranch className="h-2.5 w-2.5" />
+                        {dirtyCnt}
+                      </span>
+                    )}
+                    {ws.last_updated && (
+                      <span className="text-[10px] theme-text-sub">
+                        {formatRelativeTime(ws.last_updated)}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="text-[10px] theme-text-sub truncate mt-0.5 font-mono">
                   {ws.workspace_path || t('nav.uncategorizedPath')}
@@ -852,9 +1001,14 @@ export const BrowseView: React.FC<Props> = ({
       </aside>
 
       {/* 右侧主内容区域 */}
-      {isGitBoardView ? (
+      {!selectedWorkspace && isGitBoardView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
-          <GitBoardView />
+          {/* 顶栏胶囊 → 全局 Git 看板 */}
+          <GitBoardView
+            onExit={() => {
+              onSwitchToDashboard();
+            }}
+          />
         </main>
       ) : isServicesView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
@@ -876,130 +1030,24 @@ export const BrowseView: React.FC<Props> = ({
             }}
           />
         </main>
-      ) : (
-        <>
-          {/* 第二栏：会话列表 */}
-          <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
-            <div className="p-3 border-b theme-border space-y-2">
-              <div className="flex items-center justify-between">
-                <div className="text-xs font-bold theme-text-main flex items-center gap-1.5">
-                  {isStarredView ? (
-                    <>
-                      <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                      <span>{t('nav.starred')}</span>
-                    </>
-                  ) : (
-                    <>
-                      <MessageSquare className="h-3.5 w-3.5 text-blue-500" />
-                      <span>{t('conv.list', { n: conversations.length })}</span>
-                    </>
-                  )}
-                </div>
-
-                {selectedWorkspace && !isStarredView && (
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={openBatchConfirm}
-                      disabled={batchRunning || conversations.length === 0}
-                      title={t('conv.batchSummarizeHint')}
-                      className="text-[11px] text-violet-500 hover:underline flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:no-underline"
-                    >
-                      <Layers className="h-3 w-3" />
-                      <span>{t('conv.batchSummarize')}</span>
-                    </button>
-                    <button
-                      onClick={() => onSelectConversation('')}
-                      className="text-[11px] text-blue-500 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      <BarChart3 className="h-3 w-3" />
-                      <span>{t('conv.analysis')}</span>
-                    </button>
-                    <OpenInIdeMenu workspacePath={selectedWorkspace} />
-                  </div>
-                )}
-              </div>
-
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
-                <input
-                  type="text"
-                  placeholder={t('conv.search')}
-                  value={convSearch}
-                  onChange={(e) => setConvSearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
-                />
-              </div>
+      ) : selectedWorkspace ? (
+        /* 品字型：Header 常驻；下方 = 会话+统计 或 Git 变更树 */
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <ProjectHeader
+            workspacePath={selectedWorkspace}
+            gitBoardActive={isGitBoardView}
+            onOpenGitBoard={() => onOpenGitBoard(selectedWorkspace)}
+            onBatchSummarize={openBatchConfirm}
+            batchSummarizeDisabled={batchRunning || conversations.length === 0}
+          />
+          {isGitBoardView ? (
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+              <GitBoardView embedPath={selectedWorkspace} hideHeader />
             </div>
-
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
-              {conversations.map((conv) => {
-                const isSelected = conv.id === selectedConversationId;
-                const batchItem = batchProgress?.items.find((i) => i.id === conv.id);
-                return (
-                  <div
-                    key={conv.id}
-                    onClick={() => onSelectConversation(conv.id)}
-                    className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
-                      isSelected
-                        ? 'bg-blue-600/15 border-blue-500/50 theme-text-main shadow-xs'
-                      : 'theme-bg-card border-transparent hover:theme-border theme-text-muted hover:theme-text-main shadow-2xs'
-                   } group relative`}
-                  >
-                   <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setMoveConv(conv);
-                        setMoveConvTarget('');
-                      }}
-                      title={t('conv.moveTo')}
-                      className="absolute top-2 right-2 p-1 rounded-md theme-text-muted hover:theme-text-main hover:theme-bg-card opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-                    >
-                      <FolderInput className="h-3.5 w-3.5" />
-                    </button>
-                   <div className="flex items-start justify-between gap-1.5">
-                      <div className="font-medium line-clamp-2 theme-text-main flex items-center gap-1">
-                        {conv.is_starred && (
-                          <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
-                        )}
-                        <span>{conv.title || t('conv.untitled')}</span>
-                        {conv.ai_title && (
-                          <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
-                            AI
-                          </span>
-                        )}
-                        {batchItem?.status === 'running' && (
-                          <Loader2 className="h-3 w-3 shrink-0 text-violet-500 animate-spin" />
-                        )}
-                        {batchItem?.status === 'ok' && (
-                          <Check className="h-3 w-3 shrink-0 text-emerald-500" />
-                        )}
-                        {batchItem?.status === 'error' && (
-                          <span className="shrink-0 text-[9px] font-semibold text-red-500">!</span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between mt-2 pt-2 border-t theme-border-sub text-[10px] theme-text-sub">
-                      <div className="flex items-center gap-1.5">
-                        {getSourceBadge(conv.source_app)}
-                        <span>{formatTime(conv.updated_at || conv.created_at)}</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span>{t('conv.userN', { n: conv.user_message_count })}</span>
-                        <span>·</span>
-                        <span>{t('nav.messageCount', { n: conv.message_count })}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* 第三栏：主内容区域（按用户轮次折叠展示） */}
-          <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          ) : (
+          <div className="flex-1 flex min-h-0 overflow-hidden">
+            {renderConversationList()}
+            <div className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main min-w-0">
             {selectedConversationId && currentConv ? (
               <>
                 {/* 会话顶部 Header */}
@@ -1585,18 +1633,26 @@ export const BrowseView: React.FC<Props> = ({
                   )}
                 </div>
               </>
-            ) : selectedWorkspace ? (
-              /* 工作区全景研发分析 */
+            ) : (
               <WorkspaceAnalysisView
                 workspacePath={selectedWorkspace}
                 onSelectConversation={onSelectConversation}
+                embedded
               />
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
-                <Sparkles className="h-10 w-10 mb-2 opacity-50" />
-                <p className="text-sm">{t('conv.pickWorkspace')}</p>
-              </div>
             )}
+            </div>
+          </div>
+          )}
+        </main>
+      ) : (
+        /* 收藏等无项目场景：列表 + 右侧内容 */
+        <>
+          {renderConversationList()}
+          <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+            <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
+              <Sparkles className="h-10 w-10 mb-2 opacity-50" />
+              <p className="text-sm">{t('conv.pickWorkspace')}</p>
+            </div>
           </main>
         </>
       )}

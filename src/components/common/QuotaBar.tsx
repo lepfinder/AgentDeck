@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Gauge, RefreshCw, X } from 'lucide-react';
+import { Gauge, MousePointerClick, RefreshCw, X } from 'lucide-react';
 import { api, isTauri } from '../../api/tauriBridge';
 import type { ProviderQuota, QuotaSnapshot, QuotaWindow } from '../../types';
 import { useI18n, type MessageKey } from '../../i18n';
@@ -473,6 +473,20 @@ export function QuotaBar() {
             {!providers.length && !loading && (
               <div className="text-[11px] theme-text-muted text-center py-4">{t('quota.empty')}</div>
             )}
+          </div>
+
+          <div className="border-t theme-border px-3 py-2">
+            <button
+              type="button"
+              onClick={() => {
+                void api.showQuotaPill();
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-1.5 text-[11px] theme-text-muted hover:theme-text-main transition-colors cursor-pointer"
+            >
+              <MousePointerClick className="h-3.5 w-3.5 shrink-0" />
+              <span>{t('quota.pill.show')}</span>
+            </button>
           </div>
         </div>
       )}

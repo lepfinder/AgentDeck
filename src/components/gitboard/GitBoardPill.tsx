@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { GitBranch } from 'lucide-react';
 import { api, isTauri } from '../../api/tauriBridge';
 import { useI18n } from '../../i18n';
+import { getHiddenPaths, onHiddenChange } from '../../lib/gitBoardHidden';
 import type { GitBoardResponse } from './GitBoardView';
 
 /** 胶囊轮询节奏：本地 git status 扫描很轻，2 分钟一拍足够。 */
@@ -15,6 +16,9 @@ const POLL_MS = 2 * 60_000;
 export function GitBoardPill({ active, onOpen }: { active: boolean; onOpen: () => void }) {
   const { t } = useI18n();
   const [data, setData] = useState<GitBoardResponse | null>(null);
+  const [hiddenPaths, setHiddenPathsState] = useState<string[]>(() => getHiddenPaths());
+
+  useEffect(() => onHiddenChange(() => setHiddenPathsState(getHiddenPaths())), []);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -43,13 +47,16 @@ export function GitBoardPill({ active, onOpen }: { active: boolean; onOpen: () =
 
   if (!isTauri()) return null;
 
-  const summary = data?.summary ?? null;
-  const conflicts = (data?.entries ?? []).reduce((acc, e) => acc + (e.conflicts || 0), 0);
-  const dirty = summary?.dirty_count ?? 0;
-  const ahead = summary?.ahead_count ?? 0;
-  const hasRepos = (summary?.repo_count ?? 0) > 0;
+  // 隐藏的仓库不计入胶囊统计
+  const entries = (data?.entries ?? []).filter(
+    (e) => !hiddenPaths.includes(e.workspace_path)
+  );
+  const conflicts = entries.reduce((acc, e) => acc + (e.conflicts || 0), 0);
+  const dirty = entries.filter((e) => e.staged + e.unstaged + e.untracked + e.conflicts > 0).length;
+  const ahead = entries.filter((e) => (e.ahead ?? 0) > 0).length;
+  const hasRepos = entries.length > 0;
   const allClean = hasRepos && dirty === 0 && ahead === 0 && conflicts === 0;
-  const showPlaceholder = !summary || (!hasRepos && dirty === 0 && ahead === 0);
+  const showPlaceholder = !data || (!hasRepos && dirty === 0 && ahead === 0);
 
   return (
     <button

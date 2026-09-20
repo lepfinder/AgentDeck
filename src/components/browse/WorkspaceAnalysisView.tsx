@@ -34,6 +34,7 @@ import {
   Search,
   ChevronRight,
   FileCode2,
+  GitBranch,
 } from 'lucide-react';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
 import { CustomSelect } from '../common/CustomSelect';
@@ -42,11 +43,16 @@ import { useI18n } from '../../i18n';
 interface Props {
   workspacePath: string;
   onSelectConversation?: (conversationId: string) => void;
+  onOpenGitBoard?: () => void;
+  /** 品字型布局：标题与 Git 按钮由外层 ProjectHeader 承担 */
+  embedded?: boolean;
 }
 
 export const WorkspaceAnalysisView: React.FC<Props> = ({
   workspacePath,
   onSelectConversation,
+  onOpenGitBoard,
+  embedded = false,
 }) => {
   const { t } = useI18n();
   const [detail, setDetail] = useState<WorkspaceDetailStats | null>(null);
@@ -406,13 +412,28 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
 
   return (
     <div className="h-full overflow-y-auto p-6 space-y-6 theme-bg-main theme-text-main">
-      {/* 顶部标题 */}
-      <div>
-        <h1 className="text-xl font-bold tracking-tight theme-text-main flex items-center gap-2">
-          <span>{detail.workspace_short}</span>
-        </h1>
-        <p className="text-xs theme-text-muted font-mono mt-0.5 break-all">{detail.workspace_path}</p>
-      </div>
+      {/* 非嵌入模式才显示标题；品字型布局由 ProjectHeader 负责 */}
+      {!embedded && (
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-bold tracking-tight theme-text-main flex items-center gap-2">
+              <span>{detail.workspace_short}</span>
+            </h1>
+            <p className="text-xs theme-text-muted font-mono mt-0.5 break-all">{detail.workspace_path}</p>
+          </div>
+          {onOpenGitBoard && (
+            <button
+              type="button"
+              onClick={onOpenGitBoard}
+              title={t('gitBoard.openForProject')}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium theme-bg-sub border theme-border rounded-lg theme-text-muted hover:text-orange-600 dark:hover:text-orange-400 hover:border-orange-500/40 hover:bg-orange-500/10 transition-colors cursor-pointer shadow-xs flex-shrink-0"
+            >
+              <GitBranch className="h-3.5 w-3.5 text-orange-500" />
+              <span>{t('nav.gitBoard')}</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 5 大核心 KPI 卡片 */}
       <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">

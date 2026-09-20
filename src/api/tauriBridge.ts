@@ -259,6 +259,24 @@ export const api = {
     return { generated_at: new Date().toISOString(), providers: [] };
   },
 
+  async resizeQuotaPill(width: number, height: number): Promise<void> {
+    if (isTauri()) {
+      await invoke('quota_pill_resize', { width, height });
+    }
+  },
+
+  async showQuotaPillMenu(): Promise<void> {
+    if (isTauri()) {
+      await invoke('quota_pill_show_menu');
+    }
+  },
+
+  async showQuotaPill(): Promise<void> {
+    if (isTauri()) {
+      await invoke('quota_pill_show');
+    }
+  },
+
   async testLlmConnection(
     baseUrl: string,
     apiKey: string,
@@ -782,6 +800,11 @@ export const api = {
       invoke<import('../components/gitboard/GitBoardView').GitBoardResponse>('get_git_board', {
         days: days ?? null,
       }),
+    workspaceEntry: (workspacePath: string) =>
+      invoke<import('../components/gitboard/GitBoardView').GitBoardEntry>(
+        'get_git_workspace_entry',
+        { workspacePath }
+      ),
     commits: (workspacePath: string, limit?: number) =>
       invoke<import('../components/gitboard/GitBoardView').GitCommitInfo[]>('get_git_commits', {
         workspacePath,
@@ -808,8 +831,44 @@ export const api = {
       ),
     stageAll: (workspacePath: string) =>
       invoke<void>('git_stage_all', { workspacePath }),
+    addIgnore: (workspacePath: string, path: string) =>
+      invoke<import('../components/gitboard/GitBoardView').GitAddIgnoreResponse>('add_git_ignore', {
+        workspacePath,
+        path,
+      }),
+    listDir: (workspacePath: string, relPath?: string) =>
+      invoke<import('../components/gitboard/GitBoardView').WorkspaceDirEntry[]>(
+        'list_workspace_dir',
+        { workspacePath, relPath: relPath ?? null }
+      ),
+    readFile: (workspacePath: string, path: string) =>
+      invoke<import('../components/gitboard/GitBoardView').WorkspaceFileContent>(
+        'read_workspace_file',
+        { workspacePath, path }
+      ),
+    searchFiles: (workspacePath: string, query: string, limit?: number) =>
+      invoke<string[]>('search_workspace_files', {
+        workspacePath,
+        query,
+        limit: limit ?? null,
+      }),
+    stageFile: (workspacePath: string, path: string) =>
+      invoke<void>('git_stage_file', { workspacePath, path }),
+    unstageFile: (workspacePath: string, path: string) =>
+      invoke<void>('git_unstage_file', { workspacePath, path }),
+    fetch: (workspacePath: string) => invoke<string>('git_fetch', { workspacePath }),
     commit: (workspacePath: string, message: string) =>
       invoke<string>('git_commit', { workspacePath, message }),
     push: (workspacePath: string) => invoke<string>('git_push', { workspacePath }),
+    commitShow: (workspacePath: string, commitId: string) =>
+      invoke<import('../components/gitboard/GitBoardView').GitCommitShowResponse>(
+        'get_git_commit_show',
+        { workspacePath, commitId }
+      ),
+    commitFileDiff: (workspacePath: string, commitId: string, path: string) =>
+      invoke<import('../components/gitboard/GitBoardView').GitFileDiffResponse>(
+        'get_git_commit_file_diff',
+        { workspacePath, commitId, path }
+      ),
   },
 };

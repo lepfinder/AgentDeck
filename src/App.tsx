@@ -62,7 +62,7 @@ export function App() {
     setIsGitBoardView(false);
   };
 
-  // 顶栏 Git 状态胶囊：点击进入 / 再次点击退出 Git 看板
+  // 顶栏 Git 状态胶囊：点击进入 / 再次点击退出 Git 看板（全局）
   const handleOpenGitBoard = () => {
     if (isGitBoardView) {
       setIsGitBoardView(false);
@@ -74,6 +74,20 @@ export function App() {
     setIsPromptLibraryView(false);
     setIsServicesView(false);
     setIsGitBoardView(true);
+  };
+
+  // 项目页 Header 按钮：切换下方内容（统计 ⇄ Git 变更树），Header 保持不变
+  const handleOpenGitBoardForProject = (wsPath: string) => {
+    setSelectedWorkspace(wsPath);
+    setIsStarredView(false);
+    setIsPromptLibraryView(false);
+    setIsServicesView(false);
+    if (isGitBoardView) {
+      setIsGitBoardView(false);
+    } else {
+      setSelectedConversationId('');
+      setIsGitBoardView(true);
+    }
   };
 
   // 顶栏拖拽支持
@@ -330,9 +344,6 @@ export function App() {
             />
             <span className="font-bold text-sm tracking-tight theme-text-main">AgentDeck</span>
           </button>
-          <span className="text-[10px] text-blue-500 bg-blue-500/10 px-1.5 py-0.2 rounded border border-blue-500/20 font-mono">
-            Desktop
-          </span>
         </div>
 
         {/* 右侧：额度一瞥 + 刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
@@ -435,7 +446,12 @@ export function App() {
             setIsStarredView(false);
             setIsPromptLibraryView(false);
             setIsServicesView(false);
-            setIsGitBoardView(false);
+            if (isGitBoardView) {
+              // Git 看板中切项目：保持 Git 视图，直接看新项目的变更树
+              setSelectedConversationId('');
+            } else {
+              setIsGitBoardView(false);
+            }
           }}
           onSelectConversation={setSelectedConversationId}
           onSwitchToDashboard={() => {
@@ -470,6 +486,7 @@ export function App() {
             setIsServicesView(true);
             setIsGitBoardView(false);
           }}
+          onOpenGitBoard={handleOpenGitBoardForProject}
           onPromptLibraryCountChange={setPromptLibraryCount}
           stats={stats}
           loadingStats={loadingStats}

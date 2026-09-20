@@ -7,6 +7,8 @@ pub mod importers;
 pub mod media_archive;
 pub mod prompt_catalog;
 pub mod quota;
+pub mod quota_pill;
+pub mod quota_tray;
 pub mod service_config;
 pub mod service_discovery;
 pub mod service_http;
@@ -1517,9 +1519,17 @@ end tell"#
 #[tauri::command]
 fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), String> {
     let path = std::path::Path::new(&workspace_path);
-    if !path.is_dir() {
-        return Err("工作区路径不存在或不是目录".into());
+    if !path.exists() {
+        return Err("路径不存在".into());
     }
+    // 传入文件时：GUI 应用直接打开文件；CLI 工具在其所在目录启动
+    let cli_dir = if path.is_file() {
+        path.parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| ".".to_string())
+    } else {
+        workspace_path.clone()
+    };
 
     #[cfg(target_os = "macos")]
     {
@@ -1534,8 +1544,8 @@ fn open_workspace_in_ide_cmd(ide: String, workspace_path: String) -> Result<(), 
                     open_in_macos_app("Antigravity", &workspace_path)
                 }
             }
-            "claude" => open_in_terminal_cli("claude", &workspace_path),
-            "codex" => open_in_terminal_cli("codex", &workspace_path),
+            "claude" => open_in_terminal_cli("claude", &cli_dir),
+            "codex" => open_in_terminal_cli("codex", &cli_dir),
             "mimo" => open_in_macos_app("Xiaomi MiMo", &workspace_path),
             "codebuddy" => {
                 if macos_app_exists("CodeBuddy CN") {
@@ -1604,7 +1614,11 @@ pub fn run() {
             search_messages,
             trigger_sync,
             get_quota_snapshot,
+            quota_pill::quota_pill_resize,
+            quota_pill::quota_pill_show_menu,
+            quota_pill::quota_pill_show,
             git_board::get_git_board,
+            git_board::get_git_workspace_entry,
             git_board::get_git_commits,
             git_board::get_git_status_files,
             git_board::get_git_file_diff,
@@ -1612,6 +1626,15 @@ pub fn run() {
             git_board::git_commit,
             git_board::git_push,
             git_board::get_git_pending_diff,
+            git_board::get_git_commit_show,
+            git_board::get_git_commit_file_diff,
+            git_board::add_git_ignore,
+            git_board::list_workspace_dir,
+            git_board::read_workspace_file,
+            git_board::search_workspace_files,
+            git_board::git_stage_file,
+            git_board::git_unstage_file,
+            git_board::git_fetch,
             test_llm_connection,
             test_llm_pipeline,
             call_llm_with_fallback,
@@ -1660,6 +1683,16 @@ pub fn run() {
 
             // 启动嵌入式 REST API 兼容服务（监听 127.0.0.1:8788，供给前端图片与外部服务无缝调用）
             http_server::start_http_server(app.handle().clone(), 8788);
+
+            // 系统菜单栏入口（仅显示主窗口 / 退出）
+            if let Err(e) = quota_tray::setup_tray(&app.handle().clone()) {
+                log::warn!("[tray] 菜单栏组件初始化失败: {}", e);
+            }
+
+            // 额度悬浮条（独立透明置顶窗）
+            if let Err(e) = quota_pill::setup_pill(&app.handle().clone()) {
+                log::warn!("[quota-pill] 悬浮条初始化失败: {}", e);
+            }
 
             Ok(())
         })
