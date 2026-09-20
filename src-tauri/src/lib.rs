@@ -1716,17 +1716,21 @@ pub fn run() {
                     api.prevent_exit();
                 }
             }
-            // macOS：从 Dock 图标点击恢复窗口
+            // macOS：点击 Dock 图标恢复主窗口。
+            // 注意：额度悬浮条等子窗可能仍可见，has_visible_windows 为 true，
+            // 但主窗可能已被 ⌘W hide —— 因此不依赖该标志，始终尝试恢复 main。
             #[cfg(target_os = "macos")]
             RunEvent::Reopen {
                 has_visible_windows,
                 ..
             } => {
-                if !has_visible_windows {
-                    if let Some(win) = app_handle.get_webview_window("main") {
-                        let _ = win.show();
-                        let _ = win.set_focus();
-                    }
+                if let Some(win) = app_handle.get_webview_window("main") {
+                    // 主窗隐藏 / 最小化时都要能从 Dock 拉回来
+                    let _ = win.unminimize();
+                    let _ = win.show();
+                    let _ = win.set_focus();
+                } else if !has_visible_windows {
+                    log::warn!("[dock] Reopen: main window missing");
                 }
             }
             _ => {}
