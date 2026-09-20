@@ -180,6 +180,26 @@ pub struct DailyConcurrencySlot {
     pub active_workspaces: usize,
 }
 
+/// 会话级活动时段（甘特图标准条形：起止分钟对齐 24h 时间轴）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyActivitySpan {
+    pub conversation_id: String,
+    pub workspace_path: String,
+    pub workspace_short: String,
+    pub source_app: String,
+    pub source_label: String,
+    pub source_color: String,
+    pub conversation_title: String,
+    /// 当天第一条消息的分钟（0~1440，北京时间）
+    pub start_minute: u32,
+    /// 当天最后一条消息的分钟（0~1440，北京时间）
+    pub end_minute: u32,
+    pub start_label: String,
+    pub end_label: String,
+    pub prompt_count: i64,
+    pub message_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyTimelineStats {
     pub date: String,
@@ -190,6 +210,8 @@ pub struct DailyTimelineStats {
     pub peak_concurrency: usize,
     pub items: Vec<DailyTimelineItem>,
     pub concurrency_slots: Vec<DailyConcurrencySlot>,
+    #[serde(default)]
+    pub spans: Vec<DailyActivitySpan>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3526,6 +3548,7 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
             peak_concurrency: 0,
             items: Vec::new(),
             concurrency_slots: Vec::new(),
+            spans: Vec::new(),
         });
     }
 
@@ -3665,6 +3688,173 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
         });
     }
 
+    // 4. 会话级活动时段：按消息时间序列，间隔 > 20 分钟则拆成多段甘特条
+    const ACTIVITY_GAP_MINUTES: u32 = 20;
+    let mut spans: Vec<DailyActivitySpan> = Vec::new();
+    {
+        #[derive(Default)]
+        struct MsgPoint {
+            minute: u32,
+            is_prompt: bool,
+        }
+        struct ConvMeta {
+            conversation_id: String,
+            workspace_path: String,
+            source_app: String,
+            conversation_title: String,
+            points: Vec<MsgPoint>,
+        }
+
+        let sql_msgs = r#"
+            SELECT
+                m.conversation_id,
+                c.workspace_path,
+                CASE
+                    WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                    WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                    WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                    WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                    WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                    WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                    WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                    WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                    WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                    ELSE 'antigravity'
+                END as source_app,
+                c.title as conv_title,
+                datetime(m.created_at, '+8 hours') as msg_at,
+                m.role as msg_role
+            FROM messages m
+            JOIN conversations c ON m.conversation_id = c.id
+            WHERE strftime('%Y-%m-%d', datetime(m.created_at, '+8 hours')) = ?1
+            ORDER BY m.conversation_id ASC, m.created_at ASC, m.id ASC
+        "#;
+        let mut msg_stmt = conn.prepare(sql_msgs)?;
+        let msg_rows = msg_stmt.query_map(params![trimmed_date], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+
+        let mut ordered: Vec<ConvMeta> = Vec::new();
+        let mut current_id: Option<String> = None;
+        for row in msg_rows.flatten() {
+            let (cid, wspath, sapp, ctitle, msg_at, role) = row;
+            let (minute, _) = parse_beijing_time_str(&msg_at);
+            let is_prompt = role == "user";
+            match current_id.as_deref() {
+                Some(id) if id == cid => {
+                    if let Some(last) = ordered.last_mut() {
+                        last.points.push(MsgPoint { minute, is_prompt });
+                    }
+                }
+                _ => {
+                    ordered.push(ConvMeta {
+                        conversation_id: cid.clone(),
+                        workspace_path: wspath,
+                        source_app: sapp,
+                        conversation_title: ctitle,
+                        points: vec![MsgPoint { minute, is_prompt }],
+                    });
+                    current_id = Some(cid);
+                }
+            }
+        }
+
+        for conv in ordered {
+            if conv.points.is_empty() {
+                continue;
+            }
+            let (source_label, source_color) = source_to_label_and_color(&conv.source_app);
+            let workspace_short = get_short_workspace(&conv.workspace_path);
+            let conversation_title = if conv.conversation_title.is_empty() {
+                "未命名会话".to_string()
+            } else {
+                conv.conversation_title.clone()
+            };
+
+            // 按 ACTIVITY_GAP 拆段
+            let mut seg_start = conv.points[0].minute;
+            let mut seg_end = conv.points[0].minute;
+            let mut seg_prompts = if conv.points[0].is_prompt { 1 } else { 0 };
+            let mut seg_msgs = 1i64;
+
+            let mut flush_seg = |start: u32,
+                                 end: u32,
+                                 prompts: i64,
+                                 msgs: i64,
+                                 conv: &ConvMeta,
+                                 title: &str,
+                                 source_label: &str,
+                                 source_color: &str,
+                                 workspace_short: &str,
+                                 spans: &mut Vec<DailyActivitySpan>| {
+                let end = end.max(start);
+                let (_, start_label) = parse_beijing_time_str(&format!("{} {:02}:{:02}:00", trimmed_date, start / 60, start % 60));
+                let (_, end_label) = parse_beijing_time_str(&format!("{} {:02}:{:02}:00", trimmed_date, end / 60, end % 60));
+                spans.push(DailyActivitySpan {
+                    conversation_id: conv.conversation_id.clone(),
+                    workspace_path: conv.workspace_path.clone(),
+                    workspace_short: workspace_short.to_string(),
+                    source_app: conv.source_app.clone(),
+                    source_label: source_label.to_string(),
+                    source_color: source_color.to_string(),
+                    conversation_title: title.to_string(),
+                    start_minute: start,
+                    end_minute: end,
+                    start_label,
+                    end_label,
+                    prompt_count: prompts,
+                    message_count: msgs,
+                });
+            };
+
+            for p in conv.points.iter().skip(1) {
+                if p.minute.saturating_sub(seg_end) > ACTIVITY_GAP_MINUTES {
+                    flush_seg(
+                        seg_start,
+                        seg_end,
+                        seg_prompts,
+                        seg_msgs,
+                        &conv,
+                        &conversation_title,
+                        source_label,
+                        source_color,
+                        &workspace_short,
+                        &mut spans,
+                    );
+                    seg_start = p.minute;
+                    seg_end = p.minute;
+                    seg_prompts = if p.is_prompt { 1 } else { 0 };
+                    seg_msgs = 1;
+                } else {
+                    seg_end = p.minute;
+                    if p.is_prompt {
+                        seg_prompts += 1;
+                    }
+                    seg_msgs += 1;
+                }
+            }
+            flush_seg(
+                seg_start,
+                seg_end,
+                seg_prompts,
+                seg_msgs,
+                &conv,
+                &conversation_title,
+                source_label,
+                source_color,
+                &workspace_short,
+                &mut spans,
+            );
+        }
+    }
+
     Ok(DailyTimelineStats {
         date: trimmed_date.to_string(),
         total_conversations: unique_conv_ids.len(),
@@ -3674,6 +3864,7 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
         peak_concurrency,
         items,
         concurrency_slots,
+        spans,
     })
 }
 

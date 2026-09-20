@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import type { DailyTimelineStats, DailyTimelineItem, DailyConcurrencySlot } from '../../types';
+import type {
+  DailyTimelineStats,
+  DailyTimelineItem,
+  DailyConcurrencySlot,
+  DailyActivitySpan,
+} from '../../types';
 import { api } from '../../api/tauriBridge';
 import { useI18n } from '../../i18n';
 import {
@@ -36,14 +41,49 @@ export interface PromptCluster {
   color: string;
 }
 
+/** 标准甘特条：起止时间对齐 24h 轴 */
+interface GanttBar {
+  id: string;
+  startMinute: number;
+  endMinute: number;
+  color: string;
+  promptCount: number;
+  messageCount: number;
+  conversationIds: string[];
+  title: string;
+  startLabel: string;
+  endLabel: string;
+}
+
 interface GroupedLane {
   key: string;
   title: string;
   subtitle: string;
   color?: string;
-  clusters: PromptCluster[];
+  bars: GanttBar[];
   totalPrompts: number;
   distinctConvs: number;
+}
+
+/** 单点会话也画成可见条：至少 8 分钟 */
+const MIN_BAR_MINUTES = 8;
+/** 相邻活动间隔 > 此值则拆条 / 不合并（分钟） */
+const MERGE_GAP_MINUTES = 20;
+
+function minuteToLabel(minute: number): string {
+  const m = Math.max(0, Math.min(1440, Math.round(minute)));
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+/** 时长展示：≥60 分钟用「x 小时 y 分钟」 */
+function formatDuration(minutes: number): string {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return mm === 0 ? `${h} 小时` : `${h} 小时 ${mm} 分钟`;
 }
 
 export const DailyActivityGantt: React.FC<Props> = ({
@@ -57,7 +97,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
   const [stats, setStats] = useState<DailyTimelineStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [groupBy, setGroupBy] = useState<'workspace' | 'agent'>('workspace');
-  const [hoveredCluster, setHoveredCluster] = useState<PromptCluster | null>(null);
+  const [hoveredBar, setHoveredBar] = useState<GanttBar | null>(null);
   const [hoveredSlot, setHoveredSlot] = useState<{
     slot: DailyConcurrencySlot;
     x: number;
@@ -65,8 +105,8 @@ export const DailyActivityGantt: React.FC<Props> = ({
   } | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number } | null>(null);
 
-  // 点击选中的 Prompt 聚合弹窗状态
-  const [activeModalCluster, setActiveModalCluster] = useState<PromptCluster | null>(null);
+  // 点击选中的条：弹出该时段提示词列表
+  const [activeModalBar, setActiveModalBar] = useState<GanttBar | null>(null);
   const dateInputRef = useRef<HTMLInputElement>(null);
 
   // 获取北京时间当前分钟数（0~1440）
@@ -103,13 +143,13 @@ export const DailyActivityGantt: React.FC<Props> = ({
   // ESC 键关闭弹窗
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && activeModalCluster) {
-        setActiveModalCluster(null);
+      if (e.key === 'Escape' && activeModalBar) {
+        setActiveModalBar(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeModalCluster]);
+  }, [activeModalBar]);
 
   // 日期加减与快捷切换
   const handleOffsetDay = (offset: number) => {
@@ -124,58 +164,109 @@ export const DailyActivityGantt: React.FC<Props> = ({
     }
   };
 
-  // 泳道分组与绝对防重叠聚类计算（Strict Anti-overlap Clustering）
+  /**
+   * 泳道 + 标准甘特条
+   * 数据优先用后端 spans（会话首末消息时间）；无 spans 时回退用提示词 minute 聚类。
+   * 同泳道内相邻时段在 MERGE_GAP 分钟内合并为一条连续块。
+   */
   const groupedLanes = useMemo<GroupedLane[]>(() => {
-    if (!stats || !stats.items || stats.items.length === 0) return [];
+    if (!stats) return [];
 
-    const map = new Map<string, DailyTimelineItem[]>();
-    for (const item of stats.items) {
-      const key = groupBy === 'workspace' ? item.workspace_path : item.source_app;
+    const spans: DailyActivitySpan[] = stats.spans?.length
+      ? stats.spans
+      : (stats.items || []).map((item) => ({
+          conversation_id: item.id,
+          workspace_path: item.workspace_path,
+          workspace_short: item.workspace_short,
+          source_app: item.source_app,
+          source_label: item.source_label,
+          source_color: item.source_color,
+          conversation_title: item.conversation_title,
+          start_minute: item.minute,
+          end_minute: item.minute,
+          start_label: item.time_label,
+          end_label: item.time_label,
+          prompt_count: 1,
+          message_count: 1,
+        }));
+
+    if (spans.length === 0 && (!stats.items || stats.items.length === 0)) return [];
+
+    type RawSpan = DailyActivitySpan & { end: number };
+    const map = new Map<string, RawSpan[]>();
+    for (const span of spans) {
+      const key = groupBy === 'workspace' ? span.workspace_path : span.source_app;
       const arr = map.get(key) || [];
-      arr.push(item);
+      const start = span.start_minute;
+      const rawEnd = Math.max(span.end_minute, start);
+      arr.push({ ...span, start_minute: start, end_minute: rawEnd, end: rawEnd });
       map.set(key, arr);
     }
 
     const result: GroupedLane[] = [];
 
     for (const [key, rawItems] of map.entries()) {
-      // 按照 minute 升序排序
-      const sorted = [...rawItems].sort((a, b) => a.minute - b.minute);
-      const rawClusters: PromptCluster[] = [];
-      let current: PromptCluster | null = null;
+      const sorted = [...rawItems].sort((a, b) => a.start_minute - b.start_minute);
 
-      for (const item of sorted) {
-        // 30 分钟窗口内连续提问归为同一个连续时段
-        if (current && item.minute - current.last_minute <= 30) {
-          current.prompts.push(item);
-          current.last_minute = item.minute;
+      // 合并重叠 / 近邻时段 → 连续甘特条
+      const bars: GanttBar[] = [];
+      type Acc = {
+        id: string;
+        start: number;
+        end: number;
+        prompts: number;
+        msgs: number;
+        convIds: string[];
+        color: string;
+        title: string;
+      };
+      let acc: Acc | null = null;
+
+      const flush = () => {
+        if (!acc) return;
+        const start = acc.start;
+        const end = Math.max(acc.end, start + MIN_BAR_MINUTES);
+        bars.push({
+          id: acc.id,
+          startMinute: start,
+          endMinute: end,
+          color: acc.color,
+          promptCount: acc.prompts,
+          messageCount: acc.msgs,
+          conversationIds: acc.convIds,
+          title: acc.title,
+          startLabel: minuteToLabel(start),
+          endLabel: minuteToLabel(end),
+        });
+        acc = null;
+      };
+
+      for (const s of sorted) {
+        if (
+          acc &&
+          s.start_minute - acc.end <= MERGE_GAP_MINUTES
+        ) {
+          acc.end = Math.max(acc.end, s.end);
+          acc.prompts += s.prompt_count;
+          acc.msgs += s.message_count;
+          acc.convIds.push(s.conversation_id);
         } else {
-          if (current) rawClusters.push(current);
-          current = {
-            id: `${item.id}-${item.message_id}`,
-            minute: item.minute,
-            last_minute: item.minute,
-            time_label: item.time_label,
-            prompts: [item],
-            color: item.source_color,
+          flush();
+          acc = {
+            id: `${s.conversation_id}-${s.start_minute}`,
+            start: s.start_minute,
+            end: s.end,
+            prompts: s.prompt_count,
+            msgs: s.message_count,
+            convIds: [s.conversation_id],
+            color: s.source_color,
+            title: s.conversation_title,
           };
         }
       }
-      if (current) rawClusters.push(current);
+      flush();
 
-      // 二次间距保护：如果相邻两个 cluster 间距 < 35 分钟（避免在 X 轴上贴得太近产生重叠），进行合并
-      const finalClusters: PromptCluster[] = [];
-      for (const c of rawClusters) {
-        const prev = finalClusters[finalClusters.length - 1];
-        if (prev && c.minute - prev.minute < 35) {
-          prev.prompts.push(...c.prompts);
-          prev.last_minute = Math.max(prev.last_minute, c.last_minute);
-        } else {
-          finalClusters.push(c);
-        }
-      }
-
-      const distinctConvs = new Set(rawItems.map((it) => it.id)).size;
+      const distinctConvs = new Set(rawItems.map((it) => it.conversation_id)).size;
       const first = rawItems[0];
       const title =
         groupBy === 'workspace'
@@ -183,24 +274,36 @@ export const DailyActivityGantt: React.FC<Props> = ({
           : first.source_label || first.source_app;
       const subtitle = groupBy === 'workspace' ? key : `${distinctConvs} 个会话`;
       const color = groupBy === 'agent' ? first.source_color : undefined;
+      const totalPrompts = rawItems.reduce((n, s) => n + s.prompt_count, 0);
 
       result.push({
         key,
         title,
         subtitle,
         color,
-        clusters: finalClusters,
-        totalPrompts: rawItems.length,
+        bars,
+        totalPrompts,
         distinctConvs,
       });
     }
 
-    // 按提示词总数降序排列
     result.sort((a, b) => b.totalPrompts - a.totalPrompts);
     return result;
   }, [stats, groupBy]);
 
-  // 每 3 小时主刻度标记 (00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00, 24:00)
+  /** 弹窗：条形覆盖时段内的提示词 */
+  const modalPrompts = useMemo(() => {
+    if (!activeModalBar || !stats?.items) return [];
+    return stats.items.filter(
+      (it) =>
+        it.minute >= activeModalBar.startMinute &&
+        it.minute <= activeModalBar.endMinute &&
+        (activeModalBar.conversationIds.length === 0 ||
+          activeModalBar.conversationIds.includes(it.id))
+    );
+  }, [activeModalBar, stats]);
+
+  // 每 3 小时主刻度标记
   const hourTicks = useMemo(() => {
     const ticks = [];
     for (let h = 0; h <= 24; h += 3) {
@@ -429,18 +532,20 @@ export const DailyActivityGantt: React.FC<Props> = ({
                       </div>
                     </div>
 
-                    {/* 右侧时间轴脉冲点阵/聚合徽章区域 */}
+                    {/* 右侧：标准甘特条（起止时间对齐 24h 轴） */}
                     <div className="flex-1 relative h-full flex items-center overflow-hidden">
-                      {lane.clusters.map((cluster) => {
-                        const leftPercent = (cluster.minute / 1440) * 100;
-                        const isMultiple = cluster.prompts.length > 1;
+                      {lane.bars.map((bar) => {
+                        const leftPercent = (bar.startMinute / 1440) * 100;
+                        const widthPercent =
+                          ((bar.endMinute - bar.startMinute) / 1440) * 100;
+                        const durationMin = bar.endMinute - bar.startMinute;
 
                         return (
                           <div
-                            key={cluster.id}
+                            key={bar.id}
                             onClick={(e) => {
                               e.stopPropagation();
-                              setActiveModalCluster(cluster);
+                              setActiveModalBar(bar);
                             }}
                             onMouseEnter={(e) => {
                               const rect = e.currentTarget.getBoundingClientRect();
@@ -448,40 +553,29 @@ export const DailyActivityGantt: React.FC<Props> = ({
                                 x: rect.left + rect.width / 2,
                                 y: rect.top,
                               });
-                              setHoveredCluster(cluster);
+                              setHoveredBar(bar);
                             }}
                             onMouseLeave={() => {
-                              setHoveredCluster(null);
+                              setHoveredBar(null);
                               setTooltipPos(null);
                             }}
-                            className={`absolute -translate-x-1/2 cursor-pointer transition-all duration-150 select-none z-10 flex items-center justify-center ${
-                              isMultiple
-                                ? 'h-4.5 px-1.5 rounded-full border shadow-xs hover:scale-110 hover:z-30'
-                                : 'w-2.5 h-2.5 rounded-full hover:scale-150 hover:z-30'
-                            }`}
+                            className="absolute top-1/2 -translate-y-1/2 h-4 rounded-[4px] cursor-pointer transition-all duration-150 select-none z-10 hover:z-30 hover:brightness-110 hover:shadow-md overflow-hidden"
                             style={{
                               left: `${leftPercent}%`,
-                              backgroundColor: isMultiple
-                                ? `${cluster.color}20`
-                                : cluster.color,
-                              borderColor: isMultiple
-                                ? `${cluster.color}80`
-                                : undefined,
-                              boxShadow: isMultiple
-                                ? `0 0 6px ${cluster.color}25`
-                                : `0 0 8px ${cluster.color}70`,
+                              width: `${widthPercent}%`,
+                              minWidth: '6px',
+                              backgroundColor: bar.color,
+                              opacity: 0.88,
+                              boxShadow: `0 0 6px ${bar.color}40`,
                             }}
+                            title={`${bar.startLabel} – ${bar.endLabel}`}
                           >
-                            {isMultiple ? (
+                            {durationMin >= 45 && bar.promptCount > 0 && (
                               <span
-                                className="text-[9px] font-mono font-bold leading-none flex items-center gap-0.5"
-                                style={{ color: cluster.color }}
+                                className="absolute inset-0 flex items-center justify-center text-[9px] font-mono font-bold text-white/95 leading-none px-1 truncate pointer-events-none"
                               >
-                                <span className="w-1 h-1 rounded-full bg-current" />
-                                {cluster.prompts.length}
+                                {bar.promptCount}p
                               </span>
-                            ) : (
-                              <span className="w-0.5 h-0.5 rounded-full bg-white opacity-80" />
                             )}
                           </div>
                         );
@@ -557,8 +651,8 @@ export const DailyActivityGantt: React.FC<Props> = ({
         </div>
       )}
 
-      {/* 并发度趋势悬浮气泡（Portal 挂载） */}
-      {hoveredSlot && !activeModalCluster && createPortal(
+      {/* 并发度趋势悬浮气泡 */}
+      {hoveredSlot && !activeModalBar && createPortal(
         <div
           className="fixed z-[9999] pointer-events-none transform -translate-x-1/2 -translate-y-full mb-2 transition-opacity"
           style={{
@@ -580,8 +674,8 @@ export const DailyActivityGantt: React.FC<Props> = ({
         document.body
       )}
 
-      {/* 全局浮动 Hover Tooltip 卡片（使用 Portal 挂载至 document.body） */}
-      {hoveredCluster && tooltipPos && !activeModalCluster && createPortal(
+      {/* 甘特条 Hover：起止时间 + 提示词摘要 */}
+      {hoveredBar && tooltipPos && !activeModalBar && createPortal(
         <div
           className="fixed z-[9999] pointer-events-none transform -translate-x-1/2 -translate-y-full mb-2.5 transition-opacity"
           style={{
@@ -593,68 +687,71 @@ export const DailyActivityGantt: React.FC<Props> = ({
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span
-                  className="w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: hoveredCluster.color }}
+                  className="w-2 h-2 rounded-sm flex-shrink-0"
+                  style={{ backgroundColor: hoveredBar.color }}
                 />
-                <span className="font-semibold text-slate-100 truncate">
-                  {hoveredCluster.time_label} · {hoveredCluster.prompts.length} 条提示词
+                <span className="font-semibold text-slate-100 truncate font-mono">
+                  {hoveredBar.startLabel} – {hoveredBar.endLabel}
+                  <span className="text-slate-400 ml-1">
+                    ({formatDuration(Math.max(1, hoveredBar.endMinute - hoveredBar.startMinute))})
+                  </span>
                 </span>
               </div>
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-slate-800 text-slate-300 flex-shrink-0">
-                {hoveredCluster.prompts[0]?.source_label}
-              </span>
             </div>
 
-            {/* 提示词列表摘要 */}
-            <div className="space-y-1 max-h-36 overflow-hidden">
-              {hoveredCluster.prompts.slice(0, 3).map((p, idx) => (
-                <p
-                  key={p.message_id || idx}
-                  className="text-slate-200 truncate text-[11px] bg-slate-800/60 px-2 py-1 rounded border border-slate-700/40 font-sans"
-                >
-                  <span className="text-slate-400 font-mono mr-1">#{idx + 1}</span>
-                  {p.prompt_preview}
-                </p>
-              ))}
-              {hoveredCluster.prompts.length > 3 && (
-                <div className="text-[10px] text-slate-400 text-center font-mono">
-                  + 还有 {hoveredCluster.prompts.length - 3} 条提示词...
-                </div>
-              )}
+            <div className="text-[11px] text-slate-300">
+              {hoveredBar.promptCount} 条提示词 · {hoveredBar.conversationIds.length} 个会话
             </div>
+            {hoveredBar.title && (
+              <div className="text-[10px] text-slate-400 truncate">{hoveredBar.title}</div>
+            )}
 
-            <div className="text-[10px] text-slate-400 truncate flex items-center gap-1 pt-0.5">
-              <FolderGit2 className="h-3 w-3 text-slate-400" />
-              <span>{hoveredCluster.prompts[0]?.workspace_short}</span>
+            <div className="space-y-1 max-h-28 overflow-hidden">
+              {stats?.items
+                ?.filter(
+                  (p) =>
+                    p.minute >= hoveredBar.startMinute &&
+                    p.minute <= hoveredBar.endMinute &&
+                    hoveredBar.conversationIds.includes(p.id)
+                )
+                .slice(0, 3)
+                .map((p, idx) => (
+                  <p
+                    key={p.message_id || idx}
+                    className="text-slate-200 truncate text-[11px] bg-slate-800/60 px-2 py-1 rounded border border-slate-700/40 font-sans"
+                  >
+                    <span className="text-slate-400 font-mono mr-1">{p.time_label}</span>
+                    {p.prompt_preview}
+                  </p>
+                ))}
             </div>
 
             <div className="pt-1 text-[10px] text-blue-400 flex items-center gap-1 border-t border-slate-800">
               <Sparkles className="h-2.5 w-2.5" />
-              <span>点击查看提示词详情弹窗</span>
+              <span>点击查看该时段提示词</span>
             </div>
           </div>
         </div>,
         document.body
       )}
 
-      {/* 提示词列表详情弹窗 (紧凑干练的时间倒序流水) */}
-      {activeModalCluster && createPortal(
+      {/* 时段提示词详情弹窗 */}
+      {activeModalBar && createPortal(
         <div
           className="fixed inset-0 z-[10000] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150"
-          onClick={() => setActiveModalCluster(null)}
+          onClick={() => setActiveModalBar(null)}
         >
           <div
             className="theme-bg-card border theme-border rounded-2xl shadow-2xl w-full max-w-xl overflow-hidden flex flex-col max-h-[82vh] animate-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* 紧凑 Header */}
             <div className="px-4 py-3 border-b theme-border flex items-center justify-between theme-bg-sub/60">
               <div className="flex items-center gap-2 min-w-0">
                 <div
                   className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
                   style={{
-                    backgroundColor: `${activeModalCluster.color}20`,
-                    color: activeModalCluster.color,
+                    backgroundColor: `${activeModalBar.color}20`,
+                    color: activeModalBar.color,
                   }}
                 >
                   <MessageSquare className="h-3.5 w-3.5" />
@@ -662,92 +759,91 @@ export const DailyActivityGantt: React.FC<Props> = ({
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <h3 className="text-xs font-bold theme-text-main truncate">
-                      提示词记录 ({activeModalCluster.prompts.length} 条)
+                      提示词记录 ({modalPrompts.length} 条)
                     </h3>
-                    <span
-                      className="text-[10px] px-1.5 py-0.2 rounded font-medium"
-                      style={{
-                        backgroundColor: `${activeModalCluster.color}20`,
-                        color: activeModalCluster.color,
-                      }}
-                    >
-                      {activeModalCluster.prompts[0]?.source_label}
-                    </span>
                   </div>
                   <div className="flex items-center gap-1.5 text-[11px] theme-text-muted">
-                    <span className="font-mono">{activeModalCluster.time_label} 时段</span>
-                    <span>·</span>
-                    <span className="truncate" title={activeModalCluster.prompts[0]?.workspace_path}>
-                      {activeModalCluster.prompts[0]?.workspace_short}
+                    <span className="font-mono">
+                      {activeModalBar.startLabel} – {activeModalBar.endLabel}
                     </span>
+                    <span className="font-mono">
+                      ({formatDuration(Math.max(1, activeModalBar.endMinute - activeModalBar.startMinute))})
+                    </span>
+                    <span>·</span>
+                    <span className="truncate">{activeModalBar.title}</span>
                   </div>
                 </div>
               </div>
 
               <button
-                onClick={() => setActiveModalCluster(null)}
+                onClick={() => setActiveModalBar(null)}
                 className="p-1 rounded-lg theme-text-muted hover:theme-text-main hover:bg-slate-500/10 transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            {/* 紧凑列表正文 */}
             <div className="p-4 overflow-y-auto flex-1 space-y-2.5">
-              {[...activeModalCluster.prompts].reverse().map((p, idx) => (
-                <div
-                  key={p.message_id || idx}
-                  className="p-3 rounded-xl border border-slate-200/80 dark:border-slate-800/80 theme-bg-sub/40 hover:theme-bg-sub/80 transition-colors space-y-1.5 group shadow-2xs"
-                >
-                  {/* 条目顶栏 */}
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <div className="flex items-center gap-1.5 font-mono min-w-0">
-                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-500/15 text-slate-400 font-bold">
-                        #{activeModalCluster.prompts.length - idx}
-                      </span>
-                      <span className="font-semibold theme-text-main flex items-center gap-1 text-[11px]">
-                        <Clock className="h-3 w-3 text-blue-400" />
-                        {p.time.split(' ')[1] || p.time}
-                      </span>
-                      {p.conversation_title && (
-                        <>
-                          <span className="opacity-30 text-[10px]">·</span>
-                          <span className="text-[11px] theme-text-muted truncate max-w-[200px]" title={p.conversation_title}>
-                            {p.conversation_title}
-                          </span>
-                        </>
-                      )}
+              {modalPrompts.length === 0 ? (
+                <div className="py-8 text-center text-xs theme-text-sub">
+                  该时段暂无可展示的提示词明细
+                </div>
+              ) : (
+                [...modalPrompts].reverse().map((p, idx) => (
+                  <div
+                    key={p.message_id || idx}
+                    className="p-3 rounded-xl border border-slate-200/80 dark:border-slate-800/80 theme-bg-sub/40 hover:theme-bg-sub/80 transition-colors space-y-1.5 group shadow-2xs"
+                  >
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 font-mono min-w-0">
+                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-500/15 text-slate-400 font-bold">
+                          #{modalPrompts.length - idx}
+                        </span>
+                        <span className="font-semibold theme-text-main flex items-center gap-1 text-[11px]">
+                          <Clock className="h-3 w-3 text-blue-400" />
+                          {p.time.split(' ')[1] || p.time}
+                        </span>
+                        {p.conversation_title && (
+                          <>
+                            <span className="opacity-30 text-[10px]">·</span>
+                            <span
+                              className="text-[11px] theme-text-muted truncate max-w-[200px]"
+                              title={p.conversation_title}
+                            >
+                              {p.conversation_title}
+                            </span>
+                          </>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setActiveModalBar(null);
+                          onSelectConversation(p.id, p.workspace_path);
+                        }}
+                        className="flex items-center gap-1 text-[11px] text-blue-500 hover:text-blue-600 transition-colors cursor-pointer flex-shrink-0"
+                        title="前往该会话查看完整上下文"
+                      >
+                        <span>前往会话</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </button>
                     </div>
 
-                    <button
-                      onClick={() => {
-                        setActiveModalCluster(null);
-                        onSelectConversation(p.id, p.workspace_path);
-                      }}
-                      className="flex items-center gap-1 text-[11px] text-blue-500 hover:text-blue-600 transition-colors cursor-pointer flex-shrink-0"
-                      title="前往该会话查看完整上下文"
-                    >
-                      <span>前往会话</span>
-                      <ExternalLink className="h-3 w-3" />
-                    </button>
+                    <div className="text-xs theme-text-main leading-relaxed whitespace-pre-wrap select-text break-words font-sans">
+                      {p.prompt_content}
+                    </div>
                   </div>
-
-                  {/* 提示词内容正文 */}
-                  <div className="text-xs theme-text-main leading-relaxed whitespace-pre-wrap select-text break-words font-sans">
-                    {p.prompt_content}
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
 
-            {/* 紧凑 Footer */}
             <div className="px-4 py-2.5 border-t theme-border flex items-center justify-between theme-bg-sub/30">
               <span className="text-[10px] theme-text-muted">
                 按 <kbd className="px-1.5 py-0.5 rounded bg-slate-500/20 font-mono text-[9px]">ESC</kbd> 退出
               </span>
 
               <button
-                onClick={() => setActiveModalCluster(null)}
+                onClick={() => setActiveModalBar(null)}
                 className="px-3.5 py-1 rounded-lg theme-bg-sub hover:opacity-80 theme-text-main text-xs font-medium cursor-pointer transition-all border theme-border"
               >
                 关闭

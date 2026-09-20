@@ -175,6 +175,23 @@ export interface DailyConcurrencySlot {
   active_workspaces: number;
 }
 
+/** 会话级活动时段（甘特图条形） */
+export interface DailyActivitySpan {
+  conversation_id: string;
+  workspace_path: string;
+  workspace_short: string;
+  source_app: string;
+  source_label: string;
+  source_color: string;
+  conversation_title: string;
+  start_minute: number;
+  end_minute: number;
+  start_label: string;
+  end_label: string;
+  prompt_count: number;
+  message_count: number;
+}
+
 export interface DailyTimelineStats {
   date: string;
   total_conversations: number;
@@ -184,6 +201,7 @@ export interface DailyTimelineStats {
   peak_concurrency: number;
   items: DailyTimelineItem[];
   concurrency_slots: DailyConcurrencySlot[];
+  spans?: DailyActivitySpan[];
 }
 
 export interface DashboardStats {
