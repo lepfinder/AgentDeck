@@ -53,6 +53,8 @@ export function ServiceConsole({
   const lineRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
   const prevActiveCountRef = useRef(0);
   const jumpRequestRef = useRef(false);
+  /** 非跟滚时记录用户滚动位置，实时刷新后恢复，避免被拉回底部 */
+  const lastScrollTopRef = useRef(0);
 
   // Hydrate / refresh from persisted parent store (survives page switch).
   useEffect(() => {
@@ -75,6 +77,8 @@ export function ServiceConsole({
     setStickToBottom(true);
     setErrorCursor(-1);
     prevActiveCountRef.current = 0;
+    jumpRequestRef.current = false;
+    lastScrollTopRef.current = 0;
     setNewErrorFlash(false);
     setIgnoredHint(false);
     setIgnoredSigs(new Set(ignoredSignatures ?? []));
@@ -149,27 +153,44 @@ export function ServiceConsole({
     prevActiveCountRef.current = errorCount;
   }, [errorCount]);
 
+  // 仅在用户主动跳转错误时滚动定位；实时刷新不得把视口拽走
   useEffect(() => {
-    if (activeLineIdx < 0) return;
-    if (!jumpRequestRef.current && stickToBottom) return;
+    if (activeLineIdx < 0 || !jumpRequestRef.current) return;
     const row = lineRefs.current.get(activeLineIdx);
     if (row) {
       row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      jumpRequestRef.current = false;
     }
-  }, [activeLineIdx, lines, stickToBottom]);
+    jumpRequestRef.current = false;
+  }, [activeLineIdx, lines]);
 
+  // 跟滚：仅在贴底且未手动上卷时滚到底；否则恢复上次阅读位置
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || loading || !stickToBottom || jumpRequestRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (!el || loading || jumpRequestRef.current) return;
+    if (stickToBottom) {
+      el.scrollTop = el.scrollHeight;
+    } else {
+      const max = Math.max(0, el.scrollHeight - el.clientHeight);
+      el.scrollTop = Math.min(lastScrollTopRef.current, max);
+    }
   }, [raw, hideProgress, loading, stickToBottom, lines.length]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    lastScrollTopRef.current = el.scrollTop;
     setStickToBottom(nearBottom);
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    jumpRequestRef.current = false;
+    setStickToBottom(true);
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+      lastScrollTopRef.current = el.scrollTop;
+    }
   };
 
   const goError = (delta: number) => {
@@ -368,7 +389,7 @@ export function ServiceConsole({
         ref={scrollRef}
         onScroll={handleScroll}
         className={cn(
-          'flex-1 min-h-0 overflow-auto rounded-xl border theme-border',
+          'relative flex-1 min-h-0 overflow-auto rounded-xl border theme-border',
           'bg-zinc-950 text-zinc-100 shadow-inner',
         )}
       >
@@ -435,6 +456,18 @@ export function ServiceConsole({
               })}
             </tbody>
           </table>
+        )}
+
+        {/* 已上卷暂停跟滚时，一键回到底部 */}
+        {serviceId && lines.length > 0 && !stickToBottom && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="sticky bottom-2 left-1/2 z-10 -translate-x-1/2 flex items-center gap-1 rounded-full border border-zinc-600/80 bg-zinc-900/95 px-3 py-1 text-[11px] text-zinc-200 shadow-lg hover:bg-zinc-800 cursor-pointer"
+          >
+            <ChevronDown className="h-3 w-3" />
+            回到底部 · 恢复实时跟随
+          </button>
         )}
       </div>
     </div>
