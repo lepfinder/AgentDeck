@@ -89,6 +89,21 @@ function formatReset(iso: string | null | undefined, locale: string): string {
   });
 }
 
+/** 与主窗口 QuotaBar 一致：距重置还有多久 */
+function relativeUntil(iso: string | null | undefined, t: T): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const ms = d.getTime() - Date.now();
+  if (ms <= 0) return t('quota.resetDone');
+  const mins = Math.floor(ms / 60_000);
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (days >= 1) return t('quota.inDays', { d: days, h: hours % 24 });
+  if (hours >= 1) return t('quota.inHours', { h: hours, m: mins % 60 });
+  return t('quota.inMinutes', { m: Math.max(1, mins) });
+}
+
 const KIND_ORDER = ['fiveHour', 'daily', 'weekly', 'monthly', 'spend'];
 
 function shortKind(kind: string, t: T): string {
@@ -113,15 +128,42 @@ interface Entry {
   multi: boolean;
 }
 
+function isGeminiWindow(w: QuotaWindow): boolean {
+  const scope = (w.scope || '').toLowerCase();
+  const id = (w.id || '').toLowerCase();
+  if (
+    scope.includes('claude') ||
+    scope.includes('gpt') ||
+    id.includes('claude') ||
+    id.includes('gpt') ||
+    id.startsWith('3p')
+  ) {
+    return false;
+  }
+  return scope.includes('gemini') || id.includes('gemini');
+}
+
+/**
+ * 圆环用窗口：Antigravity 只统计 Gemini（5h/周），
+ * 避免 Claude/GPT 同 kind 的更高用量顶掉 Gemini 环。
+ * 明细 Popover 仍用完整 p.windows。
+ */
+function ringWindows(p: ProviderQuota): QuotaWindow[] {
+  if (p.id !== 'antigravity') return p.windows;
+  const gem = p.windows.filter(isGeminiWindow);
+  return gem.length > 0 ? gem : p.windows;
+}
+
 function buildEntries(providers: ProviderQuota[]): Entry[] {
   const out: Entry[] = [];
   for (const p of providers) {
-    if (!p.available || !p.windows.length) {
+    const ringWin = ringWindows(p);
+    if (!p.available || !ringWin.length) {
       out.push({ key: p.id, provider: p, kind: '', percent: 0, exhausted: false, multi: false });
       continue;
     }
     const groups = new Map<string, { max: number; exhausted: boolean }>();
-    for (const w of p.windows) {
+    for (const w of ringWin) {
       const g = groups.get(w.kind) ?? { max: 0, exhausted: false };
       g.max = Math.max(g.max, w.used_percent);
       g.exhausted = g.exhausted || w.exhausted;
@@ -172,9 +214,18 @@ function WindowBlock({ w, t, locale }: {
 }) {
   const label = [kindLabel(w.kind, t), w.scope].filter(Boolean).join(' · ');
   const fill = tint(w.used_percent, w.exhausted);
+  const usedText = w.exhausted
+    ? t('quota.exhausted')
+    : t('quota.pill.used', { p: w.used_percent });
   return (
     <div className="space-y-1.5">
-      <div className="text-[11px]" style={{ color: '#a1a1aa' }}>{label}</div>
+      {/* 标签 + 已用：已用在进度条右上角 */}
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] truncate" style={{ color: '#a1a1aa' }}>{label}</span>
+        <span className="text-[11px] shrink-0 font-medium" style={{ color: fill }}>
+          {usedText}
+        </span>
+      </div>
       <div className="h-[3px] rounded-full" style={{ background: 'rgba(255,255,255,0.12)' }}>
         <div
           className="h-full rounded-full"
@@ -184,13 +235,16 @@ function WindowBlock({ w, t, locale }: {
           }}
         />
       </div>
-      <div className="flex items-center justify-between text-[11px]">
-        <span style={{ color: '#d4d4d8' }}>
-          {w.exhausted ? t('quota.exhausted') : t('quota.pill.used', { p: w.used_percent })}
-        </span>
+      {/* 重置时间左、剩余时长右对齐 */}
+      <div className="flex items-start justify-between gap-2 text-[10px]">
         <span style={{ color: '#71717a' }}>
-          {t('quota.pill.reset', { time: formatReset(w.resets_at, locale) })}
+          {t('quota.resets')}: {formatReset(w.resets_at, locale)}
         </span>
+        {w.resets_at && (
+          <span className="shrink-0 text-right" style={{ color: '#a1a1aa' }}>
+            {relativeUntil(w.resets_at, t)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -304,9 +358,16 @@ export function QuotaPillApp() {
   }, [useMock]);
 
   useEffect(() => {
+    document.documentElement.classList.add('quota-pill-window');
     document.documentElement.style.background = 'transparent';
+    document.documentElement.style.backgroundColor = 'transparent';
     document.body.style.background = 'transparent';
-    document.getElementById('root')!.style.background = 'transparent';
+    document.body.style.backgroundColor = 'transparent';
+    const root = document.getElementById('root');
+    if (root) {
+      root.style.background = 'transparent';
+      root.style.backgroundColor = 'transparent';
+    }
 
     void load(false);
     if (!isTauri()) return;
@@ -379,9 +440,9 @@ export function QuotaPillApp() {
           gap: ITEM_GAP,
           padding: `${PAD}px 0`,
           borderRadius: 20,
-          background: 'rgba(16,16,18,0.88)',
-          border: '1px solid rgba(255,255,255,0.08)',
-          boxShadow: '0 8px 24px rgba(0,0,0,0.45)',
+          // 近实心深色 + 极轻边框；不用外阴影——透明窗上 box-shadow 容易在四角糊成灰底
+          background: 'rgba(16,16,18,0.92)',
+          border: '1px solid rgba(255,255,255,0.1)',
         }}
       >
         <div

@@ -13,6 +13,14 @@ function isQuotaPillWindow(): boolean {
   return isTauri() && getCurrentWindow().label === 'quota-pill'
 }
 
+// 透明悬浮条窗口：必须在渲染前清掉全局主题底色，否则圆角外四角会露出灰底
+if (isQuotaPillWindow()) {
+  document.documentElement.classList.add('quota-pill-window')
+  document.documentElement.style.background = 'transparent'
+  document.body.style.background = 'transparent'
+  document.body.style.backgroundColor = 'transparent'
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <I18nProvider>

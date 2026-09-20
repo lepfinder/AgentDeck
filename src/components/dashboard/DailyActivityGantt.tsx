@@ -53,6 +53,8 @@ interface GanttBar {
   title: string;
   startLabel: string;
   endLabel: string;
+  /** 该时段涉及的 Agent 展示名（去重） */
+  agentNames: string[];
 }
 
 interface GroupedLane {
@@ -219,6 +221,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
         convIds: string[];
         color: string;
         title: string;
+        agents: Set<string>;
       };
       let acc: Acc | null = null;
 
@@ -237,9 +240,12 @@ export const DailyActivityGantt: React.FC<Props> = ({
           title: acc.title,
           startLabel: minuteToLabel(start),
           endLabel: minuteToLabel(end),
+          agentNames: Array.from(acc.agents),
         });
         acc = null;
       };
+
+      const agentName = (s: DailyActivitySpan) => s.source_label || s.source_app || 'Other';
 
       for (const s of sorted) {
         if (
@@ -250,6 +256,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
           acc.prompts += s.prompt_count;
           acc.msgs += s.message_count;
           acc.convIds.push(s.conversation_id);
+          acc.agents.add(agentName(s));
         } else {
           flush();
           acc = {
@@ -261,6 +268,7 @@ export const DailyActivityGantt: React.FC<Props> = ({
             convIds: [s.conversation_id],
             color: s.source_color,
             title: s.conversation_title,
+            agents: new Set([agentName(s)]),
           };
         }
       }
@@ -702,6 +710,23 @@ export const DailyActivityGantt: React.FC<Props> = ({
             <div className="text-[11px] text-slate-300">
               {hoveredBar.promptCount} 条提示词 · {hoveredBar.conversationIds.length} 个会话
             </div>
+            {hoveredBar.agentNames.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10px] text-slate-400">Agent</span>
+                {hoveredBar.agentNames.map((name) => (
+                  <span
+                    key={name}
+                    className="text-[10px] px-1.5 py-0.2 rounded font-medium"
+                    style={{
+                      backgroundColor: `${hoveredBar.color}30`,
+                      color: hoveredBar.color,
+                    }}
+                  >
+                    {name}
+                  </span>
+                ))}
+              </div>
+            )}
             {hoveredBar.title && (
               <div className="text-[10px] text-slate-400 truncate">{hoveredBar.title}</div>
             )}
@@ -762,13 +787,21 @@ export const DailyActivityGantt: React.FC<Props> = ({
                       提示词记录 ({modalPrompts.length} 条)
                     </h3>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11px] theme-text-muted">
+                  <div className="flex items-center gap-1.5 text-[11px] theme-text-muted flex-wrap">
                     <span className="font-mono">
                       {activeModalBar.startLabel} – {activeModalBar.endLabel}
                     </span>
                     <span className="font-mono">
                       ({formatDuration(Math.max(1, activeModalBar.endMinute - activeModalBar.startMinute))})
                     </span>
+                    {activeModalBar.agentNames.length > 0 && (
+                      <>
+                        <span>·</span>
+                        <span className="font-medium" style={{ color: activeModalBar.color }}>
+                          {activeModalBar.agentNames.join(' / ')}
+                        </span>
+                      </>
+                    )}
                     <span>·</span>
                     <span className="truncate">{activeModalBar.title}</span>
                   </div>

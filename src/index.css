@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* 额度悬浮条：独立透明窗口，禁止主题 body 底色/阴影在圆角外露灰 */
+html.quota-pill-window,
+html.quota-pill-window body,
+html.quota-pill-window #root {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
 @layer base {
   :root, :root[data-theme="dark"], .dark {
     --bg-main: #0b0f17;

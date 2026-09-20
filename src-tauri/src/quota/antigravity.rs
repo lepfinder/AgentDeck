@@ -439,6 +439,7 @@ fn windows_from_reply(reply: &QuotaReply) -> Vec<QuotaWindow> {
             .cmp(&scope_sort_key(b))
             .then_with(|| kind_within_group(&a.kind).cmp(&kind_within_group(&b.kind)))
     });
+    // 明细保留全量窗口（含 Claude/GPT）；悬浮条圆环在前端只取 Gemini
     windows
 }
 
@@ -529,14 +530,22 @@ fn model_group(name: Option<&str>) -> Option<String> {
 }
 
 fn headline_from(windows: &[QuotaWindow]) -> Vec<String> {
-    // Prefer Gemini 5h + weekly when present; else the two highest-urgency windows.
+    // 悬浮条只关心 Gemini：5h + weekly；过滤后若仍无匹配再退回前两档。
     let gemini_5h = windows.iter().find(|w| {
-        w.id.contains("gemini") && w.kind == "fiveHour"
-            || (w.scope.as_deref() == Some("Gemini") && w.kind == "fiveHour")
+        w.kind == "fiveHour"
+            && (w.id.to_lowercase().contains("gemini")
+                || w.scope
+                    .as_deref()
+                    .map(|s| s.to_lowercase().contains("gemini"))
+                    .unwrap_or(false))
     });
     let gemini_week = windows.iter().find(|w| {
-        w.id.contains("gemini") && w.kind == "weekly"
-            || (w.scope.as_deref() == Some("Gemini") && w.kind == "weekly")
+        w.kind == "weekly"
+            && (w.id.to_lowercase().contains("gemini")
+                || w.scope
+                    .as_deref()
+                    .map(|s| s.to_lowercase().contains("gemini"))
+                    .unwrap_or(false))
     });
 
     let mut parts = Vec::new();
