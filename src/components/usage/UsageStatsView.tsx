@@ -42,7 +42,7 @@ function fmtCredit(n: number): string {
 export const UsageStatsView: React.FC = () => {
   const { t, locale } = useI18n();
   const fmtTok = (n: number) => fmtTokens(n, locale);
-  const [range, setRange] = useState<RangeOption>(30);
+  const [range, setRange] = useState<RangeOption>(7);
   const [stats, setStats] = useState<UsageStatsPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -135,6 +135,43 @@ export const UsageStatsView: React.FC = () => {
             </>
           )}
         </p>
+
+        {/* 按天 */}
+        {byDay.length > 0 && (
+          <section>
+            <h2 className="text-xs font-semibold theme-text-muted mb-1.5">{t('usage.byDay')}</h2>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b theme-border-sub">
+                  <th className={thCls}>{t('usage.date')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.requests')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.input')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.cacheRead')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.cacheWrite')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.output')}</th>
+                  <th className={`${thCls} text-right`}>{t('usage.reasoning')}</th>
+                  {hasCredit && <th className={`${thCls} text-right`}>{t('usage.credit')}</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {byDay.map((row) => (
+                  <tr key={row.date} className="border-b theme-border-sub/50">
+                    <td className={tdCls}>
+                      <span className="theme-text-main font-mono">{row.date}</span>
+                    </td>
+                    <td className={numCls}>{fmtInt(row.requests)}</td>
+                    <td className={numCls}>{fmtTok(row.input_tokens)}</td>
+                    <td className={numCls}>{fmtTok(row.cache_read_tokens)}</td>
+                    <td className={numCls}>{fmtTok(row.cache_write_tokens)}</td>
+                    <td className={numCls}>{fmtTok(row.output_tokens)}</td>
+                    <td className={numCls}>{fmtTok(row.reasoning_tokens)}</td>
+                    {hasCredit && <td className={numCls}>{fmtCredit(row.credit)}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
 
         {/* 按 Agent */}
         <section>
@@ -286,43 +323,6 @@ export const UsageStatsView: React.FC = () => {
                     </td>
                     <td className={tdCls}>
                       <span className="theme-text-main font-medium">{row.session || '—'}</span>
-                    </td>
-                    <td className={numCls}>{fmtInt(row.requests)}</td>
-                    <td className={numCls}>{fmtTok(row.input_tokens)}</td>
-                    <td className={numCls}>{fmtTok(row.cache_read_tokens)}</td>
-                    <td className={numCls}>{fmtTok(row.cache_write_tokens)}</td>
-                    <td className={numCls}>{fmtTok(row.output_tokens)}</td>
-                    <td className={numCls}>{fmtTok(row.reasoning_tokens)}</td>
-                    {hasCredit && <td className={numCls}>{fmtCredit(row.credit)}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-        )}
-
-        {/* 按天 */}
-        {byDay.length > 0 && (
-          <section>
-            <h2 className="text-xs font-semibold theme-text-muted mb-1.5">{t('usage.byDay')}</h2>
-            <table className="w-full">
-              <thead>
-                <tr className="border-b theme-border-sub">
-                  <th className={thCls}>{t('usage.date')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.requests')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.input')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.cacheRead')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.cacheWrite')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.output')}</th>
-                  <th className={`${thCls} text-right`}>{t('usage.reasoning')}</th>
-                  {hasCredit && <th className={`${thCls} text-right`}>{t('usage.credit')}</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {byDay.map((row) => (
-                  <tr key={row.date} className="border-b theme-border-sub/50">
-                    <td className={tdCls}>
-                      <span className="theme-text-main font-mono">{row.date}</span>
                     </td>
                     <td className={numCls}>{fmtInt(row.requests)}</td>
                     <td className={numCls}>{fmtTok(row.input_tokens)}</td>
