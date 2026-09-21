@@ -7,7 +7,45 @@ use std::path::Path;
 
 use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+    RawUsageRecord,
 };
+
+const HERMES_PARSER_REV: &str = "hermes-v3";
+const HERMES_PARSER_REV_KEY: &str = "agentdeck:hermes_parser_rev";
+
+fn hermes_parser_rev_stale(conn: &Connection) -> bool {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM sync_state WHERE source_path = ?",
+            params![HERMES_PARSER_REV_KEY],
+            |r| r.get(0),
+        )
+        .ok();
+    stored.as_deref() != Some(HERMES_PARSER_REV)
+}
+
+fn mark_hermes_synced(conn: &Connection) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        VALUES (?1, ?2, 'hermes_parser', 0, 0, ?3)
+        ON CONFLICT(source_path) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            synced_at = excluded.synced_at
+        "#,
+        params![HERMES_PARSER_REV_KEY, HERMES_PARSER_REV, now],
+    );
+}
+
+/// unix 秒（含小数）→ RFC3339
+fn sec_to_rfc3339(s: f64) -> Option<String> {
+    if !s.is_finite() || s <= 0.0 {
+        return None;
+    }
+    chrono::DateTime::from_timestamp(s as i64, ((s.fract()) * 1_000_000_000.0) as u32)
+        .map(|dt| dt.to_rfc3339())
+}
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -29,12 +67,13 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     }
 
     let mut synced_cids = HashSet::new();
+    let force_reparse = hermes_parser_rev_stale(conn);
 
     // 1. 优先读取 ~/.hermes/state.db
     let state_db = hermes_dir.join("state.db");
     if state_db.is_file() {
-        if !incremental || needs_sync(conn, &state_db, true) {
-            match sync_hermes_state_db(conn, &state_db, &mut synced_cids) {
+        if !incremental || force_reparse || needs_sync(conn, &state_db, true) {
+            match sync_hermes_state_db(conn, &state_db, &mut synced_cids, force_reparse) {
                 Ok((n, u)) => {
                     record_sync_state(conn, &state_db, "hermes:state_db", "hermes_state_db");
                     stats.new_count += n;
@@ -102,6 +141,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
+    // 有错误的运行不标记 rev：否则一次不完整的运行会永久消耗强制重导
+    if stats.error_count == 0 {
+        mark_hermes_synced(conn);
+    }
     stats
 }
 
@@ -109,6 +152,7 @@ fn sync_hermes_state_db(
     conn: &Connection,
     db_path: &Path,
     synced_cids: &mut HashSet<String>,
+    force: bool,
 ) -> Result<(u32, u32), Box<dyn std::error::Error>> {
     let hermes_conn = Connection::open_with_flags(
         db_path,
@@ -147,24 +191,35 @@ fn sync_hermes_state_db(
     let mut updated_cnt = 0;
 
     let mut existing_map: HashMap<String, (Option<String>, i64)> = HashMap::new();
-    if let Ok(mut exist_stmt) = conn
-        .prepare("SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'hermes:%'")
-    {
-        if let Ok(rows) = exist_stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, i64>(2).unwrap_or(0),
-            ))
-        }) {
-            for row in rows.flatten() {
-                existing_map.insert(row.0, (row.1, row.2));
+    // force 全量重解析时不读跳表，让 usage 变化也能触发重写
+    if !force {
+        if let Ok(mut exist_stmt) = conn
+            .prepare("SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'hermes:%'")
+        {
+            if let Ok(rows) = exist_stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2).unwrap_or(0),
+                ))
+            }) {
+                for row in rows.flatten() {
+                    existing_map.insert(row.0, (row.1, row.2));
+                }
             }
         }
     }
 
     let mut msg_stmt = hermes_conn.prepare(
         "SELECT role, content, timestamp, tool_calls FROM messages WHERE session_id = ? ORDER BY timestamp ASC, id ASC",
+    )?;
+
+    // session_model_usage：会话级聚合用量，一行 = 一个 (model, billing, task) 组合
+    let mut usage_stmt = hermes_conn.prepare(
+        "SELECT model, billing_provider, billing_base_url, billing_mode, task,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                reasoning_tokens, estimated_cost_usd, actual_cost_usd, last_seen
+         FROM session_model_usage WHERE session_id = ?",
     )?;
 
     for s_row in sessions {
@@ -236,6 +291,50 @@ fn sync_hermes_state_db(
             continue;
         }
 
+        // 会话级聚合用量：input 不含缓存读（实测 input < cache_read），各桶独立
+        let mut usage_records = Vec::new();
+        let usage_rows = usage_stmt.query_map(params![&raw_id], |u_row| {
+            Ok((
+                u_row.get::<_, String>(0)?,
+                u_row.get::<_, String>(1)?,
+                u_row.get::<_, String>(2)?,
+                u_row.get::<_, String>(3)?,
+                u_row.get::<_, String>(4)?,
+                u_row.get::<_, i64>(5)?,
+                u_row.get::<_, i64>(6)?,
+                u_row.get::<_, i64>(7)?,
+                u_row.get::<_, i64>(8)?,
+                u_row.get::<_, i64>(9)?,
+                u_row.get::<_, f64>(10)?,
+                u_row.get::<_, f64>(11)?,
+                u_row.get::<_, Option<f64>>(12)?,
+            ))
+        })?;
+        for u_row in usage_rows.flatten() {
+            let (model, provider, base_url, mode, task, input, output, cache_read, cache_write, reasoning, est, actual, last_seen) = u_row;
+            let identity = format!("{}|{}|{}|{}|{}", model, provider, base_url, mode, task);
+            let credit = if actual > 0.0 {
+                Some(actual)
+            } else if est > 0.0 {
+                Some(est)
+            } else {
+                None
+            };
+            usage_records.push(RawUsageRecord {
+                identity,
+                agent: "hermes".to_string(),
+                model: Some(model),
+                input_tokens: Some(input),
+                cache_read_tokens: Some(cache_read),
+                cache_write_tokens: Some(cache_write),
+                output_tokens: Some(output),
+                reasoning_tokens: Some(reasoning),
+                credit,
+                occurred_at: last_seen.and_then(sec_to_rfc3339),
+                is_partial: false,
+            });
+        }
+
         if derived_title.is_empty() {
             derived_title = format!("Hermes 会话 {}", &raw_id[..raw_id.len().min(8)]);
         }
@@ -251,6 +350,7 @@ fn sync_hermes_state_db(
             source_types: vec!["hermes".to_string()],
             messages,
             artifacts: Vec::new(),
+            usage_records,
         };
 
         if save_conversation_tx(conn, &conv)? {
@@ -366,5 +466,80 @@ fn parse_hermes_jsonl(
         source_types: vec!["hermes".to_string()],
         messages,
         artifacts: Vec::new(),
+        usage_records: Vec::new(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn syncs_session_model_usage_as_records() {
+        let tmp = std::env::temp_dir().join(format!(
+            "hermes_usage_test_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        let hermes = Connection::open(&tmp).unwrap();
+        hermes.execute_batch(
+            r#"
+            CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, started_at REAL, last_activity_at REAL, ended_at REAL, cwd TEXT);
+            CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, role TEXT, content TEXT, timestamp REAL, tool_calls TEXT);
+            CREATE TABLE session_model_usage (
+                session_id TEXT NOT NULL, model TEXT NOT NULL,
+                billing_provider TEXT NOT NULL DEFAULT '', billing_base_url TEXT NOT NULL DEFAULT '',
+                billing_mode TEXT NOT NULL DEFAULT '', task TEXT NOT NULL DEFAULT '',
+                api_call_count INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                estimated_cost_usd REAL NOT NULL DEFAULT 0, actual_cost_usd REAL NOT NULL DEFAULT 0,
+                cost_status TEXT, cost_source TEXT, first_seen REAL, last_seen REAL,
+                PRIMARY KEY (session_id, model, billing_provider, billing_base_url, billing_mode, task)
+            );
+            INSERT INTO sessions VALUES ('s1', 'demo', 1775629586.0, 1775631452.0, NULL, '/tmp/demo');
+            INSERT INTO messages (session_id, role, content, timestamp) VALUES ('s1', 'user', 'hi', 1775629587.0);
+            INSERT INTO session_model_usage (session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, actual_cost_usd, last_seen)
+                VALUES ('s1', 'qwen3-coder-plus', 270154, 4188, 1342272, 0, 0, 0.0, 1775631452.7);
+            "#,
+        )
+        .unwrap();
+        drop(hermes);
+
+        let deck = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&deck).unwrap();
+
+        let mut synced = HashSet::new();
+        let (n, _u) = sync_hermes_state_db(&deck, &tmp, &mut synced, true).unwrap();
+        assert_eq!(n, 1);
+
+        let row: (String, String, i64, i64, i64, Option<f64>, Option<String>) = deck
+            .query_row(
+                "SELECT identity, model, input_tokens, cache_read_tokens, output_tokens, credit, occurred_at
+                 FROM usage_records WHERE conversation_id = 'hermes:s1'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, "qwen3-coder-plus||||");
+        assert_eq!(row.1, "qwen3-coder-plus");
+        assert_eq!(row.2, 270154);
+        assert_eq!(row.3, 1342272);
+        assert_eq!(row.4, 4188);
+        assert_eq!(row.5, None);
+        assert!(row.6.as_deref().unwrap().starts_with("2026-"));
+
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

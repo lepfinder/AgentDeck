@@ -8,11 +8,11 @@ use walkdir::WalkDir;
 
 use super::{
     needs_sync, normalize_to_iso, record_sync_state, save_conversation_tx, ImporterStats,
-    RawConversation, RawMessage,
+    RawConversation, RawMessage, RawUsageRecord,
 };
 
 /// 解析格式版本：变更后强制重新扫描
-const QODER_PARSER_REV: &str = "qoder-v1";
+const QODER_PARSER_REV: &str = "qoder-v2";
 const QODER_PARSER_REV_KEY: &str = "agentdeck:qoder_parser_rev";
 
 /// 单条消息正文的截断上限，防止超大 tool 结果拖垮 UI
@@ -90,7 +90,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
-    mark_qoder_synced(conn);
+    // 有错误的运行不标记 rev：否则一次不完整的运行会永久消耗强制重导
+    if stats.error_count == 0 {
+        mark_qoder_synced(conn);
+    }
     stats
 }
 
@@ -111,6 +114,8 @@ struct Segment {
     text: Vec<String>,
     tools: Vec<ToolUse>,
     credits: Option<f64>,
+    /// 本回合的 usage 快照（流式多行时后行覆盖前行，取最终值）
+    usage: Option<Value>,
 }
 
 impl Segment {
@@ -119,13 +124,65 @@ impl Segment {
     }
 }
 
-/// 将累计的 assistant 回合展开为消息：正文消息在前，工具调用逐条展开，积分挂到末条
+/// 将累计的 assistant 回合展开为消息：正文消息在前，工具调用逐条展开，积分挂到末条。
+/// usage 是独立事实，先于空段判断发射——纯 usage 行（无正文无工具）也要记账。
 fn flush_segment(
     seg: &mut Segment,
     messages: &mut Vec<RawMessage>,
+    usage_records: &mut Vec<RawUsageRecord>,
     step_idx: &mut i64,
     tool_names: &mut HashMap<String, String>,
 ) {
+    if let Some(usage) = seg.usage.take() {
+        let input = usage.get("input_tokens").and_then(|v| v.as_i64());
+        let cache_write = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_i64());
+        let cache_read = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_i64());
+        let output = usage.get("output_tokens").and_then(|v| v.as_i64());
+        let credit = usage
+            .get("credits")
+            .and_then(|v| v.as_f64())
+            .filter(|c| *c > 0.0);
+        if input.is_some()
+            || cache_write.is_some()
+            || cache_read.is_some()
+            || output.is_some()
+            || credit.is_some()
+        {
+            let identity = usage
+                .get("request_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    if seg.message_id.is_empty() {
+                        None
+                    } else {
+                        Some(seg.message_id.clone())
+                    }
+                })
+                .unwrap_or_default();
+            if !identity.is_empty() {
+                usage_records.push(RawUsageRecord {
+                    identity,
+                    agent: "qoder".to_string(),
+                    model: seg.model.clone(),
+                    input_tokens: input,
+                    cache_read_tokens: cache_read,
+                    cache_write_tokens: cache_write,
+                    output_tokens: output,
+                    reasoning_tokens: None,
+                    credit,
+                    occurred_at: seg.ts.clone(),
+                    is_partial: false,
+                });
+            }
+        }
+    }
+
     if seg.is_empty() {
         *seg = Segment::default();
         return;
@@ -224,6 +281,7 @@ fn parse_qoder_jsonl(
     let reader = BufReader::new(file);
 
     let mut messages: Vec<RawMessage> = Vec::new();
+    let mut usage_records: Vec<RawUsageRecord> = Vec::new();
     let mut tool_names: HashMap<String, String> = HashMap::new();
     let mut segment = Segment::default();
     let mut step_idx = 0i64;
@@ -298,7 +356,7 @@ fn parse_qoder_jsonl(
 
                 // message.id 变化即新回合，先结束上一段再累计
                 if !segment.message_id.is_empty() && segment.message_id != mid {
-                    flush_segment(&mut segment, &mut messages, &mut step_idx, &mut tool_names);
+                    flush_segment(&mut segment, &mut messages, &mut usage_records, &mut step_idx, &mut tool_names);
                 }
                 if segment.message_id.is_empty() {
                     segment.message_id = mid;
@@ -368,18 +426,20 @@ fn parse_qoder_jsonl(
                     }
                 }
 
-                // 每个回合仅一行携带 usage，取其积分（增量值）
+                // 每个回合仅一行携带 usage：积分挂消息末条做内联展示，
+                // 完整快照存入 segment，flush 时作为独立用量事实发射（流式后行覆盖前行）
                 if let Some(usage) = msg.get("usage") {
                     if let Some(c) = usage.get("credits").and_then(|v| v.as_f64()) {
                         if c > 0.0 {
                             segment.credits = Some(c);
                         }
                     }
+                    segment.usage = Some(usage.clone());
                 }
             }
             "user" => {
                 // 用户消息是回合边界，先结束可能未收尾的 assistant 段
-                flush_segment(&mut segment, &mut messages, &mut step_idx, &mut tool_names);
+                flush_segment(&mut segment, &mut messages, &mut usage_records, &mut step_idx, &mut tool_names);
 
                 if value
                     .get("isCompactSummary")
@@ -523,14 +583,14 @@ fn parse_qoder_jsonl(
                 }
             }
             "system" => {
-                flush_segment(&mut segment, &mut messages, &mut step_idx, &mut tool_names);
+                flush_segment(&mut segment, &mut messages, &mut usage_records, &mut step_idx, &mut tool_names);
             }
             // attachment / active-leaf / last-prompt / file-history-snapshot 等辅助行不产生消息
             _ => {}
         }
     }
 
-    flush_segment(&mut segment, &mut messages, &mut step_idx, &mut tool_names);
+    flush_segment(&mut segment, &mut messages, &mut usage_records, &mut step_idx, &mut tool_names);
 
     if messages.is_empty() {
         return Ok(None);
@@ -556,6 +616,7 @@ fn parse_qoder_jsonl(
         source_types: vec!["qoder".to_string()],
         messages,
         artifacts: Vec::new(),
+        usage_records,
     }))
 }
 
@@ -767,5 +828,53 @@ mod tests {
         ]);
         assert_eq!(tool_result_text(Some(&arr)), "line1\n[图片]");
         assert_eq!(tool_result_text(None), "");
+    }
+
+    fn write_qoder_fixture(name: &str, lines: &[String]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("agentdeck_qoder_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{}-{}.jsonl", name, std::process::id()));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn emits_usage_records_with_request_id_identity() {
+        let lines = vec![
+            r#"{"type":"workspace-directories","directories":["/Users/xiyangxie/workspace/personal/Tappy"]}"#.to_string(),
+            r#"{"type":"user","timestamp":"2026-09-20T10:00:00.000Z","cwd":"/Users/xiyangxie/workspace/personal/Tappy","origin":{"kind":"human"},"message":{"content":[{"type":"text","text":"跑一下测试"}]}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2026-09-20T10:00:05.000Z","message":{"id":"msg_a","model":"qoder-max","content":[{"type":"text","text":"第一回合"}],"usage":{"input_tokens":100,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"output_tokens":30,"request_id":"req_a"}}}"#.to_string(),
+            // 同一 message.id 的流式分片：后行 usage 覆盖前行，只发一条事实
+            r#"{"type":"assistant","timestamp":"2026-09-20T10:00:06.000Z","message":{"id":"msg_a","model":"qoder-max","content":[{"type":"text","text":"（续）"}],"usage":{"input_tokens":150,"cache_creation_input_tokens":10,"cache_read_input_tokens":20,"output_tokens":45,"credits":0.35,"request_id":"req_a"}}}"#.to_string(),
+            r#"{"type":"user","timestamp":"2026-09-20T10:01:00.000Z","origin":{"kind":"human"},"message":{"content":[{"type":"text","text":"再来"}]}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2026-09-20T10:01:05.000Z","message":{"id":"msg_b","model":"qoder-max","content":[{"type":"text","text":"第二回合"}],"usage":{"input_tokens":200,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":60,"request_id":"req_b"}}}"#.to_string(),
+        ];
+        let path = write_qoder_fixture("usage", &lines);
+        let conv = parse_qoder_jsonl("qoder:test", "test", &path)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(conv.usage_records.len(), 2);
+        let a = &conv.usage_records[0];
+        assert_eq!(a.identity, "req_a");
+        assert_eq!(a.input_tokens, Some(150));
+        assert_eq!(a.output_tokens, Some(45));
+        assert_eq!(a.cache_write_tokens, Some(10));
+        assert_eq!(a.cache_read_tokens, Some(20));
+        assert_eq!(a.credit, Some(0.35));
+        assert_eq!(a.model.as_deref(), Some("qoder-max"));
+        // timestamp 经 normalize_to_iso 重排，只断言时刻前缀
+        assert!(
+            a.occurred_at
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("2026-09-20T10:00:06"),
+            "unexpected occurred_at: {:?}",
+            a.occurred_at
+        );
+        let b = &conv.usage_records[1];
+        assert_eq!(b.identity, "req_b");
+        assert_eq!(b.input_tokens, Some(200));
+        assert_eq!(b.credit, None);
     }
 }

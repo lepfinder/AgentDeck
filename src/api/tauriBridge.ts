@@ -27,6 +27,7 @@ import type {
   LlmCallLogItem,
   LlmUsageSummary,
   QuotaSnapshot,
+  UsageStatsPayload,
 } from '../types';
 
 export const isTauri = () => {
@@ -47,6 +48,16 @@ export const api = {
       return await invoke<DailyTimelineStats>('get_daily_timeline', { date });
     }
     const res = await fetch(`/api/daily-timeline?date=${encodeURIComponent(date)}`);
+    return await res.json();
+  },
+
+  async getUsageStats(days?: number | null): Promise<UsageStatsPayload> {
+    if (isTauri()) {
+      return await invoke<UsageStatsPayload>('get_usage_stats', { days: days ?? null });
+    }
+    // days=0（今天）是 falsy，不能直接作为是否带参的判断
+    const qs = days != null ? `?days=${days}` : '';
+    const res = await fetch(`/api/usage-stats${qs}`);
     return await res.json();
   },
 
@@ -259,9 +270,15 @@ export const api = {
     return { generated_at: new Date().toISOString(), providers: [] };
   },
 
-  async resizeQuotaPill(width: number, height: number): Promise<void> {
+  async resizeQuotaPill(height: number): Promise<void> {
     if (isTauri()) {
-      await invoke('quota_pill_resize', { width, height });
+      await invoke('quota_pill_resize', { height });
+    }
+  },
+
+  async setQuotaPillHoverState(collapsed: boolean, popoverOpen: boolean): Promise<void> {
+    if (isTauri()) {
+      await invoke('quota_pill_set_hover_state', { collapsed, popoverOpen });
     }
   },
 
@@ -269,6 +286,13 @@ export const api = {
     if (isTauri()) {
       await invoke('quota_pill_show_menu');
     }
+  },
+
+  async quotaPillLayout(): Promise<{ mirror: boolean; docked: boolean }> {
+    if (isTauri()) {
+      return await invoke<{ mirror: boolean; docked: boolean }>('quota_pill_layout');
+    }
+    return { mirror: false, docked: false };
   },
 
   async showQuotaPill(): Promise<void> {
@@ -766,6 +790,8 @@ export const api = {
       invoke<import('../hooks/useLocalServices').InstalledIdes>('service_detect_ides'),
     tailLog: (id: string, lines?: number) =>
       invoke<string>('service_tail_log', { id, lines: lines ?? null }),
+    clearLog: (id: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_clear_log', { id }),
     pickFolder: () => invoke<string | null>('service_pick_folder'),
     scanProject: (projectDir: string) =>
       invoke<import('../types/serviceCandidate').CandidateConfig>('service_scan_project', {

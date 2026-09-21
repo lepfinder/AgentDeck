@@ -236,6 +236,87 @@ export interface DashboardStats {
   beijing_today: string;
 }
 
+export interface UsageTotals {
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageAgentRow {
+  agent: string;
+  label: string;
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageModelRow {
+  agent: string;
+  model: string;
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageDayRow {
+  date: string;
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageProjectRow {
+  project: string;
+  workspace_path: string;
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageSessionRow {
+  conversation_id: string;
+  session: string;
+  project: string;
+  requests: number;
+  input_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  credit: number;
+}
+
+export interface UsageStatsPayload {
+  days?: number | null;
+  totals: UsageTotals;
+  by_agent: UsageAgentRow[];
+  by_model: UsageModelRow[];
+  by_project: UsageProjectRow[];
+  by_session: UsageSessionRow[];
+  by_day: UsageDayRow[];
+  agents_without_usage: string[];
+}
+
 export interface SearchResultItem {
   message_id: string;
   conversation_id: string;

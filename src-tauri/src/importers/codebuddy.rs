@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use super::{
     canonicalize_workspace_path, needs_sync, record_sync_state, save_conversation_tx,
-    ImporterStats, RawArtifact, RawConversation, RawMessage,
+    ImporterStats, RawArtifact, RawConversation, RawMessage, RawUsageRecord,
 };
 
 /// 解析格式版本：变更后强制重新扫描
-const CODEBUDDY_PARSER_REV: &str = "codebuddy-v1";
+const CODEBUDDY_PARSER_REV: &str = "codebuddy-v3";
 const CODEBUDDY_PARSER_REV_KEY: &str = "agentdeck:codebuddy_parser_rev";
 
 /// 单条消息正文的截断上限，防止超大 tool 结果拖垮 UI
@@ -157,7 +157,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
-    mark_codebuddy_synced(conn);
+    // 有错误的运行不标记 rev：否则一次不完整的运行会永久消耗强制重导
+    if stats.error_count == 0 {
+        mark_codebuddy_synced(conn);
+    }
     stats
 }
 
@@ -187,6 +190,9 @@ fn parse_conversation(
 
     // requests[].usage（token / 积分）挂到该轮最后一条消息上
     let mut usage_by_msg: HashMap<String, (Option<i64>, Option<f64>)> = HashMap::new();
+    // 同一份数据同时落 usage_records 事实表；requestId → modelName 由消息 extra 补齐
+    let mut usage_records: Vec<RawUsageRecord> = Vec::new();
+    let mut req_idents: HashSet<String> = HashSet::new();
     if let Some(reqs) = index.get("requests").and_then(|r| r.as_array()) {
         for req in reqs {
             let usage = req.get("usage");
@@ -207,6 +213,53 @@ fn parse_conversation(
             {
                 usage_by_msg.insert(last.to_string(), (tokens, credit));
             }
+
+            let ident = req
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if ident.is_empty() || !req_idents.insert(ident.clone()) {
+                continue;
+            }
+            let u = usage.unwrap();
+            // inputTokens 含缓存命中，cachedMissTokens 才是新鲜输入
+            let fresh_input = u
+                .get("cachedMissTokens")
+                .and_then(|v| v.as_i64())
+                .or_else(|| {
+                    let input = u.get("inputTokens").and_then(|v| v.as_i64())?;
+                    let cached = u.get("cacheTokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                    Some((input - cached).max(0))
+                });
+            let output = u.get("outputTokens").and_then(|v| v.as_i64());
+            let cache_read = u.get("cacheTokens").and_then(|v| v.as_i64());
+            let cache_write = u.get("cachedWriteTokens").and_then(|v| v.as_i64());
+            let reasoning = u.get("thinkingTokens").and_then(|v| v.as_i64());
+            let occurred_at = req
+                .get("startedAt")
+                .and_then(|v| v.as_i64())
+                .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms))
+                .map(|dt| dt.to_rfc3339());
+            if fresh_input.is_some()
+                || output.is_some()
+                || cache_read.is_some()
+                || cache_write.is_some()
+            {
+                usage_records.push(RawUsageRecord {
+                    identity: ident,
+                    agent: "codebuddy".to_string(),
+                    model: None,
+                    input_tokens: fresh_input,
+                    cache_read_tokens: cache_read,
+                    cache_write_tokens: cache_write,
+                    output_tokens: output,
+                    reasoning_tokens: reasoning,
+                    credit: credit.filter(|c| *c > 0.0),
+                    occurred_at,
+                    is_partial: false,
+                });
+            }
         }
     }
 
@@ -215,6 +268,7 @@ fn parse_conversation(
     let mut first_user_text: Option<String> = None;
     let mut created_at: Option<String> = None;
     let mut updated_at: Option<String> = None;
+    let mut req_model: HashMap<String, String> = HashMap::new();
 
     for msg_id in &order {
         let msg_path = conv_dir.join("messages").join(format!("{}.json", msg_id));
@@ -258,6 +312,14 @@ fn parse_conversation(
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        if let (Some(rid), Some(mn)) = (
+            extra.get("requestId").and_then(|v| v.as_str()),
+            extra.get("modelName").and_then(|v| v.as_str()),
+        ) {
+            if !mn.is_empty() {
+                req_model.entry(rid.to_string()).or_insert_with(|| mn.to_string());
+            }
+        }
         let content_items: Vec<Value> = inner
             .get("content")
             .and_then(|c| c.as_array())
@@ -514,6 +576,15 @@ fn parse_conversation(
         }
     }
 
+    // 消息 extra 里的 requestId → modelName 补齐 usage_records 的模型列
+    for u in &mut usage_records {
+        if u.model.is_none() {
+            if let Some(m) = req_model.get(&u.identity) {
+                u.model = Some(m.clone());
+            }
+        }
+    }
+
     Ok(Some(RawConversation {
         id: format!("codebuddy:{}", conv_id),
         title,
@@ -525,6 +596,7 @@ fn parse_conversation(
         source_types: vec!["codebuddy".to_string()],
         messages,
         artifacts,
+        usage_records,
     }))
 }
 
@@ -756,6 +828,77 @@ fn mark_codebuddy_synced(conn: &Connection) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_request_usage_into_records() {
+        let dir = std::env::temp_dir().join(format!(
+            "codebuddy_usage_test_{}",
+            std::process::id()
+        ));
+        let msg_dir = dir.join("messages");
+        std::fs::create_dir_all(&msg_dir).unwrap();
+
+        let index = json!({
+            "messages": [{"id": "m1"}],
+            "requests": [{
+                "id": "req1",
+                "type": "chat",
+                "messages": ["m1"],
+                "state": "done",
+                "startedAt": 1789785611976i64,
+                "usage": {
+                    "inputTokens": 27539,
+                    "outputTokens": 105,
+                    "totalTokens": 27644,
+                    "lastTokens": 27644,
+                    "cacheTokens": 1000,
+                    "cachedWriteTokens": 200,
+                    "cachedMissTokens": 26539,
+                    "credit": 0.5
+                }
+            }]
+        });
+        std::fs::write(dir.join("index.json"), serde_json::to_string(&index).unwrap()).unwrap();
+
+        let msg = json!({
+            "role": "user",
+            "id": "m1",
+            "createdAt": "2026-09-17T10:00:00.000Z",
+            "message": serde_json::to_string(&json!({
+                "content": [{"type": "text", "text": "hi"}]
+            })).unwrap(),
+            "extra": serde_json::to_string(&json!({
+                "requestId": "req1",
+                "modelName": "glm-5.3"
+            })).unwrap()
+        });
+        std::fs::write(
+            msg_dir.join("m1.json"),
+            serde_json::to_string(&msg).unwrap(),
+        )
+        .unwrap();
+
+        let conv = parse_conversation(&dir, "abc123", &HashMap::new(), &HashMap::new(), &HashMap::new())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(conv.usage_records.len(), 1);
+        let u = &conv.usage_records[0];
+        assert_eq!(u.identity, "req1");
+        assert_eq!(u.model.as_deref(), Some("glm-5.3"));
+        // cachedMissTokens 是新鲜输入；cacheTokens/cachedWriteTokens 单列
+        assert_eq!(u.input_tokens, Some(26539));
+        assert_eq!(u.cache_read_tokens, Some(1000));
+        assert_eq!(u.cache_write_tokens, Some(200));
+        assert_eq!(u.output_tokens, Some(105));
+        assert_eq!(u.credit, Some(0.5));
+        assert!(u.occurred_at.as_deref().unwrap().starts_with("2026-"));
+        // 消息侧的 token_count 挂载保持不变
+        assert_eq!(conv.messages[0].token_count, Some(27644));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// 对本机真实 CodeBuddy 数据目录做一次端到端试跑（默认跳过）
     #[test]

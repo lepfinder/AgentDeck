@@ -48,6 +48,29 @@ pub struct RawArtifact {
     pub updated_at: Option<String>,
 }
 
+/// 一条用量事实 = 一次 API 请求的 token/积分消耗。
+/// 与消息平行（同挂会话），不追求与 messages 一一对应：
+/// usage 是计费事件，Claude/Qoder 恰好附着在 assistant 消息上，
+/// Codex/MiMo/Hermes 则是独立的请求/step/会话级实体。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawUsageRecord {
+    /// 请求级身份（message.id / request_id / response_id），会话内唯一，用于增量 upsert 与去重
+    pub identity: String,
+    pub agent: String,
+    pub model: Option<String>,
+    /// 统一口径：新鲜输入（源数据 input 含 cache 时由 importer 先减好）
+    pub input_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    /// 仅记录；统计时不重复计入 output
+    pub reasoning_tokens: Option<i64>,
+    pub credit: Option<f64>,
+    pub occurred_at: Option<String>,
+    /// 语义不可证明（如 cache 与 input 的包含关系未知）时如实标记
+    pub is_partial: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawConversation {
     pub id: String,
@@ -61,6 +84,8 @@ pub struct RawConversation {
     pub messages: Vec<RawMessage>,
     #[serde(default)]
     pub artifacts: Vec<RawArtifact>,
+    #[serde(default)]
+    pub usage_records: Vec<RawUsageRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +244,21 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
         art.content.hash(&mut hasher);
         art.updated_at.hash(&mut hasher);
     }
+    // 用量事实必须纳入指纹：消息未变而 usage 变化时也要触发重写，
+    // 否则 unchanged 早退会导致 usage_records 永远写不进去
+    for u in &conv.usage_records {
+        u.identity.hash(&mut hasher);
+        u.agent.hash(&mut hasher);
+        u.model.hash(&mut hasher);
+        u.input_tokens.hash(&mut hasher);
+        u.cache_read_tokens.hash(&mut hasher);
+        u.cache_write_tokens.hash(&mut hasher);
+        u.output_tokens.hash(&mut hasher);
+        u.reasoning_tokens.hash(&mut hasher);
+        u.credit.map(|c| c.to_bits()).hash(&mut hasher);
+        u.occurred_at.hash(&mut hasher);
+        u.is_partial.hash(&mut hasher);
+    }
     format!("{:016x}", hasher.finish())
 }
 
@@ -349,6 +389,9 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
                     old_updated == norm_updated
                         && old_total == total_msg_count
                         && old_user == user_msg_count
+                        // 无指纹的旧版行无法证明已含用量事实；带 usage 的解析必须重写一次，
+                        // 否则空 hash 行永远早退，usage 永远落不了库（写一次后指纹接管）
+                        && conv.usage_records.is_empty()
                 };
             }
         }
@@ -609,6 +652,76 @@ pub fn save_conversation_tx(conn: &Connection, conv: &RawConversation) -> Result
         }
     }
 
+    // 用量事实：按 (conversation_id, identity) upsert；清理本次解析中不再出现的身份。
+    // 一个会话对应一个源文件，身份集合替换即对齐消息的截断清理语义。
+    if !conv.usage_records.is_empty() {
+        let mut upsert_stmt = tx.prepare_cached(
+            r#"
+            INSERT INTO usage_records (
+                conversation_id, agent, identity, model,
+                input_tokens, cache_read_tokens, cache_write_tokens, output_tokens,
+                reasoning_tokens, credit, occurred_at, is_partial
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            ON CONFLICT(conversation_id, identity) DO UPDATE SET
+                agent = excluded.agent,
+                model = excluded.model,
+                input_tokens = excluded.input_tokens,
+                cache_read_tokens = excluded.cache_read_tokens,
+                cache_write_tokens = excluded.cache_write_tokens,
+                output_tokens = excluded.output_tokens,
+                reasoning_tokens = excluded.reasoning_tokens,
+                credit = excluded.credit,
+                occurred_at = excluded.occurred_at,
+                is_partial = excluded.is_partial
+            "#,
+        )?;
+
+        for u in &conv.usage_records {
+            upsert_stmt.execute(params![
+                &conv.id,
+                &u.agent,
+                &u.identity,
+                &u.model,
+                &u.input_tokens,
+                &u.cache_read_tokens,
+                &u.cache_write_tokens,
+                &u.output_tokens,
+                &u.reasoning_tokens,
+                &u.credit,
+                &u.occurred_at,
+                if u.is_partial { 1 } else { 0 },
+            ])?;
+        }
+
+        let mut existing_idents: HashMap<String, ()> = HashMap::new();
+        {
+            let mut stmt =
+                tx.prepare_cached("SELECT identity FROM usage_records WHERE conversation_id = ?")?;
+            let rows = stmt.query_map(params![&conv.id], |r| r.get::<_, String>(0))?;
+            for ident in rows.flatten() {
+                existing_idents.insert(ident, ());
+            }
+        }
+        let incoming: HashMap<&str, ()> = conv
+            .usage_records
+            .iter()
+            .map(|u| (u.identity.as_str(), ()))
+            .collect();
+        let stale: Vec<&String> = existing_idents
+            .keys()
+            .filter(|k| !incoming.contains_key(k.as_str()))
+            .collect();
+        if !stale.is_empty() {
+            let mut del_stmt = tx.prepare_cached(
+                "DELETE FROM usage_records WHERE conversation_id = ? AND identity = ?",
+            )?;
+            for ident in stale {
+                del_stmt.execute(params![&conv.id, ident])?;
+            }
+        }
+    }
+
     tx.commit()?;
 
     Ok(!exists)
@@ -738,6 +851,7 @@ mod tests {
                 make_msg(1, "历史消息1", Some(old_time.clone())),
             ],
             artifacts: vec![],
+            usage_records: vec![],
         };
         let is_new = save_conversation_tx(&conn, &conv_v1).unwrap();
         assert!(is_new);
@@ -758,6 +872,7 @@ mod tests {
                 make_msg(2, "今天追加的新消息", Some(new_time.clone())),
             ],
             artifacts: vec![],
+            usage_records: vec![],
         };
         let is_new2 = save_conversation_tx(&conn, &conv_v2).unwrap();
         assert!(!is_new2);
@@ -800,6 +915,7 @@ mod tests {
             source_types: vec!["cursor".to_string()],
             messages: vec![make_msg(0, "历史消息0", Some(old_time.clone()))],
             artifacts: vec![],
+            usage_records: vec![],
         };
         save_conversation_tx(&conn, &conv_v3).unwrap();
 
@@ -811,6 +927,155 @@ mod tests {
             )
             .unwrap();
         assert_eq!(remaining_cnt, 1);
+    }
+
+    #[test]
+    fn test_usage_records_upsert_and_cleanup() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+
+        let make_usage = |identity: &str, input: i64| RawUsageRecord {
+            identity: identity.to_string(),
+            agent: "claude".to_string(),
+            model: Some("glm-5.2".to_string()),
+            input_tokens: Some(input),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            output_tokens: Some(10),
+            reasoning_tokens: None,
+            credit: None,
+            occurred_at: Some("2026-09-20T10:00:00Z".to_string()),
+            is_partial: false,
+        };
+        let make_conv = |usage: Vec<RawUsageRecord>| RawConversation {
+            id: "claude:u1".to_string(),
+            title: "用量测试".to_string(),
+            workspace_path: "/test/ws".to_string(),
+            source_app: "claude".to_string(),
+            created_at: Some("2026-09-20T10:00:00+00:00".to_string()),
+            updated_at: Some("2026-09-20T10:00:00+00:00".to_string()),
+            parse_status: "ok".to_string(),
+            source_types: vec!["claude".to_string()],
+            messages: vec![RawMessage {
+                step_index: 0,
+                role: "user".to_string(),
+                message_type: "text".to_string(),
+                content: "hi".to_string(),
+                thinking: None,
+                created_at: None,
+                model_name: None,
+                tool_name: None,
+                tool_args: None,
+                duration_ms: None,
+                token_count: None,
+                credit: None,
+                images: None,
+            }],
+            artifacts: vec![],
+            usage_records: usage,
+        };
+
+        save_conversation_tx(&conn, &make_conv(vec![make_usage("a", 100), make_usage("b", 200)]))
+            .unwrap();
+        // 第二次解析：a 的用量更新、b 消失、c 新增——usage 变化必须触发重写（hash 已纳入）
+        save_conversation_tx(&conn, &make_conv(vec![make_usage("a", 150), make_usage("c", 300)]))
+            .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT identity, input_tokens FROM usage_records WHERE conversation_id = ? ORDER BY identity")
+            .unwrap();
+        let rows: Vec<(String, i64)> = stmt
+            .query_map(params!["claude:u1"], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ("a".to_string(), 150));
+        assert_eq!(rows[1], ("c".to_string(), 300));
+    }
+
+    /// 旧版行 content_hash 为空时，时间戳/条数全同也不能早退：
+    /// 否则带 usage 的解析永远写不进空 hash 行（v0.3.14 前的存量行曾因此自锁）
+    #[test]
+    fn test_empty_hash_row_with_usage_must_rewrite() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_schema(&conn).unwrap();
+
+        let usage = RawUsageRecord {
+            identity: "r1".to_string(),
+            agent: "antigravity".to_string(),
+            model: Some("gemini-3.7-flash".to_string()),
+            input_tokens: Some(100),
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            output_tokens: Some(10),
+            reasoning_tokens: None,
+            credit: None,
+            occurred_at: Some("2026-08-17T00:00:00Z".to_string()),
+            is_partial: true,
+        };
+        let make_conv = |with_usage: bool| RawConversation {
+            id: "ag:x1".to_string(),
+            title: "空指纹回归".to_string(),
+            workspace_path: "/test/ws".to_string(),
+            source_app: "antigravity".to_string(),
+            created_at: Some("2026-08-17T00:00:00+00:00".to_string()),
+            updated_at: Some("2026-08-17T00:00:00+00:00".to_string()),
+            parse_status: "ok".to_string(),
+            source_types: vec!["antigravity".to_string()],
+            messages: vec![RawMessage {
+                step_index: 0,
+                role: "user".to_string(),
+                message_type: "text".to_string(),
+                content: "hi".to_string(),
+                thinking: None,
+                created_at: None,
+                model_name: None,
+                tool_name: None,
+                tool_args: None,
+                duration_ms: None,
+                token_count: None,
+                credit: None,
+                images: None,
+            }],
+            artifacts: vec![],
+            usage_records: if with_usage { vec![usage.clone()] } else { vec![] },
+        };
+
+        // 1. 模拟旧版保存：先落一条无 usage 的行，再把指纹抹成空（等价于加列前的存量行）
+        save_conversation_tx(&conn, &make_conv(false)).unwrap();
+        conn.execute("UPDATE conversations SET content_hash = '' WHERE id = 'ag:x1'", [])
+            .unwrap();
+
+        // 2. 同时间戳同条数、但这次带 usage：不得早退，usage 必须落库
+        //    （返回值语义是 is_new，存量行重写也返回 false，故只断言落库结果）
+        save_conversation_tx(&conn, &make_conv(true)).unwrap();
+        let (cnt, hash): (i64, String) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM usage_records WHERE conversation_id = 'ag:x1'), content_hash FROM conversations WHERE id = 'ag:x1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(cnt, 1, "usage 必须已落库");
+        assert!(!hash.is_empty(), "重写后指纹必须写回");
+
+        // 3. 指纹接管后：内容相同再次保存应早退——用哨兵 title 验证未被重写
+        conn.execute(
+            "UPDATE conversations SET title = 'sentinel' WHERE id = 'ag:x1'",
+            [],
+        )
+        .unwrap();
+        save_conversation_tx(&conn, &make_conv(true)).unwrap();
+        let (title, cnt): (String, i64) = conn
+            .query_row(
+                "SELECT title, (SELECT COUNT(*) FROM usage_records WHERE conversation_id = 'ag:x1') FROM conversations WHERE id = 'ag:x1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "sentinel", "指纹相同应早退，不重写");
+        assert_eq!(cnt, 1);
     }
 
     #[test]

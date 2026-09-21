@@ -39,6 +39,7 @@ export function App() {
   const [isPromptLibraryView, setIsPromptLibraryView] = useState(false);
   const [isServicesView, setIsServicesView] = useState(false);
   const [isGitBoardView, setIsGitBoardView] = useState(false);
+  const [isUsageStatsView, setIsUsageStatsView] = useState(false);
   const [promptLibraryCount, setPromptLibraryCount] = useState(0);
   const [selectedWorkspace, setSelectedWorkspace] = useState('');
   const [selectedConversationId, setSelectedConversationId] = useState('');
@@ -60,6 +61,7 @@ export function App() {
     setIsPromptLibraryView(false);
     setIsServicesView(false);
     setIsGitBoardView(false);
+    setIsUsageStatsView(false);
   };
 
   // 顶栏 Git 状态胶囊：点击进入 / 再次点击退出 Git 看板（全局）
@@ -73,6 +75,7 @@ export function App() {
     setIsStarredView(false);
     setIsPromptLibraryView(false);
     setIsServicesView(false);
+    setIsUsageStatsView(false);
     setIsGitBoardView(true);
   };
 
@@ -82,6 +85,7 @@ export function App() {
     setIsStarredView(false);
     setIsPromptLibraryView(false);
     setIsServicesView(false);
+    setIsUsageStatsView(false);
     if (isGitBoardView) {
       setIsGitBoardView(false);
     } else {
@@ -320,6 +324,7 @@ export function App() {
     setIsPromptLibraryView(false);
     setIsServicesView(false);
     setIsGitBoardView(false);
+    setIsUsageStatsView(false);
   };
 
   return (
@@ -440,12 +445,14 @@ export function App() {
           isPromptLibraryView={isPromptLibraryView}
           isServicesView={isServicesView}
           isGitBoardView={isGitBoardView}
+          isUsageStatsView={isUsageStatsView}
           promptLibraryCount={promptLibraryCount}
           onSelectWorkspace={(ws) => {
             setSelectedWorkspace(ws);
             setIsStarredView(false);
             setIsPromptLibraryView(false);
             setIsServicesView(false);
+            setIsUsageStatsView(false);
             if (isGitBoardView) {
               // Git 看板中切项目：保持 Git 视图，直接看新项目的变更树
               setSelectedConversationId('');
@@ -461,6 +468,7 @@ export function App() {
             setIsPromptLibraryView(false);
             setIsServicesView(false);
             setIsGitBoardView(false);
+            setIsUsageStatsView(false);
           }}
           onSwitchToStarred={() => {
             setSelectedWorkspace('');
@@ -469,6 +477,7 @@ export function App() {
             setIsPromptLibraryView(false);
             setIsServicesView(false);
             setIsGitBoardView(false);
+            setIsUsageStatsView(false);
           }}
           onSwitchToPromptLibrary={() => {
             setSelectedWorkspace('');
@@ -477,6 +486,7 @@ export function App() {
             setIsPromptLibraryView(true);
             setIsServicesView(false);
             setIsGitBoardView(false);
+            setIsUsageStatsView(false);
           }}
           onSwitchToServices={() => {
             setSelectedWorkspace('');
@@ -485,6 +495,16 @@ export function App() {
             setIsPromptLibraryView(false);
             setIsServicesView(true);
             setIsGitBoardView(false);
+            setIsUsageStatsView(false);
+          }}
+          onSwitchToUsageStats={() => {
+            setSelectedWorkspace('');
+            setSelectedConversationId('');
+            setIsStarredView(false);
+            setIsPromptLibraryView(false);
+            setIsServicesView(false);
+            setIsGitBoardView(false);
+            setIsUsageStatsView(true);
           }}
           onOpenGitBoard={handleOpenGitBoardForProject}
           onPromptLibraryCountChange={setPromptLibraryCount}

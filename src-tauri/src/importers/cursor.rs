@@ -335,6 +335,7 @@ fn process_cursor_composer(
         source_types: vec!["cursor".to_string()],
         messages,
         artifacts: Vec::new(),
+        usage_records: Vec::new(),
     };
 
     match save_conversation_tx(conn, &conv) {

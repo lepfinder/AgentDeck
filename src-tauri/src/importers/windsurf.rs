@@ -334,6 +334,7 @@ fn parse_cascade_file(path: &Path) -> Result<Option<RawConversation>, String> {
         source_types: vec!["windsurf".into()],
         messages,
         artifacts: vec![],
+        usage_records: Vec::new(),
     }))
 }
 

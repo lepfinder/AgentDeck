@@ -18,7 +18,8 @@ pub mod sync;
 use db::{
     clear_conversation_ai_title, clear_workspace_analysis, create_prompt, delete_prompt,
     fetch_conversation_by_id, fetch_conversation_messages, fetch_conversations,
-    fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_analysis_messages,
+    fetch_daily_timeline, fetch_dashboard_stats, fetch_usage_stats,
+    fetch_workspace_analysis_messages,
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, list_prompts_ex,
     merge_workspace, record_prompt_use,
     move_conversation,
@@ -27,7 +28,8 @@ use db::{
     toggle_star_session, update_conversation_ai_title, update_prompt, update_prompt_preview_size,
     AnalysisUserMessage,
     ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState, MessageItem,
-    PromptInput, PromptItem, SearchResultItem, WorkspaceDetailStats, WorkspaceFineBlock,
+    PromptInput, PromptItem, SearchResultItem, UsageStatsPayload, WorkspaceDetailStats,
+    WorkspaceFineBlock,
     WorkspaceModuleBlock, WorkspaceStat, get_conversation_artifacts, get_workspace_artifacts,
     WorkspaceArtifactItem, WorkspaceMergeResult,
     ConversationMoveResult,
@@ -118,6 +120,16 @@ async fn get_daily_timeline(date: String) -> Result<DailyTimelineStats, String> 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_read_connection().map_err(|e| e.to_string())?;
         fetch_daily_timeline(&conn, &date).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_usage_stats(days: Option<i64>) -> Result<UsageStatsPayload, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_usage_stats(&conn, days).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1582,6 +1594,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_dashboard_stats,
             get_daily_timeline,
+            get_usage_stats,
             list_prompts_cmd,
             get_prompt_cmd,
             create_prompt_cmd,
@@ -1617,6 +1630,8 @@ pub fn run() {
             quota_pill::quota_pill_resize,
             quota_pill::quota_pill_show_menu,
             quota_pill::quota_pill_show,
+            quota_pill::quota_pill_layout,
+            quota_pill::quota_pill_set_hover_state,
             git_board::get_git_board,
             git_board::get_git_workspace_entry,
             git_board::get_git_commits,
@@ -1667,6 +1682,7 @@ pub fn run() {
             service_manager::service_open_in_ide,
             service_manager::service_detect_ides,
             service_manager::service_tail_log,
+            service_manager::service_clear_log,
             service_manager::service_pick_folder,
             service_manager::service_scan_project,
             service_manager::service_probe_candidate,

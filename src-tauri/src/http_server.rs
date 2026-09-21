@@ -1,6 +1,7 @@
 use crate::db::{
     allowed_prompt_category_values, create_prompt, delete_prompt, fetch_conversation_messages,
-    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_workspace_detail_stats,
+    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_usage_stats,
+    fetch_workspace_detail_stats,
     fetch_workspaces, get_database_path, get_prompt, get_short_workspace, list_prompts, prompt_category_options,
     merge_workspace, search_global_messages, update_prompt, PromptAgentItem, PromptInput,
     move_conversation,
@@ -521,6 +522,16 @@ fn route_get(
             });
             match fetch_daily_timeline(conn, &date) {
                 Ok(timeline) => send_json(stream, 200, json!(timeline)),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/usage-stats" => {
+            let days = query_params
+                .get("days")
+                .and_then(|d| d.parse::<i64>().ok());
+            match fetch_usage_stats(conn, days) {
+                Ok(stats) => send_json(stream, 200, json!(stats)),
                 Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
             }
         }

@@ -39,9 +39,11 @@ import {
   CheckCircle2,
   FolderInput,
   GitBranch,
+  Coins,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
 import { GitBoardView } from '../gitboard/GitBoardView';
+import { UsageStatsView } from '../usage/UsageStatsView';
 import {
   clearConversationAiTitle,
   renameConversationTitle,
@@ -66,6 +68,7 @@ interface Props {
   isPromptLibraryView: boolean;
   isServicesView: boolean;
   isGitBoardView: boolean;
+  isUsageStatsView: boolean;
   promptLibraryCount: number;
   onSelectWorkspace: (ws: string) => void;
   onSelectConversation: (id: string) => void;
@@ -73,6 +76,7 @@ interface Props {
   onSwitchToStarred: () => void;
   onSwitchToPromptLibrary: () => void;
   onSwitchToServices: () => void;
+  onSwitchToUsageStats: () => void;
   /** 从项目分析页跳到该项目的 Git 看板详情 */
   onOpenGitBoard: (wsPath: string) => void;
   onPromptLibraryCountChange: (count: number) => void;
@@ -88,6 +92,7 @@ export const BrowseView: React.FC<Props> = ({
   isPromptLibraryView,
   isServicesView,
   isGitBoardView,
+  isUsageStatsView,
   promptLibraryCount,
   onSelectWorkspace,
   onSelectConversation,
@@ -95,6 +100,7 @@ export const BrowseView: React.FC<Props> = ({
   onSwitchToStarred,
   onSwitchToPromptLibrary,
   onSwitchToServices,
+  onSwitchToUsageStats,
   onOpenGitBoard,
   onPromptLibraryCountChange,
   stats,
@@ -817,7 +823,7 @@ export const BrowseView: React.FC<Props> = ({
           <button
             onClick={onSwitchToDashboard}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView
+              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && !isUsageStatsView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
                 : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
             }`}
@@ -827,6 +833,20 @@ export const BrowseView: React.FC<Props> = ({
               <span>{t('nav.dashboard')}</span>
             </div>
             <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/15 text-blue-500 rounded font-medium">{t('nav.dashboardBadge')}</span>
+          </button>
+
+          <button
+            onClick={onSwitchToUsageStats}
+            className={`w-full flex items-center px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              isUsageStatsView
+                ? 'bg-cyan-600/15 text-cyan-500 border border-cyan-500/30 shadow-xs font-semibold'
+                : 'theme-text-muted hover:text-cyan-500 hover:theme-bg-card'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Coins className="h-4 w-4" />
+              <span>{t('nav.usage')}</span>
+            </div>
           </button>
 
           <button
@@ -889,7 +909,7 @@ export const BrowseView: React.FC<Props> = ({
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : t('nav.uncategorized');
             const dirtyCnt = wsGitDirty[ws.workspace_path] ?? 0;
-            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && ws.workspace_path === selectedWorkspace;
+            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && !isUsageStatsView && ws.workspace_path === selectedWorkspace;
             return (
               <div
                 key={ws.workspace_path}
@@ -1009,6 +1029,10 @@ export const BrowseView: React.FC<Props> = ({
               onSwitchToDashboard();
             }}
           />
+        </main>
+      ) : isUsageStatsView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <UsageStatsView />
         </main>
       ) : isServicesView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">

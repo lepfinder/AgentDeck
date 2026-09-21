@@ -1,5 +1,6 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -7,7 +8,36 @@ use walkdir::WalkDir;
 
 use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+    RawUsageRecord,
 };
+
+const WORKBUDDY_PARSER_REV: &str = "workbuddy-v2";
+const WORKBUDDY_PARSER_REV_KEY: &str = "agentdeck:workbuddy_parser_rev";
+
+fn workbuddy_parser_rev_stale(conn: &Connection) -> bool {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM sync_state WHERE source_path = ?",
+            params![WORKBUDDY_PARSER_REV_KEY],
+            |r| r.get(0),
+        )
+        .ok();
+    stored.as_deref() != Some(WORKBUDDY_PARSER_REV)
+}
+
+fn mark_workbuddy_synced(conn: &Connection) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        VALUES (?1, ?2, 'workbuddy_parser', 0, 0, ?3)
+        ON CONFLICT(source_path) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            synced_at = excluded.synced_at
+        "#,
+        params![WORKBUDDY_PARSER_REV_KEY, WORKBUDDY_PARSER_REV, now],
+    );
+}
 
 pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     let mut stats = ImporterStats {
@@ -27,6 +57,9 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
     if !wb_dir.is_dir() {
         return stats;
     }
+
+    let force_reparse = workbuddy_parser_rev_stale(conn);
+    let incremental = incremental && !force_reparse;
 
     let files: Vec<_> = WalkDir::new(&wb_dir)
         .into_iter()
@@ -81,6 +114,10 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
+    // 有错误的运行不标记 rev：否则一次不完整的运行会永久消耗强制重导
+    if stats.error_count == 0 {
+        mark_workbuddy_synced(conn);
+    }
     stats
 }
 
@@ -198,6 +235,8 @@ fn parse_workbuddy_file(
     let reader = BufReader::new(file);
 
     let mut messages = Vec::new();
+    let mut usage_records = Vec::new();
+    let mut seen_usage_idents: HashSet<String> = HashSet::new();
     let mut title = String::new();
     let mut workspace_path = String::new();
     let mut created_at = None;
@@ -263,6 +302,58 @@ fn parse_workbuddy_file(
         {
             if !model.trim().is_empty() {
                 last_model_name = Some(model.trim().to_string());
+            }
+        }
+
+        // providerData.usage 是 WorkBuddy 归一化后的单次请求用量
+        if let Some(usage) = val
+            .get("providerData")
+            .and_then(|p| p.get("usage"))
+            .filter(|u| u.get("inputTokens").is_some() || u.get("outputTokens").is_some())
+        {
+            let pd = val.get("providerData").unwrap_or(&Value::Null);
+            let ident = pd
+                .get("messageId")
+                .and_then(|v| v.as_str())
+                .or_else(|| val.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .to_string();
+            if !ident.is_empty() && seen_usage_idents.insert(ident.clone()) {
+                let input = usage.get("inputTokens").and_then(|v| v.as_i64());
+                let output = usage.get("outputTokens").and_then(|v| v.as_i64());
+                // inputTokensDetails 是数组，缓存读可能分散在多个桶里
+                let cached: i64 = usage
+                    .get("inputTokensDetails")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|d| d.get("cached_tokens").and_then(|v| v.as_i64()))
+                            .sum()
+                    })
+                    .unwrap_or(0);
+                let reasoning: Option<i64> = usage
+                    .get("outputTokensDetails")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|d| d.get("reasoning_tokens").and_then(|v| v.as_i64()))
+                            .sum()
+                    });
+                // inputTokens 含缓存命中，扣除后才是新鲜输入
+                let fresh_input = input.map(|i| (i - cached).max(0));
+                usage_records.push(RawUsageRecord {
+                    identity: ident,
+                    agent: "workbuddy".to_string(),
+                    model: last_model_name.clone(),
+                    input_tokens: fresh_input,
+                    cache_read_tokens: if cached > 0 { Some(cached) } else { Some(0) },
+                    cache_write_tokens: None,
+                    output_tokens: output,
+                    reasoning_tokens: reasoning,
+                    credit: None,
+                    occurred_at: ts.clone(),
+                    is_partial: false,
+                });
             }
         }
 
@@ -515,6 +606,7 @@ fn parse_workbuddy_file(
         source_types: vec!["workbuddy".to_string()],
         messages,
         artifacts: Vec::new(),
+        usage_records,
     }))
 }
 
@@ -572,18 +664,68 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_workbuddy_usage_records() {
+        let tmp_path = std::env::temp_dir().join(format!(
+            "test_workbuddy_usage_{}.jsonl",
+            std::process::id()
+        ));
+        let mut tmp = File::create(&tmp_path).unwrap();
+        writeln!(
+            tmp,
+            r#"{{"type":"message","role":"user","timestamp":1786604171145,"content":[{{"type":"input_text","text":"hi"}}]}}"#
+        )
+        .unwrap();
+        writeln!(
+            tmp,
+            r#"{{"id":"rec-1","type":"message","role":"assistant","timestamp":1786604180000,"content":[{{"type":"output_text","text":"ok"}}],"providerData":{{"messageId":"msg-abc","model":"kimi-k3-1","usage":{{"requests":1,"inputTokens":30642,"outputTokens":155,"totalTokens":30797,"inputTokensDetails":[{{"cached_tokens":9472}}],"outputTokensDetails":[{{"reasoning_tokens":42}}]}}}}}}"#
+        )
+        .unwrap();
+        // 同 messageId 重放，只记首次
+        writeln!(
+            tmp,
+            r#"{{"id":"rec-2","type":"message","role":"assistant","timestamp":1786604190000,"content":[{{"type":"output_text","text":"again"}}],"providerData":{{"messageId":"msg-abc","model":"kimi-k3-1","usage":{{"requests":1,"inputTokens":999,"outputTokens":1,"totalTokens":1000}}}}}}"#
+        )
+        .unwrap();
+        drop(tmp);
+
+        let conv = parse_workbuddy_file("workbuddy:usage-test", &tmp_path)
+            .unwrap()
+            .unwrap();
+        let _ = std::fs::remove_file(&tmp_path);
+
+        assert_eq!(conv.usage_records.len(), 1);
+        let u = &conv.usage_records[0];
+        assert_eq!(u.identity, "msg-abc");
+        assert_eq!(u.model.as_deref(), Some("kimi-k3-1"));
+        // 30642 - 9472(缓存读) = 21170 新鲜输入
+        assert_eq!(u.input_tokens, Some(21170));
+        assert_eq!(u.cache_read_tokens, Some(9472));
+        assert_eq!(u.output_tokens, Some(155));
+        assert_eq!(u.reasoning_tokens, Some(42));
+        assert!(u.occurred_at.as_deref().unwrap().starts_with("2026-"));
+    }
+
+    /// 拷贝真实 DB 到临时副本后全量同步；绝不直写真实库，
+    /// 避免与运行中的 dev 应用抢写锁、消耗 parser rev
+    #[test]
     fn test_sync_real_workbuddy_db() {
         let home = match dirs::home_dir() {
             Some(h) => h,
             None => return,
         };
-        let db_path = home.join(".agentdeck/agentdeck.db");
-        if db_path.exists() {
-            let conn = Connection::open(&db_path).unwrap();
-            let stats = sync(&conn, false);
-            eprintln!("WorkBuddy sync stats: {:?}", stats);
-            assert!(stats.error_count == 0, "Errors during sync: {}", stats.error_count);
+        let real = home.join(".agentdeck/agentdeck.db");
+        if !real.is_file() {
+            return;
         }
+        let copy =
+            std::env::temp_dir().join(format!("agentdeck_wb_test_{}.db", std::process::id()));
+        std::fs::copy(&real, &copy).unwrap();
+        let conn = Connection::open(&copy).unwrap();
+        let stats = sync(&conn, false);
+        eprintln!("WorkBuddy sync stats: {:?}", stats);
+        assert!(stats.error_count == 0, "Errors during sync: {}", stats.error_count);
+        drop(conn);
+        let _ = std::fs::remove_file(&copy);
     }
 }
 

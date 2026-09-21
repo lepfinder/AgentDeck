@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use rusqlite::{params, Connection, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -257,6 +257,95 @@ pub struct SearchResultItem {
     pub sender: String,
     pub snippet: String,
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageTotals {
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageAgentRow {
+    pub agent: String,
+    pub label: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageModelRow {
+    pub agent: String,
+    pub model: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageDayRow {
+    pub date: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageProjectRow {
+    pub project: String,
+    pub workspace_path: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSessionRow {
+    pub conversation_id: String,
+    pub session: String,
+    pub project: String,
+    pub requests: i64,
+    pub input_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_tokens: i64,
+    pub credit: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageStatsPayload {
+    pub days: Option<i64>,
+    pub totals: UsageTotals,
+    pub by_agent: Vec<UsageAgentRow>,
+    pub by_model: Vec<UsageModelRow>,
+    pub by_project: Vec<UsageProjectRow>,
+    pub by_session: Vec<UsageSessionRow>,
+    pub by_day: Vec<UsageDayRow>,
+    /// 已接入但源数据不含 token 用量的 agent，如实展示而非静默为零
+    pub agents_without_usage: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -549,6 +638,32 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             credit REAL,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
+
+        -- 用量事实表：一行 = 一次 API 请求的 token/积分消耗。
+        -- 与 messages 平行（同挂 conversation_id），不一一对应：usage 是计费事件，
+        -- Codex/MiMo/Hermes 等来源的 usage 不锚定任何消息。
+        CREATE TABLE IF NOT EXISTS usage_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            agent TEXT NOT NULL DEFAULT '',
+            identity TEXT NOT NULL,
+            model TEXT,
+            input_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER,
+            output_tokens INTEGER,
+            reasoning_tokens INTEGER,
+            credit REAL,
+            occurred_at TEXT,
+            is_partial INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_records_conv_identity
+            ON usage_records (conversation_id, identity);
+
+        CREATE INDEX IF NOT EXISTS idx_usage_records_occurred
+            ON usage_records (occurred_at);
 
         CREATE TABLE IF NOT EXISTS starred_sessions (
             conversation_id TEXT PRIMARY KEY,
@@ -1077,6 +1192,291 @@ fn slots_from_daily(start_30: NaiveDate, counts: &[i64; 30]) -> Vec<DailyBarSlot
             }
         })
         .collect()
+}
+
+/// 用量聚合列：请求数 + 各 token 桶 + 积分（NULL 一律按 0 汇总）
+const USAGE_AGG_COLS: &str = "COUNT(*), \
+     COALESCE(SUM(input_tokens), 0), COALESCE(SUM(cache_read_tokens), 0), \
+     COALESCE(SUM(cache_write_tokens), 0), COALESCE(SUM(output_tokens), 0), \
+     COALESCE(SUM(reasoning_tokens), 0), COALESCE(SUM(credit), 0.0)";
+
+pub fn fetch_usage_stats(conn: &Connection, days: Option<i64>) -> Result<UsageStatsPayload> {
+    // days=0 表示「今天」：本地零点起；>0 为滚动 N 天
+    let effective_days = days.filter(|d| *d >= 0);
+    let cutoff = match effective_days {
+        Some(0) => {
+            let now_local = chrono::Local::now();
+            let elapsed = now_local.time().num_seconds_from_midnight() as i64;
+            Some(
+                (now_local.with_timezone(&Utc) - chrono::Duration::seconds(elapsed)).to_rfc3339(),
+            )
+        }
+        Some(d) => Some((chrono::Utc::now() - chrono::Duration::days(d)).to_rfc3339()),
+        None => None,
+    };
+    let filter = "WHERE (?1 IS NULL OR occurred_at >= ?1)";
+
+    let (requests, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, reasoning_tokens, credit): (
+        i64, i64, i64, i64, i64, i64, f64,
+    ) = conn.query_row(
+        &format!("SELECT {USAGE_AGG_COLS} FROM usage_records {filter}"),
+        params![cutoff],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
+    )?;
+    let totals = UsageTotals {
+        requests,
+        input_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        output_tokens,
+        reasoning_tokens,
+        credit,
+    };
+
+    let mut by_agent: Vec<UsageAgentRow> = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT agent, {USAGE_AGG_COLS} FROM usage_records {filter} GROUP BY agent"
+        ))?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, f64>(7)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (agent, req, inp, cr, cw, out, reason, credit) = row;
+            by_agent.push(UsageAgentRow {
+                label: source_to_label_and_color(&agent).0.to_string(),
+                agent,
+                requests: req,
+                input_tokens: inp,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                output_tokens: out,
+                reasoning_tokens: reason,
+                credit,
+            });
+        }
+    }
+    by_agent.sort_by(|a, b| {
+        let ta = a.input_tokens + a.cache_read_tokens + a.cache_write_tokens + a.output_tokens;
+        let tb = b.input_tokens + b.cache_read_tokens + b.cache_write_tokens + b.output_tokens;
+        tb.cmp(&ta).then(a.agent.cmp(&b.agent))
+    });
+
+    let mut by_model: Vec<UsageModelRow> = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT agent, COALESCE(model, ''), {USAGE_AGG_COLS} \
+             FROM usage_records {filter} GROUP BY agent, COALESCE(model, '')"
+        ))?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, f64>(8)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (agent, model, req, inp, cr, cw, out, reason, credit) = row;
+            by_model.push(UsageModelRow {
+                agent,
+                model,
+                requests: req,
+                input_tokens: inp,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                output_tokens: out,
+                reasoning_tokens: reason,
+                credit,
+            });
+        }
+    }
+    by_model.sort_by(|a, b| {
+        let ta = a.input_tokens + a.cache_read_tokens + a.cache_write_tokens + a.output_tokens;
+        let tb = b.input_tokens + b.cache_read_tokens + b.cache_write_tokens + b.output_tokens;
+        tb.cmp(&ta).then((a.agent.clone(), a.model.clone()).cmp(&(b.agent.clone(), b.model.clone())))
+    });
+
+    // 项目/会话展示名：优先 workspaces 里用户改过的显示名，否则取路径末段
+    let ws_display = |path: &str, display: &str| -> String {
+        let d = display.trim();
+        if !d.is_empty() {
+            return d.to_string();
+        }
+        if path.is_empty() {
+            return "—".to_string();
+        }
+        std::path::Path::new(path)
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string())
+    };
+
+    let mut by_project: Vec<UsageProjectRow> = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT c.workspace_path, COALESCE(w.display_name, ''), {USAGE_AGG_COLS} \
+             FROM usage_records u \
+             JOIN conversations c ON c.id = u.conversation_id \
+             LEFT JOIN workspaces w ON w.workspace_path = c.workspace_path \
+             {filter} AND u.occurred_at IS NOT NULL \
+             GROUP BY c.workspace_path"
+        ))?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, f64>(8)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (path, display, req, inp, cr, cw, out, reason, credit) = row;
+            by_project.push(UsageProjectRow {
+                project: ws_display(&path, &display),
+                workspace_path: path,
+                requests: req,
+                input_tokens: inp,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                output_tokens: out,
+                reasoning_tokens: reason,
+                credit,
+            });
+        }
+    }
+    by_project.sort_by(|a, b| {
+        let ta = a.input_tokens + a.cache_read_tokens + a.cache_write_tokens + a.output_tokens;
+        let tb = b.input_tokens + b.cache_read_tokens + b.cache_write_tokens + b.output_tokens;
+        tb.cmp(&ta).then(a.workspace_path.cmp(&b.workspace_path))
+    });
+    by_project.truncate(20);
+
+    let mut by_session: Vec<UsageSessionRow> = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT u.conversation_id, COALESCE(c.title, ''), c.workspace_path, COALESCE(w.display_name, ''), {USAGE_AGG_COLS} \
+             FROM usage_records u \
+             JOIN conversations c ON c.id = u.conversation_id \
+             LEFT JOIN workspaces w ON w.workspace_path = c.workspace_path \
+             {filter} AND u.occurred_at IS NOT NULL \
+             GROUP BY u.conversation_id"
+        ))?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, i64>(8)?,
+                r.get::<_, i64>(9)?,
+                r.get::<_, f64>(10)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (cid, title, path, display, req, inp, cr, cw, out, reason, credit) = row;
+            by_session.push(UsageSessionRow {
+                conversation_id: cid,
+                session: title,
+                project: ws_display(&path, &display),
+                requests: req,
+                input_tokens: inp,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                output_tokens: out,
+                reasoning_tokens: reason,
+                credit,
+            });
+        }
+    }
+    by_session.sort_by(|a, b| {
+        let ta = a.input_tokens + a.cache_read_tokens + a.cache_write_tokens + a.output_tokens;
+        let tb = b.input_tokens + b.cache_read_tokens + b.cache_write_tokens + b.output_tokens;
+        tb.cmp(&ta).then(a.conversation_id.cmp(&b.conversation_id))
+    });
+    by_session.truncate(20);
+
+    let mut by_day: Vec<UsageDayRow> = Vec::new();
+    {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT date(occurred_at, 'localtime'), {USAGE_AGG_COLS} \
+             FROM usage_records {filter} AND occurred_at IS NOT NULL \
+             GROUP BY date(occurred_at, 'localtime') ORDER BY date(occurred_at, 'localtime') DESC"
+        ))?;
+        let rows = stmt.query_map(params![cutoff], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, f64>(7)?,
+            ))
+        })?;
+        for row in rows.flatten() {
+            let (date, req, inp, cr, cw, out, reason, credit) = row;
+            by_day.push(UsageDayRow {
+                date,
+                requests: req,
+                input_tokens: inp,
+                cache_read_tokens: cr,
+                cache_write_tokens: cw,
+                output_tokens: out,
+                reasoning_tokens: reason,
+                credit,
+            });
+        }
+    }
+
+    let mut agents_without_usage = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT source_app FROM conversations \
+             WHERE source_app IS NOT NULL AND source_app != '' \
+               AND source_app NOT IN (SELECT DISTINCT agent FROM usage_records) \
+             ORDER BY source_app",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        for app in rows.flatten() {
+            agents_without_usage.push(source_to_label_and_color(&app).0.to_string());
+        }
+    }
+
+    Ok(UsageStatsPayload {
+        days: effective_days,
+        totals,
+        by_agent,
+        by_model,
+        by_project,
+        by_session,
+        by_day,
+        agents_without_usage,
+    })
 }
 
 pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
@@ -4085,4 +4485,52 @@ pub fn get_workspace_artifacts(
         list.push(r?);
     }
     Ok(list)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn insert_usage(conn: &Connection, cid: &str, identity: &str, occurred: &str) {
+        conn.execute("INSERT OR IGNORE INTO conversations (id) VALUES (?1)", params![cid])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO usage_records (conversation_id, agent, identity, input_tokens, occurred_at) \
+             VALUES (?1, 'claude', ?2, 100, ?3)",
+            params![cid, identity, occurred],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_usage_stats_days_zero_means_today() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        let now = chrono::Local::now();
+        let elapsed = now.time().num_seconds_from_midnight() as i64;
+        let now_utc = now.with_timezone(&Utc);
+        let fmt = |t: chrono::DateTime<Utc>| t.format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
+        let today = fmt(now_utc);
+        // 取「本地零点之前、滚动 24h 窗口之内」两窗口交集的中点，任何时刻运行断言都成立
+        let old = fmt(now_utc - chrono::Duration::seconds((86_400 + elapsed) / 2));
+
+        insert_usage(&conn, "c:today", "u1", &today);
+        insert_usage(&conn, "c:old", "u2", &old);
+
+        // days=0：只统计本地今天零点起的记录
+        let stats = fetch_usage_stats(&conn, Some(0)).unwrap();
+        assert_eq!(stats.totals.requests, 1);
+        assert_eq!(stats.days.unwrap_or(-1), 0);
+
+        // days=1：滚动 24 小时，两条都在窗口内
+        let stats = fetch_usage_stats(&conn, Some(1)).unwrap();
+        assert_eq!(stats.totals.requests, 2);
+
+        // 不传：全量
+        let stats = fetch_usage_stats(&conn, None).unwrap();
+        assert_eq!(stats.totals.requests, 2);
+        assert!(stats.days.is_none());
+    }
 }

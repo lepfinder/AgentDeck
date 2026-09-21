@@ -5,7 +5,36 @@ use std::path::Path;
 
 use super::{
     needs_sync, record_sync_state, save_conversation_tx, ImporterStats, RawConversation, RawMessage,
+    RawUsageRecord,
 };
+
+const MIMO_PARSER_REV: &str = "mimo-v2";
+const MIMO_PARSER_REV_KEY: &str = "agentdeck:mimo_parser_rev";
+
+fn mimo_parser_rev_stale(conn: &Connection) -> bool {
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT conversation_id FROM sync_state WHERE source_path = ?",
+            params![MIMO_PARSER_REV_KEY],
+            |r| r.get(0),
+        )
+        .ok();
+    stored.as_deref() != Some(MIMO_PARSER_REV)
+}
+
+fn mark_mimo_synced(conn: &Connection) {
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        r#"
+        INSERT INTO sync_state (source_path, conversation_id, source_type, file_mtime, file_size, synced_at)
+        VALUES (?1, ?2, 'mimo_parser', 0, 0, ?3)
+        ON CONFLICT(source_path) DO UPDATE SET
+            conversation_id = excluded.conversation_id,
+            synced_at = excluded.synced_at
+        "#,
+        params![MIMO_PARSER_REV_KEY, MIMO_PARSER_REV, now],
+    );
+}
 
 /// 毫秒 epoch → RFC3339
 fn ms_to_rfc3339(ms: i64) -> Option<String> {
@@ -70,12 +99,14 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         return stats;
     }
 
-    if incremental && !needs_sync(conn, &db_path, true) {
+    let force_reparse = mimo_parser_rev_stale(conn);
+
+    if incremental && !force_reparse && !needs_sync(conn, &db_path, true) {
         stats.skipped_count += 1;
         return stats;
     }
 
-    match sync_mimocode_db(conn, &db_path) {
+    match sync_mimocode_db(conn, &db_path, force_reparse) {
         Ok((n, u, s)) => {
             record_sync_state(conn, &db_path, "mimo:db", "mimocode_db");
             stats.new_count += n;
@@ -88,12 +119,17 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         }
     }
 
+    // 有错误的运行不标记 rev：否则一次不完整的运行会永久消耗强制重导
+    if stats.error_count == 0 {
+        mark_mimo_synced(conn);
+    }
     stats
 }
 
 fn sync_mimocode_db(
     conn: &Connection,
     db_path: &Path,
+    force: bool,
 ) -> Result<(u32, u32, u32), Box<dyn std::error::Error>> {
     let mimo = Connection::open_with_flags(
         db_path,
@@ -103,18 +139,21 @@ fn sync_mimocode_db(
     let mut skipped = 0u32;
 
     let mut existing_map: HashMap<String, (Option<String>, i64)> = HashMap::new();
-    if let Ok(mut exist_stmt) =
-        conn.prepare("SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'mimo:%'")
-    {
-        if let Ok(rows) = exist_stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                r.get::<_, i64>(2).unwrap_or(0),
-            ))
-        }) {
-            for row in rows.flatten() {
-                existing_map.insert(row.0, (row.1, row.2));
+    // force 全量重解析时不读跳表，让 usage 变化也能触发重写
+    if !force {
+        if let Ok(mut exist_stmt) =
+            conn.prepare("SELECT id, updated_at, message_count FROM conversations WHERE id LIKE 'mimo:%'")
+        {
+            if let Ok(rows) = exist_stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2).unwrap_or(0),
+                ))
+            }) {
+                for row in rows.flatten() {
+                    existing_map.insert(row.0, (row.1, row.2));
+                }
             }
         }
     }
@@ -154,7 +193,7 @@ fn sync_mimocode_db(
             }
         }
 
-        let messages = match load_messages(&mimo, &raw_id) {
+        let (messages, usage_records) = match load_messages(&mimo, &raw_id) {
             Ok(m) => m,
             Err(e) => {
                 eprintln!("[MiMo Importer] 读取消息失败 {}: {}", cid, e);
@@ -189,6 +228,7 @@ fn sync_mimocode_db(
             source_types: vec!["mimo".to_string()],
             messages,
             artifacts: Vec::new(),
+            usage_records,
         };
 
         match save_conversation_tx(conn, &conv) {
@@ -208,8 +248,12 @@ fn sync_mimocode_db(
     Ok((new_cnt, updated_cnt, skipped))
 }
 
-/// 只导入主对话（agent_id = main），子 Agent 轨迹不进入时间线
-fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>, rusqlite::Error> {
+/// 只导入主对话（agent_id = main），子 Agent 轨迹不进入时间线；
+/// step-finish part 的 tokens 是单次请求用量，独立成 usage_records
+fn load_messages(
+    mimo: &Connection,
+    session_id: &str,
+) -> Result<(Vec<RawMessage>, Vec<RawUsageRecord>), rusqlite::Error> {
     let mut msg_rows = Vec::new();
     {
         let mut stmt = mimo.prepare(
@@ -232,9 +276,11 @@ fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>,
     }
 
     let mut parts_by_msg: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut usage_records: Vec<RawUsageRecord> = Vec::new();
+    let mut usage_msg_of: HashMap<String, String> = HashMap::new();
     {
         let mut stmt = mimo.prepare(
-            "SELECT message_id, data
+            "SELECT id, message_id, time_created, data
              FROM part
              WHERE session_id = ?1
              ORDER BY time_created ASC, id ASC",
@@ -242,28 +288,40 @@ fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>,
         let rows = stmt.query_map(params![session_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
-                r.get::<_, String>(1).unwrap_or_else(|_| "{}".into()),
+                r.get::<_, String>(1).unwrap_or_default(),
+                r.get::<_, i64>(2).unwrap_or(0),
+                r.get::<_, String>(3).unwrap_or_else(|_| "{}".into()),
             ))
         })?;
-        for (mid, raw) in rows.flatten() {
-            if let Ok(v) = serde_json::from_str::<Value>(&raw) {
-                parts_by_msg.entry(mid).or_default().push(v);
+        for (part_id, mid, part_time, raw) in rows.flatten() {
+            let Ok(v) = serde_json::from_str::<Value>(&raw) else {
+                continue;
+            };
+            if json_str(&v, "type").as_deref() == Some("step-finish") {
+                if let Some(record) = usage_from_step_finish(&v, &part_id, part_time) {
+                    usage_records.push(record);
+                    usage_msg_of.insert(part_id, mid);
+                    continue;
+                }
             }
+            parts_by_msg.entry(mid).or_default().push(v);
         }
     }
 
     let mut out = Vec::new();
     let mut step_idx = 0i64;
+    let mut msg_models: HashMap<String, Option<String>> = HashMap::new();
 
     for (msg_id, agent_id, time_created, raw_data) in msg_rows {
-        if agent_id != "main" {
-            continue;
-        }
         let data: Value = serde_json::from_str(&raw_data).unwrap_or(Value::Null);
         let role = json_str(&data, "role").unwrap_or_else(|| "assistant".to_string());
         let model = json_str(&data, "modelID")
             .or_else(|| data.get("model").and_then(|m| json_str(m, "modelID")))
             .or_else(|| json_str(&data, "providerID"));
+        msg_models.insert(msg_id.clone(), model.clone());
+        if agent_id != "main" {
+            continue;
+        }
         let created_at = ms_to_rfc3339(time_created);
 
         let parts = parts_by_msg.get(&msg_id).cloned().unwrap_or_default();
@@ -357,7 +415,60 @@ fn load_messages(mimo: &Connection, session_id: &str) -> Result<Vec<RawMessage>,
         }
     }
 
-    Ok(out)
+    // 用所属消息的模型名补齐 usage_records
+    for u in &mut usage_records {
+        if u.model.is_none() {
+            if let Some(mid) = usage_msg_of.get(&u.identity) {
+                if let Some(Some(m)) = msg_models.get(mid) {
+                    u.model = Some(m.clone());
+                }
+            }
+        }
+    }
+
+    Ok((out, usage_records))
+}
+
+/// step-finish part：tokens 五桶相互独立（total = input+output+reasoning+cache 读写之和），
+/// input 已是新鲜值不含缓存，reasoning 不含在 output 里
+fn usage_from_step_finish(v: &Value, part_id: &str, part_time_ms: i64) -> Option<RawUsageRecord> {
+    let tokens = v.get("tokens")?;
+    let input = tokens.get("input").and_then(|x| x.as_i64());
+    let output = tokens.get("output").and_then(|x| x.as_i64());
+    let reasoning = tokens.get("reasoning").and_then(|x| x.as_i64());
+    let cache_read = tokens
+        .get("cache")
+        .and_then(|c| c.get("read"))
+        .and_then(|x| x.as_i64());
+    let cache_write = tokens
+        .get("cache")
+        .and_then(|c| c.get("write"))
+        .and_then(|x| x.as_i64());
+    if input.is_none()
+        && output.is_none()
+        && reasoning.is_none()
+        && cache_read.is_none()
+        && cache_write.is_none()
+    {
+        return None;
+    }
+    let credit = v
+        .get("cost")
+        .and_then(|x| x.as_f64())
+        .filter(|c| *c > 0.0);
+    Some(RawUsageRecord {
+        identity: part_id.to_string(),
+        agent: "mimo".to_string(),
+        model: None,
+        input_tokens: input,
+        cache_read_tokens: cache_read,
+        cache_write_tokens: cache_write,
+        output_tokens: output,
+        reasoning_tokens: reasoning,
+        credit,
+        occurred_at: ms_to_rfc3339(part_time_ms),
+        is_partial: false,
+    })
 }
 
 #[cfg(test)]
@@ -382,6 +493,37 @@ mod tests {
         assert!(args.contains("completed"));
         let content = tool_content_from_part(&v);
         assert_eq!(content, "a\nb");
+    }
+
+    #[test]
+    fn test_usage_from_step_finish() {
+        // 实测样本：total = input + output + reasoning + cache.read + cache.write
+        let v: Value = serde_json::from_str(
+            r#"{"reason":"stop","type":"step-finish","tokens":{"total":27052,"input":24937,"output":11,"reasoning":56,"cache":{"write":0,"read":2048}},"cost":0}"#,
+        )
+        .unwrap();
+        let u = usage_from_step_finish(&v, "part-1", 1789346651313).unwrap();
+        assert_eq!(u.identity, "part-1");
+        assert_eq!(u.input_tokens, Some(24937));
+        assert_eq!(u.output_tokens, Some(11));
+        assert_eq!(u.reasoning_tokens, Some(56));
+        assert_eq!(u.cache_read_tokens, Some(2048));
+        assert_eq!(u.cache_write_tokens, Some(0));
+        assert_eq!(u.credit, None);
+        assert!(u.occurred_at.as_deref().unwrap().starts_with("2026-"));
+
+        // cost > 0 时记录
+        let v2: Value = serde_json::from_str(
+            r#"{"type":"step-finish","tokens":{"total":100,"input":90,"output":10},"cost":0.02}"#,
+        )
+        .unwrap();
+        let u2 = usage_from_step_finish(&v2, "part-2", 1789346651313).unwrap();
+        assert_eq!(u2.credit, Some(0.02));
+        assert_eq!(u2.cache_read_tokens, None);
+
+        // 无 tokens 不产出
+        let v3: Value = serde_json::from_str(r#"{"type":"step-finish","reason":"stop"}"#).unwrap();
+        assert!(usage_from_step_finish(&v3, "part-3", 0).is_none());
     }
 
     /// 对本机真实 mimocode.db 做一次端到端试跑（默认跳过）
