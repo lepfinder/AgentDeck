@@ -1,4 +1,4 @@
-# AgentDeck REST API 接口规范与集成文档 (v0.3.13)
+# AgentDeck REST API 接口规范与集成文档 (v0.3.18)
 
 > **鉴权说明 (Authentication)**: 
 > 当前版本 API **无需 Token 校验 (No Token Required)**。
@@ -24,7 +24,7 @@
     "ok": true,
     "status": "ok",
     "app": "AgentDeck",
-    "version": "0.3.13",
+    "version": "0.3.18",
     "cursor_available": true,
     "ai_available": true,
     "stats": {
@@ -354,11 +354,12 @@
 #### 日志尾部
 - **请求方法**: `GET /api/services/{projectId}/{serviceId}/logs?lines=80`
 
-#### 启动 / 停止 / 重启 / 打开
+#### 启动 / 停止 / 重启 / 打开 / 清空日志
 - `POST /api/services/{projectId}/{serviceId}/start` → **202**
 - `POST /api/services/{projectId}/{serviceId}/stop` （可选 body `{ "force": true }`）→ **202**
 - `POST /api/services/{projectId}/{serviceId}/restart` → **202**
 - `POST /api/services/{projectId}/{serviceId}/open` → 用系统浏览器打开 `openUrl`
+- `POST /api/services/{projectId}/{serviceId}/clear-log` → 清空磁盘日志文件（服务运行中也可安全清空）
 
 #### 注册 / 更新服务
 - **请求方法**: `POST /api/services`

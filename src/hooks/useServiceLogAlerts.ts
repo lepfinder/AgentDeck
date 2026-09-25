@@ -1,16 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { analyzeServiceLogErrors } from '../utils/formatServiceLog';
-import {
-  addIgnoredSignatures,
-  clearIgnoredSignatures,
-  getIgnoredSignatures,
-} from '../lib/serviceLogIgnoreStore';
 import type { ServiceStatus } from './useLocalServices';
 
 export interface ServiceLogAlert {
-  count: number;
   latestAtMs: number | null;
-  latestLine: string | null;
 }
 
 function isWatchable(svc: ServiceStatus): boolean {
@@ -24,21 +17,16 @@ function isWatchable(svc: ServiceStatus): boolean {
 }
 
 /**
- * Poll live services' logs, surface error counts + latest error time for the nav tree.
- * Ignore snapshots persist in localStorage (+ memory) across page switches.
+ * Poll live services' logs, surface latest error time for the nav tree icon.
  */
 export function useServiceLogAlerts(
   services: ServiceStatus[],
   tailLog: (id: string, lines?: number) => Promise<string>,
 ) {
   const [alerts, setAlerts] = useState<Record<string, ServiceLogAlert>>({});
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [ignoreEpoch, setIgnoreEpoch] = useState(0);
   const servicesRef = useRef(services);
   servicesRef.current = services;
-  // Re-entrancy guard: the 4s poll and ignore-triggered rescans can overlap.
-  // While a scan is in flight, later calls are coalesced into one trailing rescan
-  // (so an ignore applied mid-scan still takes effect immediately after).
+  // Re-entrancy guard: overlapping polls coalesce into one trailing rescan.
   const scanningRef = useRef(false);
   const rescanNeededRef = useRef(false);
 
@@ -59,21 +47,11 @@ export function useServiceLogAlerts(
         list.map(async (svc) => {
           try {
             const raw = await tailLog(svc.id, 200);
-            const ignored = getIgnoredSignatures(svc.id);
-            const { errorIndices, latestAtMs, latestLine } = analyzeServiceLogErrors(raw, {
-              ignoredSignatures: ignored.size > 0 ? ignored : undefined,
-            });
+            const { errorIndices, latestAtMs } = analyzeServiceLogErrors(raw);
             if (errorIndices.length === 0) {
               return [svc.id, null] as const;
             }
-            return [
-              svc.id,
-              {
-                count: errorIndices.length,
-                latestAtMs,
-                latestLine,
-              } satisfies ServiceLogAlert,
-            ] as const;
+            return [svc.id, { latestAtMs } satisfies ServiceLogAlert] as const;
           } catch {
             return [svc.id, null] as const;
           }
@@ -97,11 +75,7 @@ export function useServiceLogAlerts(
   useEffect(() => {
     void scan();
     const poll = window.setInterval(() => void scan(), 4000);
-    const tick = window.setInterval(() => setNowMs(Date.now()), 15000);
-    return () => {
-      window.clearInterval(poll);
-      window.clearInterval(tick);
-    };
+    return () => window.clearInterval(poll);
   }, [scan]);
 
   useEffect(() => {
@@ -117,44 +91,5 @@ export function useServiceLogAlerts(
     });
   }, [services]);
 
-  const ignoreServiceErrors = useCallback(
-    (serviceId: string, signatures: string[]) => {
-      addIgnoredSignatures(serviceId, signatures);
-      setIgnoreEpoch((n) => n + 1);
-      setAlerts((prev) => {
-        if (!prev[serviceId]) return prev;
-        const next = { ...prev };
-        delete next[serviceId];
-        return next;
-      });
-      void scan();
-    },
-    [scan],
-  );
-
-  const clearIgnored = useCallback(
-    (serviceId: string) => {
-      clearIgnoredSignatures(serviceId);
-      setIgnoreEpoch((n) => n + 1);
-      void scan();
-    },
-    [scan],
-  );
-
-  const ignoredByServiceId = useCallback(
-    (serviceId: string) => new Set(getIgnoredSignatures(serviceId)),
-    [ignoreEpoch],
-  );
-
-  const alertById = useMemo(() => alerts, [alerts]);
-
-  return {
-    alerts: alertById,
-    nowMs,
-    ignoreEpoch,
-    ignoreServiceErrors,
-    clearIgnored,
-    ignoredByServiceId,
-    rescan: scan,
-  };
+  return { alerts };
 }

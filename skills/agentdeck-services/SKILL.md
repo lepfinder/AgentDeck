@@ -64,6 +64,7 @@ Base：`http://127.0.0.1:8788`
 | 停止 | POST | `/api/services/{projectId}/{serviceId}/stop` |
 | 重启 | POST | `/api/services/{projectId}/{serviceId}/restart` |
 | 打开 URL | POST | `/api/services/{projectId}/{serviceId}/open` |
+| 清空日志 | POST | `/api/services/{projectId}/{serviceId}/clear-log` |
 | 注册/更新 | POST | `/api/services` body = registration payload |
 | 重命名项目 | PATCH | `/api/services/projects/{projectId}` body `{"name":"..."}` |
 | 重命名服务 | PATCH | `/api/services/{projectId}/{serviceId}` body `{"name":"..."}` |

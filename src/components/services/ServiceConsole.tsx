@@ -1,22 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  EyeOff,
-  Loader2,
-  RefreshCw,
-} from 'lucide-react';
-import {
-  errorSignature,
-  findErrorLineIndices,
-  formatErrorAgo,
-  formatServiceLog,
-  parseLogLineTimestamp,
-  sliceLogContext,
-} from '../../utils/formatServiceLog';
+import { ChevronDown, Eraser, Loader2, RefreshCw } from 'lucide-react';
+import { findErrorLineIndices, formatServiceLog } from '../../utils/formatServiceLog';
 import { cn } from '../../lib/cn';
 
 interface ServiceConsoleProps {
@@ -24,10 +8,7 @@ interface ServiceConsoleProps {
   logFile?: string;
   live?: boolean;
   onFetchLog: (id: string, lines: number) => Promise<string>;
-  /** Persisted ignore set from parent (localStorage-backed). */
-  ignoredSignatures?: ReadonlySet<string>;
-  ignoreEpoch?: number;
-  onIgnoreErrors?: (signatures: string[]) => void;
+  onClearLog?: (id: string) => Promise<unknown>;
 }
 
 export function ServiceConsole({
@@ -35,31 +16,16 @@ export function ServiceConsole({
   logFile,
   live = false,
   onFetchLog,
-  ignoredSignatures,
-  ignoreEpoch = 0,
-  onIgnoreErrors,
+  onClearLog,
 }: ServiceConsoleProps) {
   const [raw, setRaw] = useState('');
   const [loading, setLoading] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [hideProgress, setHideProgress] = useState(true);
   const [stickToBottom, setStickToBottom] = useState(true);
-  const [errorCursor, setErrorCursor] = useState(-1);
-  const [copiedHint, setCopiedHint] = useState<string | null>(null);
-  const [newErrorFlash, setNewErrorFlash] = useState(false);
-  const [ignoredHint, setIgnoredHint] = useState(false);
-  const [ignoredSigs, setIgnoredSigs] = useState<Set<string>>(() => new Set());
-  const [nowMs, setNowMs] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
-  const lineRefs = useRef<Map<number, HTMLTableRowElement>>(new Map());
-  const prevActiveCountRef = useRef(0);
-  const jumpRequestRef = useRef(false);
   /** 非跟滚时记录用户滚动位置，实时刷新后恢复，避免被拉回底部 */
   const lastScrollTopRef = useRef(0);
-
-  // Hydrate / refresh from persisted parent store (survives page switch).
-  useEffect(() => {
-    setIgnoredSigs(new Set(ignoredSignatures ?? []));
-  }, [serviceId, ignoreEpoch]); // ignoredSignatures content tracked via ignoreEpoch
 
   const load = useCallback(async () => {
     if (!serviceId) return;
@@ -75,16 +41,8 @@ export function ServiceConsole({
   useEffect(() => {
     setRaw('');
     setStickToBottom(true);
-    setErrorCursor(-1);
-    prevActiveCountRef.current = 0;
-    jumpRequestRef.current = false;
     lastScrollTopRef.current = 0;
-    setNewErrorFlash(false);
-    setIgnoredHint(false);
-    setIgnoredSigs(new Set(ignoredSignatures ?? []));
     if (serviceId) void load();
-    // only reset view when switching service; ignore set comes from effect above
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: service switch reset
   }, [serviceId, load]);
 
   useEffect(() => {
@@ -97,76 +55,12 @@ export function ServiceConsole({
     () => formatServiceLog(raw, { hideProgress, maxLines: 300 }),
     [raw, hideProgress],
   );
-  const allErrorIndices = useMemo(() => findErrorLineIndices(lines), [lines]);
-  const errorIndices = useMemo(
-    () => allErrorIndices.filter((idx) => !ignoredSigs.has(errorSignature(lines[idx] ?? ''))),
-    [allErrorIndices, ignoredSigs, lines],
-  );
-  const errorSet = useMemo(() => new Set(errorIndices), [errorIndices]);
-  const ignoredErrorSet = useMemo(
-    () =>
-      new Set(
-        allErrorIndices.filter((idx) => ignoredSigs.has(errorSignature(lines[idx] ?? ''))),
-      ),
-    [allErrorIndices, ignoredSigs, lines],
-  );
-  const errorCount = errorIndices.length;
-  const activeLineIdx =
-    errorCursor >= 0 && errorCursor < errorIndices.length
-      ? errorIndices[errorCursor]
-      : -1;
-  const latestErrorAtMs = useMemo(() => {
-    let best: number | null = null;
-    for (const idx of errorIndices) {
-      const at = parseLogLineTimestamp(lines[idx] ?? '');
-      if (at != null && (best == null || at > best)) best = at;
-    }
-    return best;
-  }, [errorIndices, lines]);
-
-  useEffect(() => {
-    if (errorCount === 0) return;
-    const t = window.setInterval(() => setNowMs(Date.now()), 15000);
-    return () => window.clearInterval(t);
-  }, [errorCount]);
-
-  useEffect(() => {
-    if (errorCount === 0) {
-      setErrorCursor(-1);
-      prevActiveCountRef.current = 0;
-      return;
-    }
-
-    const prev = prevActiveCountRef.current;
-    if (errorCount > prev) {
-      setErrorCursor(errorCount - 1);
-      jumpRequestRef.current = true;
-      setStickToBottom(false);
-      setNewErrorFlash(true);
-      setIgnoredHint(false);
-      const t = window.setTimeout(() => setNewErrorFlash(false), 2500);
-      prevActiveCountRef.current = errorCount;
-      return () => window.clearTimeout(t);
-    }
-
-    setErrorCursor((c) => (c < 0 || c >= errorCount ? errorCount - 1 : c));
-    prevActiveCountRef.current = errorCount;
-  }, [errorCount]);
-
-  // 仅在用户主动跳转错误时滚动定位；实时刷新不得把视口拽走
-  useEffect(() => {
-    if (activeLineIdx < 0 || !jumpRequestRef.current) return;
-    const row = lineRefs.current.get(activeLineIdx);
-    if (row) {
-      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-    jumpRequestRef.current = false;
-  }, [activeLineIdx, lines]);
+  const errorSet = useMemo(() => new Set(findErrorLineIndices(lines)), [lines]);
 
   // 跟滚：仅在贴底且未手动上卷时滚到底；否则恢复上次阅读位置
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el || loading || jumpRequestRef.current) return;
+    if (!el || loading) return;
     if (stickToBottom) {
       el.scrollTop = el.scrollHeight;
     } else {
@@ -185,7 +79,6 @@ export function ServiceConsole({
 
   const scrollToBottom = () => {
     const el = scrollRef.current;
-    jumpRequestRef.current = false;
     setStickToBottom(true);
     if (el) {
       el.scrollTop = el.scrollHeight;
@@ -193,66 +86,17 @@ export function ServiceConsole({
     }
   };
 
-  const goError = (delta: number) => {
-    if (errorCount === 0) return;
-    setStickToBottom(false);
-    jumpRequestRef.current = true;
-    setErrorCursor((c) => {
-      const base = c < 0 ? (delta > 0 ? -1 : 0) : c;
-      return (base + delta + errorCount) % errorCount;
-    });
-  };
-
-  const jumpToLatestError = () => {
-    if (errorCount === 0) return;
-    setStickToBottom(false);
-    jumpRequestRef.current = true;
-    setErrorCursor(errorCount - 1);
-  };
-
-  const ignoreCurrentErrors = () => {
-    if (errorIndices.length === 0) return;
-    const signatures = errorIndices
-      .map((idx) => errorSignature(lines[idx] ?? ''))
-      .filter(Boolean);
-    setIgnoredSigs((prev) => {
-      const next = new Set(prev);
-      for (const sig of signatures) next.add(sig);
-      return next;
-    });
-    onIgnoreErrors?.(signatures);
-    setErrorCursor(-1);
-    setNewErrorFlash(false);
-    prevActiveCountRef.current = 0;
-    jumpRequestRef.current = false;
-    setStickToBottom(true);
-    setIgnoredHint(true);
-    window.setTimeout(() => setIgnoredHint(false), 2000);
-  };
-
-  const copyText = async (text: string, id: string) => {
+  const handleClear = useCallback(async () => {
+    if (!serviceId || !onClearLog) return;
+    setClearing(true);
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedHint(id);
-      window.setTimeout(() => setCopiedHint(null), 1500);
-    } catch (e) {
-      console.error(e);
+      await onClearLog(serviceId);
+      setRaw('');
+      void load();
+    } finally {
+      setClearing(false);
     }
-  };
-
-  const copyActiveError = () => {
-    if (activeLineIdx < 0) return;
-    void copyText(sliceLogContext(lines, activeLineIdx, 5), 'one');
-  };
-
-  const copyAllErrors = () => {
-    if (errorIndices.length === 0) return;
-    const blocks = errorIndices.map((idx, i) => {
-      const ctx = sliceLogContext(lines, idx, 3);
-      return `--- error ${i + 1} (L${idx + 1}) ---\n${ctx}`;
-    });
-    void copyText(blocks.join('\n\n'), 'all');
-  };
+  }, [serviceId, onClearLog, load]);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2">
@@ -294,96 +138,24 @@ export function ServiceConsole({
             )}
             刷新
           </button>
+          {onClearLog && (
+            <button
+              type="button"
+              onClick={() => void handleClear()}
+              disabled={!serviceId || clearing}
+              title="清空磁盘上的日志文件"
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg border theme-border theme-bg-sub theme-text-muted hover:theme-text-main disabled:opacity-50 cursor-pointer"
+            >
+              {clearing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Eraser className="h-3.5 w-3.5" />
+              )}
+              清空
+            </button>
+          )}
         </div>
       </div>
-
-      {serviceId && ignoredHint && errorCount === 0 && (
-        <div className="shrink-0 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-300">
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-          <span>已忽略当前错误，继续实时监控；出现新错误时会再次提示</span>
-        </div>
-      )}
-
-      {serviceId && errorCount > 0 && (
-        <div
-          className={cn(
-            'shrink-0 flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2 text-xs',
-            newErrorFlash
-              ? 'border-red-500/50 bg-red-500/15 text-red-700 dark:text-red-300'
-              : 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200',
-          )}
-        >
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-          <span className="font-medium">
-            {newErrorFlash ? '发现新错误 · ' : ''}
-            共 {errorCount} 处可疑错误
-            {latestErrorAtMs != null ? ` · 最新 ${formatErrorAgo(latestErrorAtMs, nowMs)}` : ''}
-            {activeLineIdx >= 0 ? ` · 当前 L${activeLineIdx + 1}` : ''}
-            {ignoredSigs.size > 0 ? ` · 已忽略 ${ignoredSigs.size}` : ''}
-          </span>
-          <div className="ml-auto flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => goError(-1)}
-              className="inline-flex items-center gap-0.5 rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-              title="上一处错误"
-            >
-              <ChevronUp className="h-3.5 w-3.5" />
-              上一个
-            </button>
-            <button
-              type="button"
-              onClick={() => goError(1)}
-              className="inline-flex items-center gap-0.5 rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-              title="下一处错误"
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
-              下一个
-            </button>
-            <button
-              type="button"
-              onClick={jumpToLatestError}
-              className="rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-            >
-              最新
-            </button>
-            <button
-              type="button"
-              onClick={copyActiveError}
-              disabled={activeLineIdx < 0}
-              className="inline-flex items-center gap-1 rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 disabled:opacity-40 cursor-pointer"
-            >
-              {copiedHint === 'one' ? (
-                <CheckCircle2 className="h-3 w-3" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-              {copiedHint === 'one' ? '已复制' : '复制当前'}
-            </button>
-            <button
-              type="button"
-              onClick={copyAllErrors}
-              className="inline-flex items-center gap-1 rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-            >
-              {copiedHint === 'all' ? (
-                <CheckCircle2 className="h-3 w-3" />
-              ) : (
-                <Copy className="h-3 w-3" />
-              )}
-              {copiedHint === 'all' ? '已复制' : '复制全部'}
-            </button>
-            <button
-              type="button"
-              onClick={ignoreCurrentErrors}
-              className="inline-flex items-center gap-1 rounded-md border border-current/20 px-1.5 py-0.5 hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
-              title="忽略当前这些错误并恢复跟滚监控"
-            >
-              <EyeOff className="h-3 w-3" />
-              忽略
-            </button>
-          </div>
-        </div>
-      )}
 
       <div
         ref={scrollRef}
@@ -410,29 +182,11 @@ export function ServiceConsole({
             <tbody>
               {lines.map((line, idx) => {
                 const isError = errorSet.has(idx);
-                const isIgnored = ignoredErrorSet.has(idx);
-                const isActive = idx === activeLineIdx;
                 return (
                   <tr
                     key={idx}
-                    ref={(el) => {
-                      if (el) lineRefs.current.set(idx, el);
-                      else lineRefs.current.delete(idx);
-                    }}
-                    onClick={() => {
-                      if (!isError) return;
-                      const pos = errorIndices.indexOf(idx);
-                      if (pos >= 0) {
-                        setStickToBottom(false);
-                        jumpRequestRef.current = true;
-                        setErrorCursor(pos);
-                      }
-                    }}
                     className={cn(
-                      isActive && 'bg-red-500/25 ring-1 ring-inset ring-red-400/40',
-                      !isActive && isError && 'bg-red-500/10 hover:bg-red-500/20 cursor-pointer',
-                      isIgnored && 'opacity-40',
-                      !isError && !isIgnored && 'hover:bg-zinc-900/80',
+                      isError ? 'bg-red-500/10 hover:bg-red-500/20' : 'hover:bg-zinc-900/80',
                     )}
                   >
                     <td

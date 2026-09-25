@@ -41,6 +41,8 @@ export interface ServiceStatus {
   projectDir?: string;
   startedAt?: string;
   uptimeSecs?: number;
+  cpuPercent?: number;
+  memoryMb?: number;
   lastError?: string;
   extras?: Record<string, string>;
 }
@@ -275,6 +277,11 @@ export function useLocalServices() {
 
   const tailLog = useCallback((id: string, lines = 30) => api.services.tailLog(id, lines), []);
 
+  const clearLog = useCallback(
+    (id: string) => runAction(`clear-log-${id}`, () => api.services.clearLog(id)),
+    [runAction]
+  );
+
   return {
     services,
     projectGroups,
@@ -291,6 +298,7 @@ export function useLocalServices() {
     openInIde,
     ides,
     tailLog,
+    clearLog,
     removeService,
     renameProject,
     renameService,

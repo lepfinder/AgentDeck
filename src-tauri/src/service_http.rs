@@ -164,6 +164,10 @@ pub fn handle_mut(
                 Ok(()) => Ok((200, ok(json!({ "opened": true, "serviceKey": key })))),
                 Err(e) => Err((400, err("OPEN_FAILED", e))),
             },
+            ("POST", Some("clear-log")) => match service_manager::api_clear_log(app, &key) {
+                Ok(result) => Ok((200, action_json(result))),
+                Err(e) => Err((400, err("CLEAR_LOG_FAILED", e))),
+            },
             ("DELETE", None) => {
                 let force = parse_json_bool(body, "force").unwrap_or(false);
                 match service_manager::api_remove(app.clone(), key, force) {

@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::service_config::{
@@ -25,8 +25,36 @@ pub use crate::service_config::{
 /// HTTP timeout for status-page probes (keep startup wait timeouts separate).
 const PROBE_HTTP_MAX_SECS: &str = "1";
 
+#[derive(Debug, Clone, Copy)]
+struct ProcEntry {
+    ppid: u32,
+    rss_kb: u64,
+    cpu_secs: f64,
+}
+
 struct ProbeContext {
     listening_ports: HashSet<u32>,
+    processes: HashMap<u32, ProcEntry>,
+    children_by_parent: HashMap<u32, Vec<u32>>,
+}
+
+fn ports_only_context() -> ProbeContext {
+    ProbeContext {
+        listening_ports: collect_listening_ports(),
+        processes: HashMap::new(),
+        children_by_parent: HashMap::new(),
+    }
+}
+
+/// Status-probe context: one ps sweep shared by every service in the poll.
+fn full_probe_context() -> ProbeContext {
+    let (processes, children_by_parent) = collect_processes();
+    prune_cpu_samples(&processes);
+    ProbeContext {
+        listening_ports: collect_listening_ports(),
+        processes,
+        children_by_parent,
+    }
 }
 
 // ── API response types ───────────────────────────────────────────────────────
@@ -70,6 +98,10 @@ pub struct ServiceStatus {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uptime_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cpu_percent: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -422,6 +454,125 @@ fn month_from_abbr(abbr: &str) -> Option<u32> {
         "Dec" => Some(12),
         _ => None,
     }
+}
+
+/// Parse ps `cputime` (`[[dd-]hh:]mm:ss[.cc]`; the leading field may exceed 60) into seconds.
+fn parse_cputime(raw: &str) -> Option<f64> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (day_secs, rest) = if let Some((d, r)) = s.split_once('-') {
+        (d.parse::<f64>().ok()? * 86400.0, r)
+    } else {
+        (0.0, s)
+    };
+    let parts: Vec<f64> = rest
+        .split(':')
+        .map(|p| p.parse::<f64>().ok())
+        .collect::<Option<Vec<_>>>()?;
+    if parts.is_empty() || parts.len() > 3 {
+        return None;
+    }
+    let mut clock = 0.0f64;
+    for part in parts {
+        clock = clock * 60.0 + part;
+    }
+    Some(day_secs + clock)
+}
+
+/// One `ps -axo pid=,ppid=,rss=,cputime=` sweep: pid -> entry plus ppid -> children index.
+fn collect_processes() -> (HashMap<u32, ProcEntry>, HashMap<u32, Vec<u32>>) {
+    let mut processes = HashMap::new();
+    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+    let Ok(output) = Command::new("ps")
+        .args(["-axo", "pid=,ppid=,rss=,cputime="])
+        .output()
+    else {
+        return (processes, children_by_parent);
+    };
+    if !output.status.success() {
+        return (processes, children_by_parent);
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(rss), Some(cpu)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid), Ok(rss_kb)) =
+            (pid.parse::<u32>(), ppid.parse::<u32>(), rss.parse::<u64>())
+        else {
+            continue;
+        };
+        let Some(cpu_secs) = parse_cputime(cpu) else {
+            continue;
+        };
+        children_by_parent.entry(ppid).or_default().push(pid);
+        processes.insert(pid, ProcEntry { ppid, rss_kb, cpu_secs });
+    }
+    (processes, children_by_parent)
+}
+
+/// pid -> (sample instant, cumulative cpu secs, last computed percent)
+fn cpu_samples() -> &'static Mutex<HashMap<u32, (Instant, f64, Option<f64>)>> {
+    static SAMPLES: OnceLock<Mutex<HashMap<u32, (Instant, f64, Option<f64>)>>> = OnceLock::new();
+    SAMPLES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn prune_cpu_samples(processes: &HashMap<u32, ProcEntry>) {
+    if let Ok(mut samples) = cpu_samples().lock() {
+        samples.retain(|pid, _| processes.contains_key(pid));
+    }
+}
+
+/// Instantaneous CPU %: cputime delta between consecutive probes / elapsed wall time.
+/// ps's own %cpu is a lifetime average, which reads wrong for long-running dev servers.
+fn cpu_percent_from_delta(pid: u32, cpu_secs: f64) -> Option<f64> {
+    let now = Instant::now();
+    let mut samples = cpu_samples().lock().ok()?;
+    let pct = match samples.get(&pid) {
+        Some((prev_t, prev_cpu, prev_pct)) => {
+            let dt = now.duration_since(*prev_t).as_secs_f64();
+            if dt >= 1.0 {
+                let raw = ((cpu_secs - prev_cpu).max(0.0) / dt) * 100.0;
+                Some((raw * 10.0).round() / 10.0)
+            } else {
+                *prev_pct
+            }
+        }
+        None => None,
+    };
+    samples.insert(pid, (now, cpu_secs, pct));
+    pct
+}
+
+/// Sum RSS and cumulative CPU time over the process tree rooted at `pid`
+/// (npm → vite/node children included; the leader pid alone is ~0).
+fn process_tree_usage(pid: u32, ctx: &ProbeContext) -> Option<(u64, f64)> {
+    ctx.processes.get(&pid)?;
+    let mut rss_kb = 0u64;
+    let mut cpu_secs = 0f64;
+    let mut seen = HashSet::new();
+    let mut stack = vec![pid];
+    while let Some(p) = stack.pop() {
+        if !seen.insert(p) {
+            continue;
+        }
+        let Some(entry) = ctx.processes.get(&p) else {
+            continue;
+        };
+        rss_kb += entry.rss_kb;
+        cpu_secs += entry.cpu_secs;
+        if let Some(kids) = ctx.children_by_parent.get(&p) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    Some((rss_kb, cpu_secs))
 }
 
 fn read_pid(pid_file: &Path) -> Option<u32> {
@@ -778,6 +929,14 @@ fn probe_service(
     }
 
     let runtime = pid.and_then(process_runtime);
+    let (memory_mb, cpu_percent) =
+        match pid.and_then(|p| process_tree_usage(p, ctx).map(|u| (p, u))) {
+            Some((p, (rss_kb, cpu_secs))) => (
+                Some(((rss_kb as f64 / 1024.0) * 10.0).round() / 10.0),
+                cpu_percent_from_delta(p, cpu_secs),
+            ),
+            None => (None, None),
+        };
 
     ServiceStatus {
         id: rt.service_key.clone(),
@@ -794,6 +953,8 @@ fn probe_service(
         project_dir: rt.project_dir.clone(),
         started_at: runtime.as_ref().map(|r| r.started_at.clone()),
         uptime_secs: runtime.map(|r| r.uptime_secs),
+        cpu_percent,
+        memory_mb,
         last_error: None,
         extras: if extras.is_empty() { None } else { Some(extras) },
     }
@@ -816,9 +977,7 @@ fn format_port_conflicts(ports: &[u32], port_owners: &HashMap<u32, String>, self
 }
 
 fn listening_conflict_ports(rt: &ServiceRuntime) -> Vec<u32> {
-    let ctx = ProbeContext {
-        listening_ports: collect_listening_ports(),
-    };
+    let ctx = ports_only_context();
     rt.service
         .ports
         .iter()
@@ -916,9 +1075,7 @@ fn spawn_service(rt: &ServiceRuntime) -> Result<u32, String> {
     // Idempotent: already running *and* ready
     if let Some(existing) = read_pid(&pid_file) {
         if pid_alive(existing) {
-            let ctx = ProbeContext {
-                listening_ports: collect_listening_ports(),
-            };
+            let ctx = ports_only_context();
             let ports_ready = def.ports.iter().all(|p| port_listening(*p, &ctx));
             if ports_ready && check_health(&def.health) {
                 return Ok(existing);
@@ -1014,9 +1171,7 @@ fn wait_until_ready(rt: &ServiceRuntime, pid: u32) -> Result<(), String> {
             return Err(format!("进程已退出。最近日志:\n{}", tail));
         }
 
-        let ctx = ProbeContext {
-            listening_ports: collect_listening_ports(),
-        };
+        let ctx = ports_only_context();
         let ports_ready = def.ports.iter().all(|p| port_listening(*p, &ctx));
         let health_ok = check_health(&def.health);
 
@@ -1284,9 +1439,7 @@ pub async fn service_status(
 ) -> Result<Vec<ServiceStatus>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let config = load_config(&app)?;
-        let ctx = ProbeContext {
-            listening_ports: collect_listening_ports(),
-        };
+        let ctx = full_probe_context();
         let port_owners = build_port_owners(&config);
         if let Some(sid) = id {
             let rt = find_runtime(&config, &sid)?;
@@ -1374,9 +1527,7 @@ fn pending_op_label(op: &str) -> &'static str {
 pub fn service_open(app: AppHandle, id: String) -> Result<(), String> {
     let config = load_config(&app)?;
     let rt = find_runtime(&config, &id)?;
-    let ctx = ProbeContext {
-        listening_ports: collect_listening_ports(),
-    };
+    let ctx = ports_only_context();
     let port_owners = build_port_owners(&config);
     let status = probe_service(&rt, &ctx, &port_owners);
     let can_open = matches!(status.state.as_str(), "running" | "partial")
@@ -1488,6 +1639,28 @@ pub fn service_tail_log(app: AppHandle, id: String, lines: Option<u32>) -> Resul
     let log_file = PathBuf::from(expand_template(&rt.service.log_file, &project_dir));
     let n = lines.unwrap_or(30) as usize;
     Ok(tail_log_file(&log_file, n))
+}
+
+/// Truncate the service log file. Safe while the service runs: writers hold the
+/// file in append mode, so subsequent writes land at offset 0.
+#[tauri::command]
+pub fn service_clear_log(app: AppHandle, id: String) -> Result<ServiceActionResult, String> {
+    let config = load_config(&app)?;
+    let rt = find_runtime(&config, &id)?;
+    let project_dir = rt.project_dir_path();
+    let log_file = PathBuf::from(expand_template(&rt.service.log_file, &project_dir));
+    if !log_file.exists() {
+        return Ok(ServiceActionResult {
+            success: true,
+            message: format!("{} 日志文件不存在，无需清空", rt.display_name),
+        });
+    }
+    fs::File::create(&log_file)
+        .map_err(|e| format!("无法清空日志 {}: {}", log_file.display(), e))?;
+    Ok(ServiceActionResult {
+        success: true,
+        message: format!("{} 日志已清空", rt.display_name),
+    })
 }
 
 fn save_config(app: &AppHandle, config: &ServicesConfig) -> Result<(), String> {
@@ -1625,9 +1798,7 @@ pub(crate) fn probe_candidate_sync(
     let report = match spawn_result {
         Ok(pid) => match wait_until_ready(&rt, pid) {
             Ok(()) => {
-                let ctx = ProbeContext {
-                    listening_ports: collect_listening_ports(),
-                };
+                let ctx = ports_only_context();
                 let ports: Vec<ProbePortStatus> = def
                     .ports
                     .iter()
@@ -1655,9 +1826,7 @@ pub(crate) fn probe_candidate_sync(
                 }
             }
             Err(e) => {
-                let ctx = ProbeContext {
-                    listening_ports: collect_listening_ports(),
-                };
+                let ctx = ports_only_context();
                 let ports: Vec<ProbePortStatus> = def
                     .ports
                     .iter()
@@ -1679,9 +1848,7 @@ pub(crate) fn probe_candidate_sync(
             }
         },
         Err(e) => {
-            let ctx = ProbeContext {
-                listening_ports: collect_listening_ports(),
-            };
+            let ctx = ports_only_context();
             ProbeReport {
                 success: false,
                 message: e,
@@ -1891,9 +2058,7 @@ fn service_remove_sync(app: AppHandle, id: String) -> Result<ServiceActionResult
 
 pub fn api_status(app: &AppHandle, id: Option<String>) -> Result<Vec<ServiceStatus>, String> {
     let config = load_config(app)?;
-    let ctx = ProbeContext {
-        listening_ports: collect_listening_ports(),
-    };
+    let ctx = full_probe_context();
     let port_owners = build_port_owners(&config);
     if let Some(sid) = id {
         let rt = find_runtime(&config, &sid)?;
@@ -1931,6 +2096,8 @@ pub fn api_projects(app: &AppHandle) -> Result<Vec<serde_json::Value>, String> {
                 "health": s.health,
                 "ports": s.ports,
                 "openUrl": s.open_url,
+                "cpuPercent": s.cpu_percent,
+                "memoryMb": s.memory_mb,
             })).collect::<Vec<_>>(),
         }));
     }
@@ -1955,6 +2122,10 @@ pub fn api_open(app: &AppHandle, id: &str) -> Result<(), String> {
 
 pub fn api_tail_log(app: &AppHandle, id: &str, lines: Option<u32>) -> Result<String, String> {
     service_tail_log(app.clone(), id.to_string(), lines)
+}
+
+pub fn api_clear_log(app: &AppHandle, id: &str) -> Result<ServiceActionResult, String> {
+    service_clear_log(app.clone(), id.to_string())
 }
 
 pub fn api_upsert(app: &AppHandle, payload: ServiceRegistrationPayload) -> Result<ServiceActionResult, String> {
@@ -2029,6 +2200,73 @@ mod tests {
         assert_eq!(parse_etime("10:28").unwrap(), 628);
         assert_eq!(parse_etime("1:23:45").unwrap(), 5025);
         assert_eq!(parse_etime("2-03:04:05").unwrap(), 2 * 86400 + 3 * 3600 + 4 * 60 + 5);
+    }
+
+    #[test]
+    fn parse_cputime_formats() {
+        assert!((parse_cputime("0:00.04").unwrap() - 0.04).abs() < 1e-9);
+        assert!((parse_cputime("1:02.03").unwrap() - 62.03).abs() < 1e-9);
+        // macOS ps never rolls minutes into hours: 349 minutes is legal.
+        assert!((parse_cputime("349:52.85").unwrap() - (349.0 * 60.0 + 52.85)).abs() < 1e-9);
+        assert_eq!(
+            parse_cputime("2-03:04:05").unwrap(),
+            2.0 * 86400.0 + 3.0 * 3600.0 + 4.0 * 60.0 + 5.0
+        );
+        assert!(parse_cputime("").is_none());
+        assert!(parse_cputime("abc").is_none());
+        assert!(parse_cputime("1:2:3:4").is_none());
+    }
+
+    #[test]
+    fn process_tree_usage_sums_descendants_only() {
+        let mut processes = HashMap::new();
+        let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+        // tree: 100 -> {110 -> 111, 120}; 200 is a foreign sibling of 100
+        for (pid, ppid, rss, cpu) in [
+            (100u32, 1u32, 100u64, 1.0f64),
+            (110, 100, 200, 2.0),
+            (120, 100, 300, 3.0),
+            (111, 110, 400, 4.0),
+            (200, 1, 999, 9.0),
+        ] {
+            processes.insert(pid, ProcEntry { ppid, rss_kb: rss, cpu_secs: cpu });
+            children_by_parent.entry(ppid).or_default().push(pid);
+        }
+        let ctx = ProbeContext {
+            listening_ports: HashSet::new(),
+            processes,
+            children_by_parent,
+        };
+        let (rss, cpu) = process_tree_usage(100, &ctx).unwrap();
+        assert_eq!(rss, 1000);
+        assert!((cpu - 10.0).abs() < 1e-9);
+        let (rss, _) = process_tree_usage(110, &ctx).unwrap();
+        assert_eq!(rss, 600);
+        assert!(process_tree_usage(999, &ctx).is_none());
+    }
+
+    #[test]
+    fn collect_processes_parses_live_ps_output() {
+        let (processes, children_by_parent) = collect_processes();
+        assert!(processes.len() > 10);
+        // every child index entry must point back at a known process
+        for (ppid, kids) in &children_by_parent {
+            assert!(processes.contains_key(ppid) || *ppid == 0);
+            for kid in kids {
+                assert!(processes.contains_key(kid));
+            }
+        }
+    }
+
+    #[test]
+    fn cpu_percent_delta_computes_over_time() {
+        let pid = 999_999u32; // synthetic pid, never pruned during the test
+        let _ = cpu_percent_from_delta(pid, 10.0);
+        let _ = cpu_percent_from_delta(pid, 10.0); // refresh baseline timestamp
+        thread::sleep(Duration::from_millis(1100));
+        // +1.0 cpu-sec over ~1.1 wall-sec ≈ 90.9%
+        let pct = cpu_percent_from_delta(pid, 11.0).unwrap();
+        assert!(pct > 80.0 && pct < 100.0, "unexpected pct: {pct}");
     }
 
     #[test]

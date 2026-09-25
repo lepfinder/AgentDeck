@@ -2,6 +2,7 @@
  * 本地服务 Fleet 总览 — 服务级状态卡片
  */
 import type { ServiceProjectGroup, ServiceStatus } from '../../hooks/useLocalServices';
+import { formatCpuPercent, formatMemoryMb } from '../../utils/formatServiceResource';
 import { cn } from '../../lib/cn';
 
 function isHealthyRunning(s: ServiceStatus): boolean {
@@ -227,8 +228,15 @@ export function ServicesFleetOverview({
                           <span className="font-mono text-[11px] theme-text-muted tabular-nums">
                             {port ? `:${port}` : '—'}
                           </span>
-                          <span className="text-[11px] theme-text-muted opacity-0 group-hover:opacity-100 transition-opacity">
-                            详情 →
+                          <span className="flex items-center gap-2 min-w-0">
+                            {(svc.cpuPercent !== undefined || svc.memoryMb !== undefined) && (
+                              <span className="font-mono text-[11px] theme-text-muted tabular-nums truncate">
+                                {formatCpuPercent(svc.cpuPercent)} · {formatMemoryMb(svc.memoryMb)}
+                              </span>
+                            )}
+                            <span className="text-[11px] theme-text-muted opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              详情 →
+                            </span>
                           </span>
                         </div>
                       </button>

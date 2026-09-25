@@ -44,7 +44,7 @@ const PROGRESS_LINE =
 export function isProgressNoiseLine(line: string): boolean {
   const trimmed = line.trim()
   if (!trimmed) return true
-  return PROGRESS_LINE.test(trimmed) || /^[\s|.\-]+$/.test(trimmed)
+  return PROGRESS_LINE.test(trimmed) || /^[-\s|.]+$/.test(trimmed)
 }
 
 export function formatServiceLog(
@@ -112,68 +112,26 @@ export function parseLogLineTimestamp(line: string): number | null {
   return Number.isFinite(ms) ? ms : null
 }
 
-/**
- * Signature used for ignore matching. Strips leading timestamps so recurring
- * errors (each logged with a fresh `[YYYY-MM-DD HH:mm:ss]` prefix) collapse
- * into one signature and stay ignored across polls.
- */
-export function errorSignature(line: string): string {
-  return line.trim().replace(/^\[?\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?\]?\s*/, '')
-}
-
-/** Compact Chinese relative time, e.g. `刚刚` / `3 分钟前`. */
-export function formatErrorAgo(atMs: number | null | undefined, nowMs = Date.now()): string {
-  if (atMs == null || !Number.isFinite(atMs)) return '未知时间'
-  const secs = Math.max(0, Math.floor((nowMs - atMs) / 1000))
-  if (secs < 15) return '刚刚'
-  if (secs < 60) return `${secs} 秒前`
-  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`
-  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`
-  return `${Math.floor(secs / 86400)} 天前`
-}
-
 export function analyzeServiceLogErrors(
   raw: string,
-  options?: { hideProgress?: boolean; maxLines?: number; ignoredSignatures?: Set<string> }
+  options?: { hideProgress?: boolean; maxLines?: number }
 ): {
-  lines: string[]
   errorIndices: number[]
   latestAtMs: number | null
-  latestLine: string | null
 } {
   const lines = formatServiceLog(raw, {
     hideProgress: options?.hideProgress ?? true,
     maxLines: options?.maxLines ?? 300,
   })
-  const ignored = options?.ignoredSignatures
-  const errorIndices = findErrorLineIndices(lines).filter((idx) => {
-    if (!ignored || ignored.size === 0) return true
-    return !ignored.has(errorSignature(lines[idx] ?? ''))
-  })
+  const errorIndices = findErrorLineIndices(lines)
 
   let latestAtMs: number | null = null
-  let latestLine: string | null = null
   for (const idx of errorIndices) {
-    const line = lines[idx]
-    const at = parseLogLineTimestamp(line)
+    const at = parseLogLineTimestamp(lines[idx])
     if (at != null && (latestAtMs == null || at >= latestAtMs)) {
       latestAtMs = at
-      latestLine = line
-    } else if (latestLine == null) {
-      latestLine = line
     }
   }
 
-  return { lines, errorIndices, latestAtMs, latestLine }
-}
-
-/** Slice surrounding context for copy/debug (inclusive). */
-export function sliceLogContext(
-  lines: string[],
-  centerIdx: number,
-  radius = 5
-): string {
-  const start = Math.max(0, centerIdx - radius)
-  const end = Math.min(lines.length - 1, centerIdx + radius)
-  return lines.slice(start, end + 1).join('\n')
+  return { errorIndices, latestAtMs }
 }

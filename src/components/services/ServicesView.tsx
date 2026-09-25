@@ -35,7 +35,7 @@ import {
   type FleetFilter,
 } from './ServicesFleetOverview';
 import { formatUptime } from '../../utils/formatUptime';
-import { formatErrorAgo } from '../../utils/formatServiceLog';
+import { formatCpuPercent, formatMemoryMb } from '../../utils/formatServiceResource';
 import { cn } from '../../lib/cn';
 import { api } from '../../api/tauriBridge';
 import cursorIcon from '../../assets/ides/cursor.png';
@@ -257,32 +257,20 @@ function latestGroupAlert(
   for (const svc of services) {
     const a = alerts[svc.id];
     if (!a) continue;
-    if (!best || (a.latestAtMs ?? -1) > (best.latestAtMs ?? -1)) {
-      best = { ...a };
-    } else if (best && a.latestAtMs === best.latestAtMs) {
-      best = { ...best, count: best.count + a.count };
-    }
+    if (!best || (a.latestAtMs ?? -1) > (best.latestAtMs ?? -1)) best = a;
   }
   return best;
 }
 
-function NavStatusLine({
-  label,
-  alert,
-  nowMs,
-}: {
-  label: string;
-  alert?: ServiceLogAlert;
-  nowMs: number;
-}) {
-  if (!alert) {
-    return <span className="block truncate text-[10px] theme-text-muted mt-0.5">{label}</span>;
-  }
-  return (
-    <span className="block truncate text-[10px] mt-0.5 text-red-500">
-      {label} · 错误 {formatErrorAgo(alert.latestAtMs, nowMs)}
-    </span>
-  );
+function NavStatusLine({ label }: { label: string }) {
+  return <span className="block truncate text-[10px] theme-text-muted mt-0.5">{label}</span>;
+}
+
+/** 服务行名称下的状态行，运行中附带 CPU / 内存 */
+function serviceStatusLabel(svc: ServiceStatus): string {
+  const label = stateLabel(svc.state, svc.health);
+  if (svc.cpuPercent === undefined && svc.memoryMb === undefined) return label;
+  return `${label} · ${formatCpuPercent(svc.cpuPercent)} · ${formatMemoryMb(svc.memoryMb)}`;
 }
 
 export function ServicesView(): React.ReactElement {
@@ -302,13 +290,13 @@ export function ServicesView(): React.ReactElement {
     openInIde,
     ides,
     tailLog,
+    clearLog,
     removeService,
     renameProject,
     renameService,
   } = useLocalServices();
 
-  const { alerts, nowMs, ignoreServiceErrors, ignoredByServiceId, ignoreEpoch } =
-    useServiceLogAlerts(services, tailLog);
+  const { alerts } = useServiceLogAlerts(services, tailLog);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [fleetFilter, setFleetFilter] = useState<FleetFilter>('all');
@@ -374,6 +362,12 @@ export function ServicesView(): React.ReactElement {
     services.some((s) => s.id === id && (s.state === 'starting' || s.state === 'stopping'));
 
   const preferredIde = defaultIde(ides);
+  /** 运行中/部分就绪/不健康视为「在跑」：右上角只给「停止」，否则只给「启动」 */
+  const runningLike =
+    !!selected &&
+    (selected.state === 'running' ||
+      selected.state === 'partial' ||
+      selected.state === 'unhealthy');
   const consoleLive =
     !!selected &&
     (selected.state === 'running' ||
@@ -547,8 +541,6 @@ export function ServicesView(): React.ReactElement {
                                 ? `${group.services.length} 个服务 · ${projectRunningSummary(group.services)}`
                                 : stateLabel(group.services[0].state, group.services[0].health)
                             }
-                            alert={multi ? groupAlert : singleAlert}
-                            nowMs={nowMs}
                           />
                         </span>
                       </button>
@@ -608,11 +600,7 @@ export function ServicesView(): React.ReactElement {
                                     <AlertTriangle className="h-3 w-3 shrink-0 text-red-500" />
                                   )}
                                 </span>
-                                <NavStatusLine
-                                  label={stateLabel(svc.state, svc.health)}
-                                  alert={alert}
-                                  nowMs={nowMs}
-                                />
+                                <NavStatusLine label={serviceStatusLabel(svc)} />
                               </span>
                             </button>
                             <button
@@ -758,44 +746,24 @@ export function ServicesView(): React.ReactElement {
                       <button
                         type="button"
                         className={actionBtnClass({
-                          variant:
-                            selected.state === 'running' ||
-                            selected.state === 'partial' ||
-                            selected.state === 'unhealthy'
-                              ? 'outline'
-                              : 'default',
+                          variant: 'default',
                           disabled: isBusy(selected.id, ['start', 'restart', 'stop']),
                         })}
                         disabled={isBusy(selected.id, ['start', 'restart', 'stop'])}
-                        onClick={() => void startService(selected.id)}
+                        onClick={() =>
+                          void (runningLike
+                            ? stopService(selected.id)
+                            : startService(selected.id))
+                        }
                       >
-                        {actionLoading === `start-${selected.id}` ? (
+                        {isBusy(selected.id, ['start', 'stop']) ? (
                           <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                        ) : runningLike ? (
+                          <Square className="mr-1 h-4 w-4" />
                         ) : (
                           <Play className="mr-1 h-4 w-4" />
                         )}
-                        启动
-                      </button>
-                      <button
-                        type="button"
-                        className={actionBtnClass({
-                          variant:
-                            selected.state === 'running' ||
-                            selected.state === 'partial' ||
-                            selected.state === 'unhealthy'
-                              ? 'default'
-                              : 'outline',
-                          disabled: isBusy(selected.id, ['start', 'restart', 'stop']),
-                        })}
-                        disabled={isBusy(selected.id, ['start', 'restart', 'stop'])}
-                        onClick={() => void stopService(selected.id)}
-                      >
-                        {actionLoading === `stop-${selected.id}` ? (
-                          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Square className="mr-1 h-4 w-4" />
-                        )}
-                        停止
+                        {runningLike ? '停止' : '启动'}
                       </button>
                       <button
                         type="button"
@@ -841,7 +809,7 @@ export function ServicesView(): React.ReactElement {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 text-sm">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 text-sm">
                     <div>
                       <span className="theme-text-muted text-xs">PID</span>
                       <p className="font-mono mt-0.5 theme-text-main">{selected.pid ?? '—'}</p>
@@ -880,6 +848,18 @@ export function ServicesView(): React.ReactElement {
                         />
                       </p>
                     </div>
+                    <div>
+                      <span className="theme-text-muted text-xs">CPU</span>
+                      <p className="font-mono mt-0.5 theme-text-main">
+                        {formatCpuPercent(selected.cpuPercent)}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="theme-text-muted text-xs">内存</span>
+                      <p className="font-mono mt-0.5 theme-text-main">
+                        {formatMemoryMb(selected.memoryMb)}
+                      </p>
+                    </div>
                     {selected.extras?.frontend && (
                       <div>
                         <span className="theme-text-muted text-xs">前端</span>
@@ -895,11 +875,7 @@ export function ServicesView(): React.ReactElement {
                     logFile={selected.logFile}
                     live={consoleLive}
                     onFetchLog={tailLog}
-                    ignoredSignatures={ignoredByServiceId(selected.id)}
-                    ignoreEpoch={ignoreEpoch}
-                    onIgnoreErrors={(signatures) =>
-                      ignoreServiceErrors(selected.id, signatures)
-                    }
+                    onClearLog={clearLog}
                   />
                 </section>
               </>
