@@ -16,10 +16,9 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
-import { QuotaBar } from './components/common/QuotaBar';
 import { GitBoardPill } from './components/gitboard/GitBoardPill';
 
-/** 自动同步脉冲 — 与 QuotaBar 同款：仅前台调度，自适应 2–5 分钟。 */
+/** 自动同步脉冲 — 仅前台调度，自适应 2–5 分钟。 */
 const AUTO_SYNC_FLOOR_MS = 2 * 60_000;
 const AUTO_SYNC_ACTIVE_MS = 5 * 60_000;
 /** 两次非手动同步之间的最小间隔。 */
@@ -207,7 +206,7 @@ export function App() {
     };
   }, []);
 
-  // ===== 会话自动同步：仅前台调度，自适应 2–5 分钟（与 QuotaBar 脉冲逻辑一致）=====
+  // ===== 会话自动同步：仅前台调度，自适应 2–5 分钟 =====
   const syncInFlightRef = useRef(false);
   const autoSyncRunningRef = useRef(false);
   const lastAutoSyncAtRef = useRef(0);
@@ -351,10 +350,8 @@ export function App() {
           </button>
         </div>
 
-        {/* 右侧：额度一瞥 + 刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
+        {/* 右侧：刷新同步 + Spotlight 搜索 + 亮暗色切换 + 设置入口 */}
         <div className="flex items-center gap-2">
-          <QuotaBar />
-
           {/* Git 状态胶囊：活跃工作区 Git 状态一瞥，点击进入 Git 看板 */}
           <GitBoardPill active={isGitBoardView} onOpen={handleOpenGitBoard} />
 
