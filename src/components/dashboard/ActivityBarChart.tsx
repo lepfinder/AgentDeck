@@ -16,6 +16,10 @@ export interface ActivityBarItem {
 
 interface Props {
   items: ActivityBarItem[];
+  /** 影子对比序列（如昨日同期），与 items 按索引对齐；半透明异色叠加 */
+  compareItems?: ActivityBarItem[];
+  /** 对比序列图例文案（如「昨天」） */
+  compareLabel?: string;
   emptyHint?: string;
   onBarClick?: (key: string) => void;
   showLine?: boolean;
@@ -52,6 +56,8 @@ function parseTitleContext(title: string) {
 
 export const ActivityBarChart: React.FC<Props> = ({
   items,
+  compareItems,
+  compareLabel,
   emptyHint,
   onBarClick,
   showLine = false,
@@ -62,14 +68,21 @@ export const ActivityBarChart: React.FC<Props> = ({
   const [plotSize, setPlotSize] = useState({ width: 0, height: 0 });
   const [hovered, setHovered] = useState<{
     item: ActivityBarItem;
+    compare?: ActivityBarItem;
     x: number;
     y: number;
     containerWidth: number;
     isPeak: boolean;
   } | null>(null);
 
-  const max = Math.max(1, ...items.map((item) => item.count));
+  // 主序列与影子序列共用同一 Y 轴比例，便于直接重叠对比
+  const max = Math.max(
+    1,
+    ...items.map((item) => item.count),
+    ...(compareItems?.map((item) => item.count) ?? []),
+  );
   const total = items.reduce((sum, item) => sum + item.count, 0);
+  const hasCompare = Boolean(compareItems && compareItems.some((c) => c.count > 0));
   const barScale = showLine ? LINE_BAR_SCALE : 1;
 
   const peakItem = useMemo(() => {
@@ -116,7 +129,7 @@ export const ActivityBarChart: React.FC<Props> = ({
     );
   }
 
-  const handleMouseEnter = (item: ActivityBarItem, e: React.MouseEvent<HTMLDivElement>) => {
+  const handleMouseEnter = (item: ActivityBarItem, e: React.MouseEvent<HTMLDivElement>, compare?: ActivityBarItem) => {
     if (!containerRef.current) return;
     const containerRect = containerRef.current.getBoundingClientRect();
     const cellRect = e.currentTarget.getBoundingClientRect();
@@ -124,6 +137,7 @@ export const ActivityBarChart: React.FC<Props> = ({
     const y = cellRect.top - containerRect.top;
     setHovered({
       item,
+      compare,
       x,
       y,
       containerWidth: containerRect.width,
@@ -140,11 +154,25 @@ export const ActivityBarChart: React.FC<Props> = ({
       <div className="absolute left-0 top-0 text-[10px] theme-text-muted font-mono tabular-nums">
         {max.toLocaleString()}
       </div>
+      {hasCompare && compareLabel && (
+        <div className="absolute right-0 top-0 flex items-center gap-2 text-[10px] theme-text-muted">
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-[2px] bg-blue-500/70 inline-block" />
+            {t('bar.current')}
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2.5 h-2.5 rounded-[2px] bg-violet-400/45 border border-violet-400/50 inline-block" />
+            {compareLabel}
+          </span>
+        </div>
+      )}
       <div className="relative h-40 pt-4">
         <div ref={plotRef} className="relative h-full">
           <div className="flex items-end h-full" style={{ gap: `${BAR_GAP}px` }}>
-            {items.map((item) => {
+            {items.map((item, idx) => {
               const barPct = item.count > 0 ? Math.max(6, (item.count / max) * 100 * barScale) : 0;
+              const cmp = compareItems?.[idx];
+              const cmpPct = cmp && cmp.count > 0 ? Math.max(4, (cmp.count / max) * 100 * barScale) : 0;
               const isHovered = hovered?.item.key === item.key;
               return (
                 <div
@@ -152,19 +180,28 @@ export const ActivityBarChart: React.FC<Props> = ({
                   className={`flex-1 min-w-0 h-full flex flex-col items-center justify-end relative ${
                     onBarClick ? 'cursor-pointer' : ''
                   }`}
-                  onMouseEnter={(e) => handleMouseEnter(item, e)}
+                  onMouseEnter={(e) => handleMouseEnter(item, e, cmp)}
                   onClick={onBarClick ? () => onBarClick(item.key) : undefined}
                 >
-                  <div
-                    className={`w-full max-w-6 rounded-t-[3px] transition-all duration-200 ${
-                      item.emphasize
-                        ? 'bg-blue-500/80 shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'
-                        : item.muted
-                          ? 'bg-slate-400/40 hover:bg-slate-400/70'
-                          : 'bg-blue-500/55 hover:bg-blue-500/85'
-                    } ${isHovered ? 'ring-2 ring-blue-500/80 shadow-md scale-y-105 origin-bottom' : ''}`}
-                    style={{ height: `${barPct}%` }}
-                  />
+                  <div className="relative w-full max-w-6 h-full">
+                    {/* 昨日影子：异色半透明，同轴重叠 */}
+                    {cmpPct > 0 && (
+                      <div
+                        className="absolute inset-x-0 bottom-0 rounded-t-[3px] bg-violet-400/35 border border-violet-400/45 pointer-events-none"
+                        style={{ height: `${cmpPct}%` }}
+                      />
+                    )}
+                    <div
+                      className={`absolute inset-x-0 bottom-0 rounded-t-[3px] transition-all duration-200 ${
+                        item.emphasize
+                          ? 'bg-blue-500/85 shadow-[0_0_0_1px_rgba(59,130,246,0.35)]'
+                          : item.muted
+                            ? 'bg-slate-400/55 hover:bg-slate-400/80'
+                            : 'bg-blue-500/65 hover:bg-blue-500/90'
+                      } ${isHovered ? 'ring-2 ring-blue-500/80 shadow-md' : ''}`}
+                      style={{ height: `${barPct}%` }}
+                    />
+                  </div>
                 </div>
               );
             })}
@@ -222,6 +259,8 @@ export const ActivityBarChart: React.FC<Props> = ({
       {hovered && (
         <ActivityBarTooltip
           item={hovered.item}
+          compare={hovered.compare}
+          compareLabel={compareLabel}
           x={hovered.x}
           y={hovered.y}
           containerWidth={hovered.containerWidth}
@@ -234,6 +273,8 @@ export const ActivityBarChart: React.FC<Props> = ({
 
 interface TooltipProps {
   item: ActivityBarItem;
+  compare?: ActivityBarItem;
+  compareLabel?: string;
   x: number;
   y: number;
   containerWidth: number;
@@ -242,6 +283,8 @@ interface TooltipProps {
 
 const ActivityBarTooltip: React.FC<TooltipProps> = ({
   item,
+  compare,
+  compareLabel,
   x,
   y,
   containerWidth,
@@ -355,6 +398,25 @@ const ActivityBarTooltip: React.FC<TooltipProps> = ({
                 </span>
                 <span className="font-mono text-purple-300 font-medium">
                   {t('heatmap.rounds', { n: multiplier })}
+                </span>
+              </div>
+            )}
+
+            {/* 影子对比（如昨日同期） */}
+            {compare && (
+              <div className="flex items-center justify-between text-neutral-300 pt-1.5 mt-1.5 border-t border-white/10">
+                <span className="flex items-center gap-1.5 text-neutral-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+                  {compareLabel || t('bar.compare')}
+                </span>
+                <span className="font-mono font-semibold text-violet-300">
+                  {(item.count === 0 && compare.count === 0
+                    ? 0
+                    : compare.count
+                  ).toLocaleString()}{' '}
+                  <span className="text-[10px] font-normal text-neutral-400">
+                    {t('heatmap.unitTiao')}
+                  </span>
                 </span>
               </div>
             )}

@@ -29,6 +29,18 @@ const getWeekday = (dateStr: string) => {
   return weekdayLabel(d.getDay());
 };
 
+/** legend 悬停提示：每档对应的数值范围 */
+function legendRange(lvl: number, thresholds: number[] | null, tab: string): string {
+  if (lvl === 0) return '0';
+  if (!thresholds) return '';
+  const unit = tab === 'convs' ? translate('heatmap.unitGe') : translate('heatmap.unitTiao');
+  const fmt = (n: number) => n.toLocaleString();
+  if (lvl === 1) return `1 ~ ${fmt(thresholds[0])} ${unit}`;
+  if (lvl === 2) return `${fmt(thresholds[0] + 1)} ~ ${fmt(thresholds[1])} ${unit}`;
+  if (lvl === 3) return `${fmt(thresholds[1] + 1)} ~ ${fmt(thresholds[2])} ${unit}`;
+  return `> ${fmt(thresholds[2])} ${unit}`;
+}
+
 export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
   title,
   subtitle,
@@ -79,6 +91,40 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
     }
     return cellsAllMsgs || [];
   }, [tab, cellsAllMsgs, cellsUserMsgs, cellsConvs]);
+
+  // 分位数动态分档：按当前 Tab 指标取活跃日 P40/P70/P90 为 1~3 级上界，
+  // 色阶随数据量级自适应（固定阈值在重度使用下整图饱和成 lvl-4）
+  const { thresholds, levelOf } = useMemo(() => {
+    const metricOf = (c: HeatmapCell) =>
+      tab === 'user'
+        ? (c.user_count ?? c.count)
+        : tab === 'convs'
+          ? (c.conv_count ?? c.count)
+          : (c.total_messages ?? c.count);
+    const fallback = {
+      thresholds: null as number[] | null,
+      levelOf: (c: HeatmapCell) => c.level,
+    };
+    const vals = currentData
+      .map(metricOf)
+      .filter((n) => n > 0)
+      .sort((a, b) => a - b);
+    if (vals.length < 8) return fallback;
+    const q = (p: number) => vals[Math.max(0, Math.min(vals.length - 1, Math.ceil(p * vals.length) - 1))];
+    const t = [q(0.4), q(0.7), q(0.9)];
+    if (t[0] === t[2]) return fallback;
+    return {
+      thresholds: t,
+      levelOf: (c: HeatmapCell) => {
+        const n = metricOf(c);
+        if (!n) return 0;
+        if (n <= t[0]) return 1;
+        if (n <= t[1]) return 2;
+        if (n <= t[2]) return 3;
+        return 4;
+      },
+    };
+  }, [currentData, tab]);
 
   // 组织为 52 周 × 7 天网格
   const { weeks, monthLabels } = useMemo(() => {
@@ -291,13 +337,14 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
                     }
 
                     const isHovered = hovered?.cell.date === cell.date;
+                    const lvl = levelOf(cell);
 
                     return (
                       <div
                         key={dIdx}
                         onMouseEnter={(e) => handleMouseEnterCell(cell, e)}
                         onClick={() => onCellClick?.(cell.date)}
-                        className={`w-3 h-3 rounded-[2.5px] gh-heatmap-cell lvl-${cell.level} border border-black/5 dark:border-white/5 cursor-pointer transition-transform duration-100 ${
+                        className={`w-3 h-3 rounded-[2.5px] gh-heatmap-cell lvl-${lvl} border border-black/5 dark:border-white/5 cursor-pointer transition-transform duration-100 ${
                           isHovered ? 'scale-135 ring-2 ring-blue-500 z-20 shadow-md' : ''
                         }`}
                       />
@@ -317,11 +364,15 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
         </span>
         <div className="flex items-center gap-1.5 select-none">
           <span>{t('heatmap.less')}</span>
-          <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-0 border theme-border-sub inline-block" />
-          <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-1 inline-block" />
-          <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-2 inline-block" />
-          <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-3 inline-block" />
-          <span className="w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-4 inline-block" />
+          {([0, 1, 2, 3, 4] as const).map((lvl) => (
+            <span
+              key={lvl}
+              title={legendRange(lvl, thresholds, tab)}
+              className={`w-2.5 h-2.5 rounded-[2px] gh-heatmap-cell lvl-${lvl} ${
+                lvl === 0 ? 'border theme-border-sub' : ''
+              } inline-block`}
+            />
+          ))}
           <span>{t('heatmap.more')}</span>
         </div>
       </div>
@@ -330,6 +381,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
       {hovered && (
         <HeatmapTooltip
           cell={hovered.cell}
+          level={levelOf(hovered.cell)}
           x={hovered.x}
           y={hovered.y}
           containerWidth={hovered.containerWidth}
@@ -342,6 +394,7 @@ export const ContributionHeatmap: React.FC<ContributionHeatmapProps> = ({
 
 interface TooltipProps {
   cell: HeatmapCell;
+  level: number;
   x: number;
   y: number;
   containerWidth: number;
@@ -350,6 +403,7 @@ interface TooltipProps {
 
 const HeatmapTooltip: React.FC<TooltipProps> = ({
   cell,
+  level,
   x,
   y,
   containerWidth,
@@ -420,7 +474,7 @@ const HeatmapTooltip: React.FC<TooltipProps> = ({
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-800 text-neutral-400">
               {t('heatmap.rest')}
             </span>
-          ) : cell.level === 4 ? (
+          ) : level === 4 ? (
             <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
               {t('heatmap.hyper')}
             </span>

@@ -43,6 +43,7 @@ export const DashboardView: React.FC<Props> = ({
   const [hourlyTab, setHourlyTab] = useState<'msgs' | 'convs'>('msgs');
   const [last30Tab, setLast30Tab] = useState<'msgs' | 'convs'>('msgs');
   const [hourlyDate, setHourlyDate] = useState<string | null>(null);
+  const [comparePrevDay, setComparePrevDay] = useState(true);
   const [topRankTab, setTopRankTab] = useState<'all' | 'user'>('all');
   const [autoRefreshSec, setAutoRefreshSec] = useState<number>(() => {
     const saved = localStorage.getItem('agentdeck_dashboard_auto_refresh_interval');
@@ -148,6 +149,25 @@ export const DashboardView: React.FC<Props> = ({
     viewingToday ? currentHour : -1,
     resolvedHourlyDate,
   );
+
+  // 影子对比：前一天同指标 24 小时序列
+  const prevHourlyDate = shiftDateStr(resolvedHourlyDate, -1);
+  const prevMsgHours =
+    (stats.last30_hourly_msgs || []).find((d) => d.date === prevHourlyDate)?.hours || [];
+  const prevConvHours =
+    (stats.last30_hourly_convs || []).find((d) => d.date === prevHourlyDate)?.hours || [];
+  const prevUserMsgHours =
+    (stats.last30_hourly_user_msgs || []).find((d) => d.date === prevHourlyDate)?.hours || [];
+  const prevBarItems = toHourlyBarItems(
+    prevMsgHours,
+    prevConvHours,
+    prevUserMsgHours,
+    hourlyTab,
+    -1,
+    prevHourlyDate,
+  );
+  const compareBarItems = comparePrevDay ? prevBarItems : undefined;
+  const compareDayTotal = (compareBarItems || []).reduce((sum, item) => sum + item.count, 0);
   const last30BarItems = toLast30BarItems(
     stats.last30_daily_msgs || [],
     stats.last30_daily_convs || [],
@@ -349,12 +369,31 @@ export const DashboardView: React.FC<Props> = ({
                   {t('dashboard.bySessions')}
                 </button>
               </div>
+              <button
+                type="button"
+                onClick={() => setComparePrevDay((v) => !v)}
+                title={t('dashboard.comparePrevHint')}
+                className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-all cursor-pointer ${
+                  comparePrevDay
+                    ? 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/40'
+                    : 'theme-bg-sub theme-text-muted theme-border hover:theme-text-main'
+                }`}
+              >
+                {t('dashboard.comparePrev')}
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3">
+          <div className="flex items-center gap-3 text-[11px] theme-text-muted mb-3 flex-wrap">
             <span>
               {t('dashboard.dayTotal')} <strong className="theme-text-main font-mono">{dayTotal.toLocaleString()}</strong> {volumeUnit(hourlyTab)}
             </span>
+            {comparePrevDay && (
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-[2px] bg-violet-400/45 border border-violet-400/50 inline-block" />
+                {formatDayNavLabel(prevHourlyDate, todayStr, yesterdayStr)}{' '}
+                <strong className="theme-text-main font-mono">{compareDayTotal.toLocaleString()}</strong>
+              </span>
+            )}
             {dayPeak && dayPeak.count > 0 && (
               <span>
                 {t('dashboard.peak')} {dayPeak.key}:00 · <strong className="theme-text-main font-mono">{dayPeak.count.toLocaleString()}</strong>
@@ -369,6 +408,8 @@ export const DashboardView: React.FC<Props> = ({
           </div>
           <ActivityBarChart
             items={dayBarItems}
+            compareItems={compareBarItems}
+            compareLabel={formatDayNavLabel(prevHourlyDate, todayStr, yesterdayStr)}
             emptyHint={t('dashboard.emptyDay')}
           />
         </div>
