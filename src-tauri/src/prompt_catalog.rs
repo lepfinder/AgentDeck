@@ -43,7 +43,7 @@ pub struct CatalogSyncProgress {
 
 pub type SyncProgressCallback = Box<dyn Fn(CatalogSyncProgress) + Send>;
 
-fn emit_progress(cb: &Option<SyncProgressCallback>, p: CatalogSyncProgress) {
+pub fn emit_progress(cb: &Option<SyncProgressCallback>, p: CatalogSyncProgress) {
     if let Some(f) = cb {
         f(p);
     }

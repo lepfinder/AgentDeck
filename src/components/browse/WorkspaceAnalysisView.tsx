@@ -23,7 +23,6 @@ import {
   FileText,
   Clock,
   Sparkles,
-  Flame,
   RefreshCw,
   X,
   CheckCircle2,
@@ -35,10 +34,12 @@ import {
   ChevronRight,
   FileCode2,
   GitBranch,
+  Coins,
 } from 'lucide-react';
 import { ContributionHeatmap } from '../common/ContributionHeatmap';
 import { CustomSelect } from '../common/CustomSelect';
 import { useI18n } from '../../i18n';
+import { fmtTokens } from '../../utils/formatTokens';
 
 interface Props {
   workspacePath: string;
@@ -54,7 +55,7 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
   onOpenGitBoard,
   embedded = false,
 }) => {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [detail, setDetail] = useState<WorkspaceDetailStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'fine' | 'modules' | 'report'>('fine');
@@ -520,19 +521,21 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
           </div>
         </div>
 
-        {/* 峰值日消息 */}
+        {/* 预估 token */}
         <div className="theme-bg-card border theme-border rounded-xl p-3.5 relative overflow-hidden shadow-xs">
           <div className="flex items-center justify-between gap-1.5 theme-text-muted mb-2 min-w-0">
-            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('analysis.peakMsgs')}>
-              {t('analysis.peak')}
+            <span className="text-xs font-medium whitespace-nowrap truncate" title={t('analysis.estimatedTokens')}>
+              {t('analysis.estimatedTokens')}
             </span>
-            <Flame className="h-4 w-4 text-orange-500 shrink-0" />
+            <Coins className="h-4 w-4 text-cyan-500 shrink-0" />
           </div>
           <div className="text-2xl font-bold theme-text-main tracking-tight font-mono">
-            {detail.peak_count.toLocaleString()} <span className="text-xs font-normal theme-text-muted">{t('analysis.tiao')}</span>
+            {detail.estimated_tokens > 0 ? fmtTokens(detail.estimated_tokens, locale) : '—'}
           </div>
           <div className="mt-2 text-[11px] theme-text-muted truncate">
-            {detail.peak_day || '—'}
+            {detail.estimated_tokens > 0
+              ? t('analysis.usageRequests', { n: detail.usage_requests.toLocaleString() })
+              : t('analysis.noUsage')}
           </div>
         </div>
       </div>

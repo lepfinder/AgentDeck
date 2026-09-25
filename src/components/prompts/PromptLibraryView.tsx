@@ -1,5 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CatalogSyncProgress, PromptCategory, PromptInput, PromptItem } from '../../types';
+import type {
+  CatalogSyncProgress,
+  PromptCategory,
+  PromptInput,
+  PromptItem,
+  VideoPromptItem,
+} from '../../types';
 import { api, isTauri } from '../../api/tauriBridge';
 import { CustomSelect } from '../common/CustomSelect';
 import { useI18n, type MessageKey } from '../../i18n';
@@ -71,6 +77,24 @@ function looksLikeVideoUrl(url: string): boolean {
 function looksLikeImageUrl(url: string): boolean {
   return /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i.test(url);
 }
+
+/** 生视频条目走 video_prompts 表（prompts 表已无 video 行） */
+const isVideoItem = (p: PromptItem): boolean => p.category === 'video';
+
+/** 视频专属字段仅 VideoPromptItem 序列化时携带 */
+function videoMediaUrl(p: PromptItem): string | undefined {
+  return isVideoItem(p) ? (p as VideoPromptItem).media_url : undefined;
+}
+
+function catalogAttributionKey(origin?: string): 'prompt.attribution' | 'prompt.attributionSeedance' {
+  return origin === 'catalog:seedance' ? 'prompt.attributionSeedance' : 'prompt.attribution';
+}
+
+/** 生图/生视频 Tab 的公开目录原仓库，用于页面来源署名 */
+const CATALOG_REPOS: Record<'image' | 'video', { name: string; url: string }> = {
+  image: { name: 'awesome-gpt-image-2', url: 'https://github.com/freestylefly/awesome-gpt-image-2' },
+  video: { name: 'awesome-seedance', url: 'https://github.com/LearnPrompt/awesome-seedance' },
+};
 
 const LOCAL_MEDIA_BASE = 'http://127.0.0.1:8788';
 
@@ -277,7 +301,8 @@ const MediaCard = React.memo(function MediaCard({
   onRatio?: (id: number, width: number, height: number) => void;
 }) {
   const url = resolvePreviewUrl(prompt);
-  const isVideo = prompt.category === 'video' || (url ? looksLikeVideoUrl(url) : false);
+  // 视频条目封面是海报图（poster），只有 URL 本身是视频时才内联播放
+  const isVideo = !!url && looksLikeVideoUrl(url);
 
   return (
     <article
@@ -337,7 +362,7 @@ const MediaCard = React.memo(function MediaCard({
           </div>
         )}
         {prompt.origin?.startsWith('catalog:') && (
-          <p className="text-[10px] theme-text-sub">{t('prompt.attribution')}</p>
+          <p className="text-[10px] theme-text-sub">{t(catalogAttributionKey(prompt.origin))}</p>
         )}
         <div className="flex items-center justify-end gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
           <button
@@ -375,6 +400,7 @@ function MediaCover({
   opts,
   ratio,
   onRatio,
+  videoRef,
 }: {
   prompt: PromptItem;
   url: string | null;
@@ -382,6 +408,7 @@ function MediaCover({
   opts?: { fill?: boolean; controls?: boolean; panel?: boolean };
   ratio?: number;
   onRatio?: (id: number, width: number, height: number) => void;
+  videoRef?: React.Ref<HTMLVideoElement>;
 }) {
   const { t } = useI18n();
   const fill = opts?.fill;
@@ -395,7 +422,9 @@ function MediaCover({
         }`}
       >
         <video
+          ref={videoRef}
           src={url}
+          poster={resolvePreviewUrl(prompt) || undefined}
           className={`w-full ${
             panel
               ? 'h-full max-h-[38vh] md:max-h-none object-contain bg-black'
@@ -458,11 +487,12 @@ function MediaCover({
   );
 }
 
-/** 详情面板左侧大图：用本地/CDN 候选链渲染 */
-function DetailMediaCover({ prompt }: { prompt: PromptItem }) {
-  const url = resolvePreviewUrl(prompt);
-  const isVideo = prompt.category === 'video' || (url ? looksLikeVideoUrl(url) : false);
-  return <MediaCover prompt={prompt} url={url} isVideo={isVideo} opts={{ fill: true, controls: true, panel: true }} />;
+/** 详情面板左侧大图：视频条目优先播放 media_url，其余用本地/CDN 候选链渲染 */
+function DetailMediaCover({ prompt, videoRef }: { prompt: PromptItem; videoRef?: React.Ref<HTMLVideoElement> }) {
+  const mediaUrl = videoMediaUrl(prompt);
+  const url = mediaUrl || resolvePreviewUrl(prompt);
+  const isVideo = mediaUrl ? !looksLikeImageUrl(mediaUrl) : !!url && looksLikeVideoUrl(url);
+  return <MediaCover prompt={prompt} url={url} isVideo={isVideo} videoRef={videoRef} opts={{ fill: true, controls: true, panel: true }} />;
 }
 
 function looksLikeJson(text: string): boolean {
@@ -539,6 +569,9 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState<CatalogSyncProgress | null>(null);
   const [detailPrompt, setDetailPrompt] = useState<PromptItem | null>(null);
+  /** 删除确认目标（Tauri WebView 不支持 window.confirm，用应用内弹层） */
+  const [deleteTarget, setDeleteTarget] = useState<PromptItem | null>(null);
+  const detailVideoRef = useRef<HTMLVideoElement | null>(null);
   /** 详情是否仍在加载完整正文（骨架屏用） */
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailDraft, setDetailDraft] = useState('');
@@ -568,8 +601,8 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
 
   const refreshTotalCount = useCallback(async () => {
     try {
-      const all = await api.listPrompts();
-      onPromptCountChange?.(all.length);
+      const [all, videos] = await Promise.all([api.listPrompts(), api.listVideoPrompts()]);
+      onPromptCountChange?.(all.length + videos.length);
     } catch (e) {
       console.error(e);
     }
@@ -578,12 +611,16 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   const loadPrompts = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await api.listPrompts(
-        search.trim() || undefined,
-        category || undefined,
-        starredOnly,
-        true
-      );
+      const list: PromptItem[] =
+        category === 'video'
+          ? await api.listVideoPrompts(search.trim() || undefined, starredOnly, true)
+          : await api.listPrompts(
+              search.trim() || undefined,
+              category || undefined,
+              starredOnly,
+              // 文本卡正文直接展示在卡片里，不能走 lite 清空
+              category !== 'text'
+            );
       setPrompts(list);
       await refreshTotalCount();
       setDetailPrompt((prev) => {
@@ -647,8 +684,25 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
       imagesCached: 0,
     });
     try {
-      const result = await api.syncGptImageCatalog();
-      showToast(result.message);
+      const syncImage = async () => {
+        try {
+          return (await api.syncGptImageCatalog()).message;
+        } catch (e) {
+          console.error(e);
+          return t('prompt.syncFailed');
+        }
+      };
+      const syncVideo = async () => {
+        try {
+          return (await api.syncSeedanceCatalog()).message;
+        } catch (e) {
+          console.error(e);
+          return t('prompt.videoSyncFailed');
+        }
+      };
+      // 当前 Tab 的目录优先同步，生视频 Tab 不必先等图片目录跑完
+      const results = category === 'video' ? [await syncVideo(), await syncImage()] : [await syncImage(), await syncVideo()];
+      showToast(results.join('；'));
       await loadPrompts();
       void warmLocalPreviews();
     } catch (e) {
@@ -658,7 +712,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
       setSyncing(false);
       setSyncProgress(null);
     }
-  }, [loadPrompts, showToast, t, warmLocalPreviews]);
+  }, [category, loadPrompts, showToast, t, warmLocalPreviews]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -745,14 +799,17 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   }, [prompts]);
 
   const openDetail = useCallback(async (prompt: PromptItem) => {
-    // 立刻打开：lite 列表缺少完整正文时用骨架占位，getPrompt 完成后回填
-    const needFullBody = !prompt.content && !prompt.prompt_preview;
+    // 立刻打开：lite 列表缺少完整正文时用骨架占位，getPrompt 完成后回填。
+    // 正文为空就必须拉全文：prompt_preview 只是摘要，不能当提示词正文用
+    const needFullBody = !prompt.content;
     setDetailPrompt(prompt);
-    setDetailDraft(prompt.content || prompt.prompt_preview || '');
+    setDetailDraft(prompt.content || '');
     if (!needFullBody) return;
     setDetailLoading(true);
     try {
-      const full = await api.getPrompt(prompt.id);
+      const full = isVideoItem(prompt)
+        ? await api.getVideoPrompt(prompt.id)
+        : await api.getPrompt(prompt.id);
       setDetailPrompt(full);
       setDetailDraft(full.content);
       setPrompts((prev) => prev.map((p) => (p.id === full.id ? { ...p, ...full, content: '' } : p)));
@@ -769,6 +826,53 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     setDetailLoading(false);
   }, []);
 
+  /** ESC 关闭详情弹层（删除确认弹层打开时让位给它） */
+  useEffect(() => {
+    if (!detailPrompt || deleteTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeDetail();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailPrompt, deleteTarget, closeDetail]);
+
+  /** ESC 关闭删除确认弹层 */
+  useEffect(() => {
+    if (!deleteTarget) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDeleteTarget(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [deleteTarget]);
+
+  /** 空格键播放/暂停详情视频；编辑弹层打开或焦点在可输入控件时不拦截 */
+  useEffect(() => {
+    if (!detailPrompt || editorOpen || variableModalOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'BUTTON' ||
+          target.tagName === 'VIDEO' ||
+          target.isContentEditable)
+      ) {
+        // VIDEO/BUTTON：浏览器原生空格行为已处理，勿重复触发
+        return;
+      }
+      const video = detailVideoRef.current;
+      if (!video) return;
+      e.preventDefault();
+      if (video.paused) void video.play().catch(() => {});
+      else video.pause();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [detailPrompt, editorOpen, variableModalOpen]);
+
   const caseNumber = (prompt: PromptItem): string | null => {
     const id = prompt.external_id?.match(/gpt-image-2:(\d+)/)?.[1];
     return id || null;
@@ -776,7 +880,8 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
 
   const openCreate = () => {
     setEditingId(null);
-    setForm(EMPTY_FORM);
+    // 从「生视频」Tab 新建时默认落在视频表
+    setForm({ ...EMPTY_FORM, category: category || 'image' });
     setTagsInput('');
     setEditorOpen(true);
   };
@@ -823,11 +928,17 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
         preview_local: form.preview_local,
       };
       if (editingId) {
-        const updated = await api.updatePrompt(editingId, payload);
+        const updated =
+          payload.category === 'video'
+            ? await api.updateVideoPrompt(editingId, payload)
+            : await api.updatePrompt(editingId, payload);
         setPrompts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
         setDetailPrompt((prev) => (prev?.id === updated.id ? updated : prev));
       } else {
-        const created = await api.createPrompt(payload);
+        const created =
+          payload.category === 'video'
+            ? await api.createVideoPrompt(payload)
+            : await api.createPrompt(payload);
         setPrompts((prev) => [created, ...prev]);
         await refreshTotalCount();
       }
@@ -999,13 +1110,15 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     return () => window.removeEventListener('paste', onPaste);
   }, [editorOpen, formIsMedia, showToast, t]);
 
-  const handleDelete = async (id: number) => {
-    if (!window.confirm(t('prompt.confirmDelete'))) return;
+  const handleDelete = async (prompt: PromptItem) => {
     try {
-      await api.deletePrompt(id);
-      setPrompts((prev) => prev.filter((p) => p.id !== id));
+      const deleted = isVideoItem(prompt)
+        ? await api.deleteVideoPrompt(prompt.id)
+        : await api.deletePrompt(prompt.id);
+      if (!deleted) return;
+      setPrompts((prev) => prev.filter((p) => p.id !== prompt.id));
       await refreshTotalCount();
-      if (detailPrompt?.id === id) closeDetail();
+      if (detailPrompt?.id === prompt.id) closeDetail();
       showToast(t('prompt.deleted'));
     } catch (e) {
       console.error(e);
@@ -1013,9 +1126,17 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     }
   };
 
+  const confirmDelete = async () => {
+    const target = deleteTarget;
+    setDeleteTarget(null);
+    if (target) await handleDelete(target);
+  };
+
   const handleToggleStar = useCallback(async (prompt: PromptItem) => {
     try {
-      const starred = await api.togglePromptStar(prompt.id);
+      const starred = isVideoItem(prompt)
+        ? await api.toggleVideoPromptStar(prompt.id)
+        : await api.togglePromptStar(prompt.id);
       const patch = (p: PromptItem) =>
         p.id === prompt.id ? { ...p, is_starred: starred } : p;
       setPrompts((prev) => prev.map(patch));
@@ -1028,7 +1149,11 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   const copyPromptContent = useCallback(async (prompt: PromptItem, content: string) => {
     try {
       await navigator.clipboard.writeText(content);
-      await api.recordPromptUse(prompt.id);
+      if (isVideoItem(prompt)) {
+        await api.recordVideoPromptUse(prompt.id);
+      } else {
+        await api.recordPromptUse(prompt.id);
+      }
       const bump = (p: PromptItem) =>
         p.id === prompt.id
           ? { ...p, use_count: p.use_count + 1, last_used_at: new Date().toISOString() }
@@ -1047,19 +1172,35 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   }, [showToast, t]);
 
   const handleCopy = useCallback(async (prompt: PromptItem) => {
-    const vars = extractVariables(prompt.content);
+    let full = prompt;
+    if (!full.content) {
+      // lite 列表正文为空：先取全文再复制
+      try {
+        full = isVideoItem(prompt)
+          ? await api.getVideoPrompt(prompt.id)
+          : await api.getPrompt(prompt.id);
+        setPrompts((prev) =>
+          prev.map((p) => (p.id === full.id ? { ...p, content: full.content } : p))
+        );
+      } catch (e) {
+        console.error(e);
+        showToast(t('prompt.copyFailed'));
+        return;
+      }
+    }
+    const vars = extractVariables(full.content);
     if (vars.length > 0) {
       const initial: Record<string, string> = {};
       vars.forEach((v) => {
         initial[v] = '';
       });
       setVariableValues(initial);
-      setVariablePrompt(prompt);
+      setVariablePrompt(full);
       setVariableModalOpen(true);
       return;
     }
-    await copyPromptContent(prompt, prompt.content);
-  }, [copyPromptContent]);
+    await copyPromptContent(full, full.content);
+  }, [copyPromptContent, showToast, t]);
 
   const confirmVariableCopy = async () => {
     if (!variablePrompt) return;
@@ -1069,8 +1210,9 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     await copyPromptContent(variablePrompt, content);
   };
 
-  const renderCardActions = (prompt: PromptItem, opts?: { showView?: boolean }) => (
+  const renderCardActions = (prompt: PromptItem, opts?: { showView?: boolean; hideStar?: boolean }) => (
     <div className="flex items-center gap-1.5 pt-1">
+      {opts?.hideStar !== true && (
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -1085,6 +1227,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
       >
         <Star className={`h-3.5 w-3.5 ${prompt.is_starred ? 'fill-amber-400' : ''}`} />
       </button>
+      )}
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -1127,7 +1270,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
       <button
         onClick={(e) => {
           e.stopPropagation();
-          void handleDelete(prompt.id);
+          setDeleteTarget(prompt);
         }}
         className="p-1.5 rounded-lg border theme-border theme-bg-sub text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
       >
@@ -1136,48 +1279,57 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
     </div>
   );
 
-  /** 文本卡：正文直接展示 */
-  const renderTextCard = (prompt: PromptItem) => (
-    <article
-      key={prompt.id}
-      className="mb-4 break-inside-avoid theme-bg-card border theme-border rounded-2xl overflow-hidden hover:border-violet-500/35 transition-colors"
-    >
-      <div className="p-4 space-y-2.5">
-        <div className="flex items-center gap-2 text-[11px]">
-          <span className="font-semibold tracking-wide text-emerald-500 uppercase">
-            {t(CATEGORY_KEYS[prompt.category] || 'prompt.cat.coding')}
-          </span>
-          {prompt.source_note && (
-            <span className="theme-text-sub truncate">@{prompt.source_note}</span>
-          )}
-          {prompt.is_starred && (
-            <Star className="h-3 w-3 fill-amber-400 text-amber-400 ml-auto flex-shrink-0" />
-          )}
-        </div>
-
-        <h2 className="text-[15px] font-bold theme-text-main leading-snug">{prompt.title}</h2>
-
-        <pre className="whitespace-pre-wrap break-words text-[13px] leading-relaxed theme-text-main font-sans">
-          {prompt.content}
-        </pre>
-
-        {prompt.tags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {prompt.tags.map((tag) => (
-              <span
-                key={tag}
-                className="px-2 py-0.5 rounded-md theme-bg-tag theme-text-sub text-[10px]"
-              >
-                {tag}
-              </span>
-            ))}
+  /** 文本卡：正文直接展示；grid 变体用于「文本」Tab 三列等高布局 */
+  const renderTextCard = (prompt: PromptItem, variant?: 'grid') => {
+    const grid = variant === 'grid';
+    return (
+      <article
+        key={prompt.id}
+        className={`break-inside-avoid theme-bg-card border theme-border rounded-2xl overflow-hidden hover:border-violet-500/35 transition-colors ${
+          grid ? 'h-full flex flex-col' : 'mb-4'
+        }`}
+      >
+        <div className={`p-4 space-y-2.5 ${grid ? 'flex-1 min-h-0 flex flex-col' : ''}`}>
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className="font-semibold tracking-wide text-emerald-500 uppercase">
+              {t(CATEGORY_KEYS[prompt.category] || 'prompt.cat.coding')}
+            </span>
+            {prompt.source_note && (
+              <span className="theme-text-sub truncate">@{prompt.source_note}</span>
+            )}
+            {prompt.is_starred && (
+              <Star className="h-3 w-3 fill-amber-400 text-amber-400 ml-auto flex-shrink-0" />
+            )}
           </div>
-        )}
 
-        {renderCardActions(prompt)}
-      </div>
-    </article>
-  );
+          <h2 className="text-[15px] font-bold theme-text-main leading-snug">{prompt.title}</h2>
+
+          <pre
+            className={`whitespace-pre-wrap break-words text-[13px] leading-relaxed theme-text-main font-sans ${
+              grid ? 'flex-1 min-h-0 max-h-[300px] overflow-y-auto' : ''
+            }`}
+          >
+            {prompt.content}
+          </pre>
+
+          {prompt.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {prompt.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="px-2 py-0.5 rounded-md theme-bg-tag theme-text-sub text-[10px]"
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {renderCardActions(prompt, grid ? { showView: false, hideStar: true } : undefined)}
+        </div>
+      </article>
+    );
+  };
 
   /** 会话内测量的封面比例（仅 DB 尚无尺寸的记录）；数据库是权威来源 */
   const measuredRef = useRef<Map<number, number>>(new Map());
@@ -1192,6 +1344,14 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
   useEffect(() => {
     promptsRef.current = prompts;
   }, [prompts]);
+
+  /** prompts 与 video_prompts 的 id 是独立序列；切 Tab 清掉按 id 的渲染缓存，避免跨表串数据 */
+  useEffect(() => {
+    measuredRef.current.clear();
+    pendingSizeRef.current.clear();
+    cardHeightsRef.current.clear();
+    assignRef.current = null;
+  }, [category]);
 
   const handleRatio = useCallback((id: number, width: number, height: number) => {
     const ratio = width / height;
@@ -1223,7 +1383,12 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
       const batch = Array.from(pendingSizeRef.current.entries());
       pendingSizeRef.current.clear();
       for (const [id, [w, h]] of batch) {
-        void api.updatePromptPreviewSize(id, w, h).catch(() => {
+        const p = promptsRef.current.find((x) => x.id === id);
+        const update =
+          p && isVideoItem(p)
+            ? api.updateVideoPromptPreviewSize(id, w, h)
+            : api.updatePromptPreviewSize(id, w, h);
+        void update.catch(() => {
           /* ignore */
         });
       }
@@ -1324,7 +1489,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
                   onClick={() => void handleSyncCatalog()}
                   disabled={syncing}
                   className="flex items-center gap-1 px-2.5 py-1.5 text-xs rounded-lg border theme-bg-card theme-border theme-text-muted hover:theme-text-main transition-colors cursor-pointer disabled:opacity-60"
-                  title={t('prompt.attribution')}
+                  title={t('prompt.syncHint')}
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
                   {syncing ? t('prompt.syncing') : t('prompt.sync')}
@@ -1383,7 +1548,8 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
               })}
             </div>
 
-            {sceneOptions.length > 0 && (category === '' || category === 'image') && (
+            {sceneOptions.length > 0 &&
+              (category === '' || category === 'image' || category === 'video') && (
               <div className="flex items-center gap-2 overflow-x-auto pb-0.5 -mx-1 px-1 scrollbar-none">
                 <button
                   onClick={() => setScene('')}
@@ -1409,6 +1575,19 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
                   </button>
                 ))}
               </div>
+            )}
+
+            {(category === 'image' || category === 'video') && (
+              <p className="text-[11px] theme-text-sub">
+                {t('prompt.creditPrefix')}
+                <button
+                  onClick={() => api.openUrl(CATALOG_REPOS[category].url)}
+                  className="text-violet-500 hover:underline cursor-pointer"
+                >
+                  {CATALOG_REPOS[category].name}
+                </button>
+                {t('prompt.creditSuffix')}
+              </p>
             )}
           </div>
         </header>
@@ -1462,7 +1641,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
                 <BookMarked className="h-10 w-10 text-violet-500/40 mx-auto mb-2" />
                 <p className="text-sm theme-text-muted">{t('prompt.feedEmpty')}</p>
                 <p className="text-xs theme-text-sub leading-relaxed max-w-sm mx-auto">
-                  {t('prompt.feedEmptyHint')}
+                  {category === 'video' ? t('prompt.feedEmptyHintVideo') : t('prompt.feedEmptyHint')}
                 </p>
                 <div className="flex items-center justify-center gap-3 mt-2">
                   <button
@@ -1478,6 +1657,10 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
                     {t('prompt.addFirst')}
                   </button>
                 </div>
+              </div>
+            ) : category === 'text' ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-stretch">
+                {visiblePrompts.map((prompt) => renderTextCard(prompt, 'grid'))}
               </div>
             ) : (
               <div className="flex items-start gap-4">
@@ -1537,6 +1720,36 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
         </button>
       )}
 
+      {/* 删除确认弹层：Tauri WebView 不支持 window.confirm */}
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setDeleteTarget(null)}
+        >
+          <div
+            className="w-full max-w-sm theme-bg-card border theme-border rounded-2xl shadow-2xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm theme-text-main leading-relaxed">{t('prompt.confirmDelete')}</p>
+            <p className="text-xs theme-text-sub truncate">{deleteTarget.title}</p>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                className="px-3.5 py-1.5 rounded-lg border theme-border theme-bg-sub theme-text-muted hover:theme-text-main text-xs transition-colors cursor-pointer"
+              >
+                {t('prompt.cancel')}
+              </button>
+              <button
+                onClick={() => void confirmDelete()}
+                className="px-3.5 py-1.5 rounded-lg border border-red-500/40 bg-red-500/15 text-red-500 text-xs font-medium hover:bg-red-500/25 transition-colors cursor-pointer"
+              >
+                {t('prompt.delete')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 详情：官网风格左右分栏 */}
       {detailPrompt && (
         <div
@@ -1550,7 +1763,7 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
             {/* 左侧预览 */}
             {isMediaCategory(detailPrompt.category) && (
               <div className="md:w-[44%] flex-shrink-0 bg-black/90 flex items-center justify-center max-h-[38vh] md:max-h-none md:min-h-[560px] overflow-hidden">
-                <DetailMediaCover prompt={detailPrompt} />
+                <DetailMediaCover prompt={detailPrompt} videoRef={detailVideoRef} />
               </div>
             )}
 
@@ -1737,7 +1950,9 @@ export const PromptLibraryView: React.FC<Props> = ({ onPromptCountChange }) => {
                 )}
 
                 {detailPrompt.origin?.startsWith('catalog:') && (
-                  <p className="text-[10px] theme-text-sub pt-1">{t('prompt.attribution')}</p>
+                  <p className="text-[10px] theme-text-sub pt-1">
+                    {t(catalogAttributionKey(detailPrompt.origin))}
+                  </p>
                 )}
               </div>
             </div>

@@ -21,6 +21,7 @@ import type {
   AppConfig,
   PromptItem,
   PromptInput,
+  VideoPromptItem,
   CatalogSyncResult,
   IdeAppStatus,
   AgentSourceInfo,
@@ -270,9 +271,15 @@ export const api = {
     return { generated_at: new Date().toISOString(), providers: [] };
   },
 
-  async resizeQuotaPill(width: number, height: number): Promise<void> {
+  async resizeQuotaPill(height: number): Promise<void> {
     if (isTauri()) {
-      await invoke('quota_pill_resize', { width, height });
+      await invoke('quota_pill_resize', { height });
+    }
+  },
+
+  async setQuotaPillHoverState(collapsed: boolean, popoverOpen: boolean): Promise<void> {
+    if (isTauri()) {
+      await invoke('quota_pill_set_hover_state', { collapsed, popoverOpen });
     }
   },
 
@@ -280,6 +287,13 @@ export const api = {
     if (isTauri()) {
       await invoke('quota_pill_show_menu');
     }
+  },
+
+  async quotaPillLayout(): Promise<{ mirror: boolean; docked: boolean }> {
+    if (isTauri()) {
+      return await invoke<{ mirror: boolean; docked: boolean }>('quota_pill_layout');
+    }
+    return { mirror: false, docked: false };
   },
 
   async showQuotaPill(): Promise<void> {
@@ -756,6 +770,81 @@ export const api = {
     return 0;
   },
 
+  async listVideoPrompts(
+    search?: string,
+    starredOnly?: boolean,
+    lite = true
+  ): Promise<VideoPromptItem[]> {
+    if (isTauri()) {
+      return await invoke<VideoPromptItem[]>('list_video_prompts_cmd', {
+        search: search || null,
+        starredOnly: !!starredOnly,
+        lite,
+      });
+    }
+    return [];
+  },
+
+  async getVideoPrompt(id: number): Promise<VideoPromptItem> {
+    if (isTauri()) {
+      return await invoke<VideoPromptItem>('get_video_prompt_cmd', { id });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async createVideoPrompt(input: PromptInput): Promise<VideoPromptItem> {
+    if (isTauri()) {
+      return await invoke<VideoPromptItem>('create_video_prompt_cmd', { input });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async updateVideoPrompt(id: number, input: PromptInput): Promise<VideoPromptItem> {
+    if (isTauri()) {
+      return await invoke<VideoPromptItem>('update_video_prompt_cmd', { id, input });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async deleteVideoPrompt(id: number): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('delete_video_prompt_cmd', { id });
+    }
+    return false;
+  },
+
+  async toggleVideoPromptStar(id: number): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('toggle_video_prompt_star_cmd', { id });
+    }
+    return false;
+  },
+
+  async recordVideoPromptUse(id: number): Promise<VideoPromptItem> {
+    if (isTauri()) {
+      return await invoke<VideoPromptItem>('record_video_prompt_use_cmd', { id });
+    }
+    throw new Error('仅在客户端环境下支持提示词库');
+  },
+
+  async updateVideoPromptPreviewSize(
+    id: number,
+    width: number,
+    height: number
+  ): Promise<boolean> {
+    if (isTauri()) {
+      return await invoke<boolean>('update_video_prompt_preview_size_cmd', { id, width, height });
+    }
+    return false;
+  },
+
+  async syncSeedanceCatalog(): Promise<CatalogSyncResult> {
+    if (isTauri()) {
+      return await invoke<CatalogSyncResult>('sync_seedance_catalog_cmd');
+    }
+    throw new Error('仅在客户端环境下支持目录同步');
+  },
+
   services: {
     list: () => invoke<import('../hooks/useLocalServices').ServiceMeta[]>('service_list'),
     status: (id?: string) =>
@@ -777,6 +866,8 @@ export const api = {
       invoke<import('../hooks/useLocalServices').InstalledIdes>('service_detect_ides'),
     tailLog: (id: string, lines?: number) =>
       invoke<string>('service_tail_log', { id, lines: lines ?? null }),
+    clearLog: (id: string) =>
+      invoke<import('../hooks/useLocalServices').ServiceActionResult>('service_clear_log', { id }),
     pickFolder: () => invoke<string | null>('service_pick_folder'),
     scanProject: (projectDir: string) =>
       invoke<import('../types/serviceCandidate').CandidateConfig>('service_scan_project', {

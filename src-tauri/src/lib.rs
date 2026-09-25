@@ -9,6 +9,7 @@ pub mod prompt_catalog;
 pub mod quota;
 pub mod quota_pill;
 pub mod quota_tray;
+pub mod seedance_catalog;
 pub mod service_config;
 pub mod service_discovery;
 pub mod service_http;
@@ -26,6 +27,9 @@ use db::{
     save_conversation_ai_summary, save_workspace_fine_blocks, save_workspace_module_blocks,
     save_workspace_report, search_global_messages, set_conversation_ai_status, toggle_prompt_star,
     toggle_star_session, update_conversation_ai_title, update_prompt, update_prompt_preview_size,
+    create_video_prompt, delete_video_prompt, get_video_prompt, list_video_prompts_ex,
+    record_video_prompt_use, toggle_video_prompt_star, update_video_prompt,
+    update_video_prompt_preview_size, VideoPromptItem,
     AnalysisUserMessage,
     ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState, MessageItem,
     PromptInput, PromptItem, SearchResultItem, UsageStatsPayload, WorkspaceDetailStats,
@@ -311,6 +315,100 @@ async fn count_uncached_prompt_previews_cmd() -> Result<usize, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let conn = db::open_read_connection().map_err(|e| e.to_string())?;
         prompt_catalog::count_uncached_previews(&conn)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_video_prompts_cmd(
+    search: Option<String>,
+    starred_only: Option<bool>,
+    lite: Option<bool>,
+) -> Result<Vec<VideoPromptItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        list_video_prompts_ex(
+            &conn,
+            search.as_deref(),
+            starred_only.unwrap_or(false),
+            lite.unwrap_or(true),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_video_prompt_cmd(id: i64) -> Result<VideoPromptItem, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        get_video_prompt(&conn, id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn create_video_prompt_cmd(
+    input: PromptInput,
+    state: State<'_, DbState>,
+) -> Result<VideoPromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    create_video_prompt(&conn, &input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_video_prompt_cmd(
+    id: i64,
+    input: PromptInput,
+    state: State<'_, DbState>,
+) -> Result<VideoPromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    update_video_prompt(&conn, id, &input).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_video_prompt_cmd(id: i64, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    delete_video_prompt(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn toggle_video_prompt_star_cmd(id: i64, state: State<'_, DbState>) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    toggle_video_prompt_star(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn record_video_prompt_use_cmd(id: i64, state: State<'_, DbState>) -> Result<VideoPromptItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    record_video_prompt_use(&conn, id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_video_prompt_preview_size_cmd(
+    id: i64,
+    width: i64,
+    height: i64,
+    state: State<'_, DbState>,
+) -> Result<bool, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    update_video_prompt_preview_size(&conn, id, width, height).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn sync_seedance_catalog_cmd(
+    app_handle: tauri::AppHandle,
+) -> Result<prompt_catalog::CatalogSyncResult, String> {
+    let handle = app_handle.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_write_connection().map_err(|e| e.to_string())?;
+        let progress = Box::new(move |p: prompt_catalog::CatalogSyncProgress| {
+            let _ = handle.emit("prompt-catalog-sync-progress", p);
+        });
+        seedance_catalog::sync_seedance_catalog_with_progress(&conn, Some(progress))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1610,6 +1708,15 @@ pub fn run() {
             cache_prompt_previews_cmd,
             warm_prompt_preview_cache_cmd,
             count_uncached_prompt_previews_cmd,
+            list_video_prompts_cmd,
+            get_video_prompt_cmd,
+            create_video_prompt_cmd,
+            update_video_prompt_cmd,
+            delete_video_prompt_cmd,
+            toggle_video_prompt_star_cmd,
+            record_video_prompt_use_cmd,
+            update_video_prompt_preview_size_cmd,
+            sync_seedance_catalog_cmd,
             get_workspace_detail,
             list_workspaces,
             merge_workspace_cmd,
@@ -1630,6 +1737,8 @@ pub fn run() {
             quota_pill::quota_pill_resize,
             quota_pill::quota_pill_show_menu,
             quota_pill::quota_pill_show,
+            quota_pill::quota_pill_layout,
+            quota_pill::quota_pill_set_hover_state,
             git_board::get_git_board,
             git_board::get_git_workspace_entry,
             git_board::get_git_commits,
@@ -1680,6 +1789,7 @@ pub fn run() {
             service_manager::service_open_in_ide,
             service_manager::service_detect_ides,
             service_manager::service_tail_log,
+            service_manager::service_clear_log,
             service_manager::service_pick_folder,
             service_manager::service_scan_project,
             service_manager::service_probe_candidate,

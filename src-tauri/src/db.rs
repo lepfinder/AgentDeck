@@ -465,6 +465,9 @@ pub struct WorkspaceDetailStats {
     pub active_days: i64,
     pub peak_day: Option<String>,
     pub peak_count: i64,
+    /// 预估 token：该项目全部会话用量四桶合计（与统计页口径一致）
+    pub estimated_tokens: i64,
+    pub usage_requests: i64,
     pub heatmap_cells: Vec<HeatmapCell>,
     pub fine_blocks: Vec<WorkspaceFineBlock>,
     pub module_blocks: Vec<WorkspaceModuleBlock>,
@@ -776,6 +779,48 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_prompts_starred ON prompts(is_starred);
         CREATE INDEX IF NOT EXISTS idx_prompts_updated ON prompts(updated_at);
 
+        -- 生视频提示词库（Seedance 目录 + 用户自建），与 prompts 分表
+        CREATE TABLE IF NOT EXISTS video_prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            source_url TEXT,
+            source_note TEXT,
+            notes TEXT,
+            preview_url TEXT,
+            preview_local TEXT,
+            origin TEXT NOT NULL DEFAULT 'user',
+            external_id TEXT,
+            genre TEXT,
+            styles_json TEXT NOT NULL DEFAULT '[]',
+            scenes_json TEXT NOT NULL DEFAULT '[]',
+            featured INTEGER NOT NULL DEFAULT 0,
+            github_url TEXT,
+            prompt_preview TEXT,
+            content_hash TEXT,
+            preview_width INTEGER,
+            preview_height INTEGER,
+            is_starred INTEGER NOT NULL DEFAULT 0,
+            use_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_used_at TEXT,
+            slug TEXT,
+            title_en TEXT,
+            summary TEXT,
+            models_json TEXT NOT NULL DEFAULT '[]',
+            media_url TEXT,
+            goodcase_url TEXT,
+            heat_score INTEGER,
+            stability_score INTEGER,
+            evidence_level TEXT,
+            source_published_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_video_prompts_starred ON video_prompts(is_starred);
+        CREATE INDEX IF NOT EXISTS idx_video_prompts_updated ON video_prompts(updated_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_video_prompts_external_id ON video_prompts(external_id) WHERE external_id IS NOT NULL AND external_id != '';
+
         CREATE TABLE IF NOT EXISTS llm_call_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -881,6 +926,36 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         "UPDATE prompts SET category = 'text' WHERE category IN ('coding','research','writing','product','agent','persona','meta')",
         [],
     );
+
+    // 历史 category=video 记录一次性迁入 video_prompts（迁移后 prompts 表不再有 video 行，幂等）
+    let legacy_video_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM prompts WHERE category = 'video'", [], |r| r.get(0))
+        .unwrap_or(0);
+    if legacy_video_rows > 0 {
+        let migrated = conn
+            .execute(
+                r#"
+                INSERT INTO video_prompts (
+                    title, content, tags_json, source_url, source_note, notes,
+                    preview_url, preview_local, origin, external_id, genre, styles_json, scenes_json,
+                    featured, github_url, prompt_preview, content_hash,
+                    preview_width, preview_height, is_starred, use_count,
+                    created_at, updated_at, last_used_at
+                )
+                SELECT
+                    title, content, tags_json, source_url, source_note, notes,
+                    preview_url, preview_local, origin,
+                    NULLIF(external_id, ''), genre, styles_json, scenes_json,
+                    featured, github_url, prompt_preview, content_hash,
+                    preview_width, preview_height, is_starred, use_count,
+                    created_at, updated_at, last_used_at
+                FROM prompts WHERE category = 'video'
+                "#,
+                [],
+            )
+            .and_then(|_| conn.execute("DELETE FROM prompts WHERE category = 'video'", []));
+        let _ = migrated;
+    }
 
     let _ = conn.execute(
         "ALTER TABLE workspace_blocks_fine ADD COLUMN created_at TEXT",
@@ -3211,6 +3286,16 @@ pub fn fetch_workspace_detail_stats(
 
     let artifacts = get_workspace_artifacts(conn, workspace_path).unwrap_or_default();
 
+    // 预估 token：该项目会话的用量四桶合计与请求次数
+    let (estimated_tokens, usage_requests): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(cache_read_tokens, 0) \
+             + COALESCE(cache_write_tokens, 0) + COALESCE(output_tokens, 0)), 0), COUNT(*) \
+         FROM usage_records u JOIN conversations c ON c.id = u.conversation_id \
+         WHERE c.workspace_path = ?1",
+        params![workspace_path],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
     Ok(WorkspaceDetailStats {
         workspace_path: workspace_path.to_string(),
         workspace_short: ws_short,
@@ -3233,6 +3318,8 @@ pub fn fetch_workspace_detail_stats(
         active_days,
         peak_day,
         peak_count,
+        estimated_tokens,
+        usage_requests,
         heatmap_cells,
         fine_blocks,
         module_blocks,
@@ -3913,6 +4000,261 @@ pub fn record_prompt_use(conn: &Connection, id: i64) -> Result<PromptItem> {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
     get_prompt(conn, id)
+}
+
+/// 生视频提示词（video_prompts 表）。base 与 PromptItem 序列化形状一致（category 固定 video），
+/// 前端 Feed 组件可直接复用；其余字段为 Seedance 目录特有。
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoPromptItem {
+    #[serde(flatten)]
+    pub base: PromptItem,
+    pub slug: Option<String>,
+    pub title_en: Option<String>,
+    pub summary: Option<String>,
+    pub models: Vec<String>,
+    pub media_url: Option<String>,
+    pub goodcase_url: Option<String>,
+    pub heat_score: Option<i64>,
+    pub stability_score: Option<i64>,
+    pub evidence_level: Option<String>,
+    pub source_published_at: Option<String>,
+}
+
+const VIDEO_PROMPT_SELECT: &str = r#"
+    SELECT id, title, content, tags_json, source_url, source_note, notes,
+           preview_url, preview_local, origin, external_id, genre, styles_json, scenes_json,
+           featured, github_url, prompt_preview, content_hash,
+           preview_width, preview_height,
+           is_starred, use_count, created_at, updated_at, last_used_at,
+           slug, title_en, summary, models_json, media_url, goodcase_url,
+           heat_score, stability_score, evidence_level, source_published_at
+    FROM video_prompts
+"#;
+
+fn row_to_video_prompt_item(row: &rusqlite::Row<'_>) -> Result<VideoPromptItem> {
+    Ok(VideoPromptItem {
+        base: PromptItem {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            content: row.get(2)?,
+            category: "video".to_string(),
+            tags: parse_json_str_list(&row.get::<_, String>(3)?),
+            source_url: row.get(4)?,
+            source_note: row.get(5)?,
+            notes: row.get(6)?,
+            preview_url: row.get(7)?,
+            preview_local: row.get(8)?,
+            origin: row.get::<_, Option<String>>(9)?.unwrap_or_else(|| "user".into()),
+            external_id: row.get(10)?,
+            genre: row.get(11)?,
+            styles: parse_json_str_list(&row.get::<_, String>(12)?),
+            scenes: parse_json_str_list(&row.get::<_, String>(13)?),
+            featured: row.get::<_, i64>(14)? != 0,
+            github_url: row.get(15)?,
+            prompt_preview: row.get(16)?,
+            content_hash: row.get(17)?,
+            preview_width: row.get(18)?,
+            preview_height: row.get(19)?,
+            is_starred: row.get::<_, i64>(20)? != 0,
+            use_count: row.get(21)?,
+            created_at: row.get(22)?,
+            updated_at: row.get(23)?,
+            last_used_at: row.get(24)?,
+        },
+        slug: row.get(25)?,
+        title_en: row.get(26)?,
+        summary: row.get(27)?,
+        models: parse_json_str_list(&row.get::<_, String>(28)?),
+        media_url: row.get(29)?,
+        goodcase_url: row.get(30)?,
+        heat_score: row.get(31)?,
+        stability_score: row.get(32)?,
+        evidence_level: row.get(33)?,
+        source_published_at: row.get(34)?,
+    })
+}
+
+/// lite=true 时清空正文，Feed 列表更轻；详情请用 get_video_prompt。
+pub fn list_video_prompts_ex(
+    conn: &Connection,
+    search: Option<&str>,
+    starred_only: bool,
+    lite: bool,
+) -> Result<Vec<VideoPromptItem>> {
+    let sql = format!(
+        r#"{VIDEO_PROMPT_SELECT}
+        WHERE (?1 IS NULL OR ?1 = '' OR title LIKE '%' || ?1 || '%' OR content LIKE '%' || ?1 || '%' OR tags_json LIKE '%' || ?1 || '%' OR genre LIKE '%' || ?1 || '%' OR scenes_json LIKE '%' || ?1 || '%' OR summary LIKE '%' || ?1 || '%')
+          AND (?2 = 0 OR is_starred = 1)
+        ORDER BY is_starred DESC, featured DESC, updated_at DESC, id DESC"#
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        params![search.unwrap_or(""), if starred_only { 1 } else { 0 }],
+        row_to_video_prompt_item,
+    )?;
+    let mut list = Vec::new();
+    for r in rows.flatten() {
+        let mut item = r;
+        if lite {
+            item.base.content = String::new();
+        }
+        list.push(item);
+    }
+    Ok(list)
+}
+
+pub fn get_video_prompt(conn: &Connection, id: i64) -> Result<VideoPromptItem> {
+    let sql = format!("{VIDEO_PROMPT_SELECT} WHERE id = ?1");
+    conn.query_row(&sql, params![id], row_to_video_prompt_item)
+}
+
+pub fn create_video_prompt(conn: &Connection, input: &PromptInput) -> Result<VideoPromptItem> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "title cannot be empty".into(),
+        ));
+    }
+    let now = Utc::now().to_rfc3339();
+    let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    let preview_local = input
+        .preview_local
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    conn.execute(
+        r#"
+        INSERT INTO video_prompts (
+            title, content, tags_json, source_url, source_note, notes,
+            preview_url, preview_local, origin, external_id, genre, styles_json, scenes_json,
+            featured, github_url, prompt_preview, content_hash,
+            is_starred, use_count, created_at, updated_at
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6,
+            ?7, ?8, 'user', NULL, NULL, '[]', '[]',
+            0, NULL, NULL, NULL,
+            ?9, 0, ?10, ?10
+        )
+        "#,
+        params![
+            title,
+            input.content,
+            tags_json,
+            input.source_url,
+            input.source_note,
+            input.notes,
+            input.preview_url,
+            preview_local,
+            if input.is_starred { 1 } else { 0 },
+            now,
+        ],
+    )?;
+    let id = conn.last_insert_rowid();
+    get_video_prompt(conn, id)
+}
+
+pub fn update_video_prompt(
+    conn: &Connection,
+    id: i64,
+    input: &PromptInput,
+) -> Result<VideoPromptItem> {
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "title cannot be empty".into(),
+        ));
+    }
+    let now = Utc::now().to_rfc3339();
+    let tags_json = serde_json::to_string(&input.tags).unwrap_or_else(|_| "[]".to_string());
+    // 用户编辑不碰 origin / external_id / catalog 同步字段；
+    // preview_local 仅在调用方显式提供时更新（None 保留，空串清除）
+    let changed = conn.execute(
+        r#"
+        UPDATE video_prompts SET
+            title = ?1,
+            content = ?2,
+            tags_json = ?3,
+            source_url = ?4,
+            source_note = ?5,
+            notes = ?6,
+            preview_url = ?7,
+            preview_local = CASE WHEN ?11 IS NULL THEN preview_local ELSE NULLIF(?11, '') END,
+            is_starred = ?8,
+            updated_at = ?9
+        WHERE id = ?10
+        "#,
+        params![
+            title,
+            input.content,
+            tags_json,
+            input.source_url,
+            input.source_note,
+            input.notes,
+            input.preview_url,
+            if input.is_starred { 1 } else { 0 },
+            now,
+            id,
+            input.preview_local.as_deref().map(str::trim),
+        ],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    get_video_prompt(conn, id)
+}
+
+pub fn delete_video_prompt(conn: &Connection, id: i64) -> Result<bool> {
+    let changed = conn.execute("DELETE FROM video_prompts WHERE id = ?1", params![id])?;
+    Ok(changed > 0)
+}
+
+pub fn toggle_video_prompt_star(conn: &Connection, id: i64) -> Result<bool> {
+    let now = Utc::now().to_rfc3339();
+    let current: i64 = conn.query_row(
+        "SELECT is_starred FROM video_prompts WHERE id = ?1",
+        params![id],
+        |r| r.get(0),
+    )?;
+    let next = if current != 0 { 0 } else { 1 };
+    conn.execute(
+        "UPDATE video_prompts SET is_starred = ?1, updated_at = ?2 WHERE id = ?3",
+        params![next, now, id],
+    )?;
+    Ok(next != 0)
+}
+
+pub fn record_video_prompt_use(conn: &Connection, id: i64) -> Result<VideoPromptItem> {
+    let now = Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE video_prompts SET use_count = use_count + 1, last_used_at = ?1, updated_at = ?1 WHERE id = ?2",
+        params![now, id],
+    )?;
+    if changed == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    get_video_prompt(conn, id)
+}
+
+/// 写回封面图原始宽高（渲染元数据），语义同 update_prompt_preview_size。
+pub fn update_video_prompt_preview_size(
+    conn: &Connection,
+    id: i64,
+    width: i64,
+    height: i64,
+) -> Result<bool> {
+    if width <= 0 || height <= 0 {
+        return Ok(false);
+    }
+    let changed = conn.execute(
+        r#"
+        UPDATE video_prompts
+        SET preview_width = ?1, preview_height = ?2
+        WHERE id = ?3
+          AND (preview_width IS NOT ?1 OR preview_height IS NOT ?2)
+        "#,
+        params![width, height, id],
+    )?;
+    Ok(changed > 0)
 }
 
 fn parse_beijing_time_str(s: &str) -> (u32, String) {

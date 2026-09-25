@@ -417,6 +417,8 @@ export interface WorkspaceDetailStats {
   active_days: number;
   peak_day?: string;
   peak_count: number;
+  estimated_tokens: number;
+  usage_requests: number;
   heatmap_cells: HeatmapCell[];
   fine_blocks: WorkspaceFineBlock[];
   module_blocks: WorkspaceModuleBlock[];
@@ -474,6 +476,20 @@ export interface PromptInput {
   preview_url?: string;
   preview_local?: string;
   is_starred: boolean;
+}
+
+/** 生视频提示词（video_prompts 表）：base 与 PromptItem 形状一致，category 恒为 video */
+export interface VideoPromptItem extends PromptItem {
+  slug?: string;
+  title_en?: string;
+  summary?: string;
+  models: string[];
+  media_url?: string;
+  goodcase_url?: string;
+  heat_score?: number;
+  stability_score?: number;
+  evidence_level?: string;
+  source_published_at?: string;
 }
 
 export interface CatalogSyncResult {
