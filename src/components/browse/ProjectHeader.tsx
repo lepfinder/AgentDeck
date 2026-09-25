@@ -76,7 +76,7 @@ export const ProjectHeader: React.FC<Props> = ({
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold tracking-tight theme-text-main truncate">
-            {projectDisplayTitle(workspacePath)}
+            {projectDisplayTitle(workspacePath) || t('nav.uncategorized')}
           </h1>
           <p
             className="text-xs theme-text-muted font-mono mt-0.5 break-all"

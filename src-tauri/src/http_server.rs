@@ -979,6 +979,8 @@ pub(crate) fn build_daily_summary(
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as source_app,
             m.role,
@@ -1255,6 +1257,8 @@ pub(crate) fn build_recent_activity(
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as source_app,
             m.role,

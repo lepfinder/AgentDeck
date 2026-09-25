@@ -167,6 +167,11 @@ pub fn collect_agent_sources(conn: &rusqlite::Connection) -> Vec<AgentSourceInfo
                 make_info(".qoder/tmp", "会话附件临时副本（图片等）"),
             ],
         ),
+        (
+            "grokbot",
+            "Grok Bot",
+            vec![make_info(".grokbot/chats_sync", "Bot 会话时间线导出 (JSONL)")],
+        ),
     ];
 
     agents
@@ -359,8 +364,8 @@ mod tests {
         .unwrap();
 
         let sources = collect_agent_sources(&conn);
-        // cursor / antigravity / claude / codex / hermes / workbuddy / mimo / windsurf / codebuddy / qoder
-        assert_eq!(sources.len(), 10);
+        // cursor / antigravity / claude / codex / hermes / workbuddy / mimo / windsurf / codebuddy / qoder / grokbot
+        assert_eq!(sources.len(), 11);
 
         let cursor_info = sources.iter().find(|s| s.id == "cursor").unwrap();
         assert_eq!(cursor_info.name, "Cursor");

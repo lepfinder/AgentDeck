@@ -1598,6 +1598,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as app,
             COUNT(*) as cnt
@@ -1641,6 +1643,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                 WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as app,
             SUM(message_count) as cnt
@@ -1917,6 +1921,8 @@ pub fn fetch_dashboard_stats(conn: &Connection) -> Result<DashboardStats> {
                         WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                         WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                         WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                        WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                         ELSE 'antigravity'
                     END as source_app,
                     c.workspace_path, c.message_count, c.user_message_count, c.updated_at,
@@ -2477,6 +2483,8 @@ pub fn fetch_conversations(
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -2497,7 +2505,7 @@ pub fn fetch_conversations(
         FROM conversations c
         LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE (?1 = 0 OR (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) > 0)
-          AND (?2 IS NULL OR ?2 = '' OR c.workspace_path = ?2)
+          AND (?2 IS NULL OR COALESCE(c.workspace_path, '') = ?2)
           AND (
             ?3 IS NULL OR ?3 = ''
             OR c.title LIKE '%' || ?3 || '%'
@@ -2511,7 +2519,7 @@ pub fn fetch_conversations(
     let rows = stmt.query_map(
         params![
             if starred_only { 1 } else { 0 },
-            workspace.unwrap_or(""),
+            workspace,
             search.unwrap_or("")
         ],
         |row| {
@@ -2807,6 +2815,8 @@ pub fn fetch_conversation_by_id(
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as source_app,
             c.title as source_title,
@@ -2940,6 +2950,8 @@ pub fn search_global_messages(
                    WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                    WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                    WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                   WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                    ELSE 'antigravity'
                END as source_app,
                c.workspace_path,
@@ -4310,6 +4322,8 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
                 WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                 WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                 WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                 ELSE 'antigravity'
             END as source_app,
             c.title as conv_title,
@@ -4461,6 +4475,8 @@ pub fn fetch_daily_timeline(conn: &Connection, date: &str) -> Result<DailyTimeli
                     WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
                     WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
                     WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                    WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+
                     ELSE 'antigravity'
                 END as source_app,
                 c.title as conv_title,
@@ -4843,6 +4859,33 @@ mod tests {
             params![cid, identity, occurred],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn test_fetch_conversations_workspace_filter() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO conversations (id, workspace_path, source_app, source_types, title) VALUES
+             ('c-real', '/Users/x/proj', 'claude', '[\"claude\"]', 'real'),
+             ('c-uncat', '', 'grokbot', '[\"grokbot\"]', 'uncat')",
+            [],
+        )
+        .unwrap();
+
+        // None = 全部；Some("") = 仅未分类
+        let all = fetch_conversations(&conn, None, None, false).unwrap();
+        assert_eq!(all.len(), 2);
+
+        let uncat = fetch_conversations(&conn, Some(""), None, false).unwrap();
+        assert_eq!(uncat.len(), 1);
+        assert_eq!(uncat[0].id, "c-uncat");
+        // 派生 CASE 必须认识 grokbot，否则兜底成 antigravity
+        assert_eq!(uncat[0].source_app, "grokbot");
+
+        let real = fetch_conversations(&conn, Some("/Users/x/proj"), None, false).unwrap();
+        assert_eq!(real.len(), 1);
+        assert_eq!(real[0].id, "c-real");
     }
 
     #[test]

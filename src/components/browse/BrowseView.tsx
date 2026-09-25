@@ -61,6 +61,9 @@ import {
 } from '../../lib/batchSummarizeConversations';
 import { getServiceLlmConfig } from '../../lib/serviceLlm';
 
+/// 未分类工作区的选中态哨兵；'' 保留给「回到驾驶舱」
+export const UNCATEGORIZED_WORKSPACE = '__uncategorized__';
+
 interface Props {
   selectedWorkspace: string;
   selectedConversationId: string;
@@ -249,14 +252,20 @@ export const BrowseView: React.FC<Props> = ({
     };
   }, []);
 
-  const selectedWorkspaceRef = useRef(selectedWorkspace);
   const convSearchRef = useRef(convSearch);
   const isStarredViewRef = useRef(isStarredView);
   const wsSearchRef = useRef(wsSearch);
 
+  // 未分类视图选中时折算回真实空路径；'' 表示未选中任何工作区
+  const isUncategorizedView = selectedWorkspace === UNCATEGORIZED_WORKSPACE;
+  const isWorkspaceView = selectedWorkspace !== '';
+  const activeWorkspace = isUncategorizedView ? '' : selectedWorkspace;
+  const convWorkspaceFilter = isWorkspaceView ? activeWorkspace : undefined;
+  const convWorkspaceFilterRef = useRef<string | undefined>(convWorkspaceFilter);
+
   useEffect(() => {
-    selectedWorkspaceRef.current = selectedWorkspace;
-  }, [selectedWorkspace]);
+    convWorkspaceFilterRef.current = convWorkspaceFilter;
+  }, [convWorkspaceFilter]);
 
   useEffect(() => {
     convSearchRef.current = convSearch;
@@ -331,7 +340,7 @@ export const BrowseView: React.FC<Props> = ({
       await loadWorkspaces();
       onRefreshStats?.();
       // 若正浏览源工作区，跳到合并后的目标
-      if (selectedWorkspace === result.source_path) {
+      if (isWorkspaceView && activeWorkspace === result.source_path) {
         onSelectWorkspace(result.target_path);
         onSelectConversation('');
       }
@@ -379,7 +388,7 @@ export const BrowseView: React.FC<Props> = ({
     loadingConvsRef.current = true;
     try {
       const list = await api.listConversations(
-        isStarredViewRef.current ? undefined : selectedWorkspaceRef.current,
+        isStarredViewRef.current ? undefined : convWorkspaceFilterRef.current,
         convSearchRef.current,
         isStarredViewRef.current
       );
@@ -649,6 +658,8 @@ export const BrowseView: React.FC<Props> = ({
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-violet-500/15 text-violet-500 border border-violet-500/30 rounded">CodeBuddy</span>;
       case 'qoder':
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-green-500/15 text-green-500 border border-green-500/30 rounded">Qoder</span>;
+      case 'grokbot':
+        return <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-red-500/15 text-red-500 border border-red-500/30 rounded">GrokBot</span>;
       default:
         return <span className="px-1.5 py-0.5 text-[10px] font-semibold theme-bg-sub theme-text-muted rounded">{source}</span>;
     }
@@ -674,9 +685,9 @@ export const BrowseView: React.FC<Props> = ({
               </>
             )}
           </div>
-          {selectedWorkspace && !isStarredView && (
+          {isWorkspaceView && !isUncategorizedView && !isStarredView && (
             <div className="flex items-center gap-1.5">
-              <OpenInIdeMenu workspacePath={selectedWorkspace} />
+              <OpenInIdeMenu workspacePath={activeWorkspace} />
             </div>
           )}
         </div>
@@ -909,12 +920,12 @@ export const BrowseView: React.FC<Props> = ({
               ? ws.workspace_path.split('/').slice(-1)[0] || ws.workspace_path
               : t('nav.uncategorized');
             const dirtyCnt = wsGitDirty[ws.workspace_path] ?? 0;
-            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && !isUsageStatsView && ws.workspace_path === selectedWorkspace;
+            const isActive = !isStarredView && !isPromptLibraryView && !isServicesView && !isUsageStatsView && isWorkspaceView && ws.workspace_path === activeWorkspace;
             return (
               <div
                 key={ws.workspace_path}
                 onClick={() => {
-                  onSelectWorkspace(ws.workspace_path);
+                  onSelectWorkspace(ws.workspace_path || UNCATEGORIZED_WORKSPACE);
                   onSelectConversation(''); // 点击工作区切换到该工作区的全景分析
                 }}
                 className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
@@ -1049,7 +1060,7 @@ export const BrowseView: React.FC<Props> = ({
             loading={loadingStats}
             onRefresh={onRefreshStats}
             onSelectConversation={(convId, wsPath) => {
-              onSelectWorkspace(wsPath);
+              onSelectWorkspace(wsPath || UNCATEGORIZED_WORKSPACE);
               onSelectConversation(convId);
             }}
           />
@@ -1058,15 +1069,15 @@ export const BrowseView: React.FC<Props> = ({
         /* 品字型：Header 常驻；下方 = 会话+统计 或 Git 变更树 */
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <ProjectHeader
-            workspacePath={selectedWorkspace}
+            workspacePath={activeWorkspace}
             gitBoardActive={isGitBoardView}
-            onOpenGitBoard={() => onOpenGitBoard(selectedWorkspace)}
+            onOpenGitBoard={isUncategorizedView ? undefined : () => onOpenGitBoard(selectedWorkspace)}
             onBatchSummarize={openBatchConfirm}
             batchSummarizeDisabled={batchRunning || conversations.length === 0}
           />
           {isGitBoardView ? (
             <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-              <GitBoardView embedPath={selectedWorkspace} hideHeader />
+              <GitBoardView embedPath={activeWorkspace} hideHeader />
             </div>
           ) : (
           <div className="flex-1 flex min-h-0 overflow-hidden">
@@ -1659,7 +1670,7 @@ export const BrowseView: React.FC<Props> = ({
               </>
             ) : (
               <WorkspaceAnalysisView
-                workspacePath={selectedWorkspace}
+                workspacePath={activeWorkspace}
                 onSelectConversation={onSelectConversation}
                 embedded
               />
@@ -2064,7 +2075,7 @@ export const BrowseView: React.FC<Props> = ({
             <div className="space-y-1.5 max-h-48 overflow-y-auto">
               <label className="text-[11px] font-medium theme-text-muted block">{t('conv.movePickTarget')}</label>
               {workspaces
-                .filter((w) => w.workspace_path !== selectedWorkspace)
+                .filter((w) => w.workspace_path !== activeWorkspace)
                 .map((w) => {
                   const name = w.workspace_path.split('/').slice(-1)[0] || w.workspace_path;
                   const selected = moveConvTarget === w.workspace_path;

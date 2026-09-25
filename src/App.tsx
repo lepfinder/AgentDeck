@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import type { DashboardStats, SyncResultInfo } from './types';
 import { formatBeijingTime } from './utils/date';
-import { BrowseView } from './components/browse/BrowseView';
+import { BrowseView, UNCATEGORIZED_WORKSPACE } from './components/browse/BrowseView';
 import { SpotlightModal } from './components/spotlight/SpotlightModal';
 import { useI18n } from './i18n';
 import {
@@ -317,7 +317,7 @@ export function App() {
 
   // 从大盘或全局搜索直达会话
   const handleSelectConversation = (convId: string, wsPath: string) => {
-    setSelectedWorkspace(wsPath);
+    setSelectedWorkspace(wsPath || UNCATEGORIZED_WORKSPACE);
     setSelectedConversationId(convId);
     setIsStarredView(false);
     setIsPromptLibraryView(false);

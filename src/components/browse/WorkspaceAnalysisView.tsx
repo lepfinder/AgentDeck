@@ -207,6 +207,13 @@ export const WorkspaceAnalysisView: React.FC<Props> = ({
         </span>
       );
     }
+    if (s.includes('grokbot')) {
+      return (
+        <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/25">
+          GrokBot
+        </span>
+      );
+    }
     return (
       <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold bg-slate-500/15 text-slate-600 dark:text-slate-400 border border-slate-500/25 uppercase">
         {source.slice(0, 6)}

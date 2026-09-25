@@ -117,18 +117,19 @@ export const api = {
     search?: string,
     starredOnly?: boolean
   ): Promise<ConversationItem[]> {
+    // workspace: undefined = 全部；'' = 未分类（不能折叠成 null）
     if (isTauri()) {
       return await invoke<ConversationItem[]>('list_conversations', {
-        workspace: workspace || null,
+        workspace: workspace === undefined ? null : workspace,
         search: search || null,
         starredOnly: !!starredOnly,
       });
     }
-    const res = await fetch(
-      `/api/conversations?workspace=${encodeURIComponent(workspace || '')}&cq=${encodeURIComponent(
-        search || ''
-      )}&starred=${starredOnly ? '1' : '0'}`
-    );
+    const params = new URLSearchParams();
+    if (workspace !== undefined) params.set('workspace', workspace);
+    params.set('cq', search || '');
+    params.set('starred', starredOnly ? '1' : '0');
+    const res = await fetch(`/api/conversations?${params.toString()}`);
     return await res.json();
   },
 

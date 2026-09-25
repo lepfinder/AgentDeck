@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codebuddy;
 pub mod codex;
 pub mod cursor;
+pub mod grokbot;
 pub mod hermes;
 pub mod mimo;
 pub mod qoder;
@@ -140,6 +141,10 @@ pub fn project_root_from_path(path_str: &str) -> String {
         if part == ".gemini" && i + 1 < parts.len() {
             return format!("/{}", parts[..i + 2].join("/"));
         }
+        // grokbot 会话统一归到 ~/.grokbot 工作区，避免被截到家目录与其他源混淆
+        if part == ".grokbot" {
+            return format!("/{}", parts[..=i].join("/"));
+        }
     }
 
     if parts.len() >= 3 {
@@ -225,6 +230,8 @@ pub fn conversation_content_hash(conv: &RawConversation) -> String {
     let mut hasher = DefaultHasher::new();
     conv.id.hash(&mut hasher);
     conv.title.hash(&mut hasher);
+    // 工作区归属变化（如 importer 调整归组策略）也必须触发重写
+    conv.workspace_path.hash(&mut hasher);
     for msg in &conv.messages {
         msg.step_index.hash(&mut hasher);
         msg.role.hash(&mut hasher);
@@ -753,7 +760,7 @@ impl SyncEngine {
         );
 
         type ImporterFn = fn(&Connection, bool) -> ImporterStats;
-        let importers: [(&str, ImporterFn); 10] = [
+        let importers: [(&str, ImporterFn); 11] = [
             ("Antigravity", antigravity::sync),
             ("Cursor", cursor::sync),
             ("Claude", claude::sync),
@@ -764,6 +771,7 @@ impl SyncEngine {
             ("Windsurf", windsurf::sync),
             ("CodeBuddy", codebuddy::sync),
             ("Qoder", qoder::sync),
+            ("GrokBot", grokbot::sync),
         ];
 
         for (name, importer) in importers {
@@ -1104,5 +1112,18 @@ mod tests {
 
         let canon = canonicalize_workspace_path(dirty);
         assert_eq!(canon, "/Users/xiyangxie/workspace/chuhai/notix");
+    }
+
+    #[test]
+    fn test_project_root_grokbot_workspace() {
+        // grokbot 归到 ~/.grokbot，不能被通用规则截到家目录
+        assert_eq!(
+            project_root_from_path("/Users/x/.grokbot"),
+            "/Users/x/.grokbot"
+        );
+        assert_eq!(
+            project_root_from_path("/Users/x/.grokbot/chats_sync"),
+            "/Users/x/.grokbot"
+        );
     }
 }
