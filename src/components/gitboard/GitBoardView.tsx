@@ -261,6 +261,46 @@ function GitBoardListItem({
   );
 }
 
+/** 状态 → 文字颜色：冲突红 / 未跟踪(新增)绿 / 未暂存变更琥珀 / 仅已暂存蓝 */
+function statusTone(f: GitStatusFile): string {
+  const wt = f.worktree;
+  if (wt === 'U') return 'text-red-500';
+  if (wt === '?') return 'text-emerald-500';
+  if (wt) return 'text-amber-500';
+  return 'text-blue-500';
+}
+
+/** 状态严重度排序，与后端 status_file_rank 一致：冲突 > 未跟踪 > 未暂存 > 仅暂存 */
+function statusRank(f: GitStatusFile): number {
+  switch (f.worktree) {
+    case 'U':
+      return 0;
+    case '?':
+      return 1;
+    case null:
+    case undefined:
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+/** 浏览树文件状态：精确命中优先；未命中时回退查折叠的未跟踪目录（git 以 `dir/` 整体返回） */
+function fileStatusFor(
+  path: string,
+  statusByPath: Map<string, GitStatusFile>,
+  untrackedDirs: string[]
+): GitStatusFile | undefined {
+  const exact = statusByPath.get(path.replace(/\/+$/, ''));
+  if (exact) return exact;
+  for (const d of untrackedDirs) {
+    if (d && path.startsWith(`${d}/`)) {
+      return { path, old_path: null, staged: null, worktree: '?' };
+    }
+  }
+  return undefined;
+}
+
 /** 文件暂存/工作区状态字母（如 "A " / " M" / " U" 未跟踪 / "UU" 冲突），颜色区分状态 */
 function FileStatusGlyph({ f }: { f: GitStatusFile }) {
   const { t } = useI18n();
@@ -269,13 +309,7 @@ function FileStatusGlyph({ f }: { f: GitStatusFile }) {
   const isConflict = wt === 'U';
   // 未跟踪对外展示为绿色 U（冲突仍为红色 U）
   const displayWt = isUntracked ? 'U' : wt;
-  const cls = isConflict
-    ? 'text-red-500'
-    : isUntracked
-      ? 'text-emerald-500'
-      : wt
-        ? 'text-amber-500'
-        : 'text-blue-500';
+  const cls = statusTone(f);
   const tip = isConflict
     ? t('gitBoard.fileConflict')
     : isUntracked
@@ -587,6 +621,30 @@ function GitBoardDetail({
   const statusByPath = useMemo(() => {
     const m = new Map<string, GitStatusFile>();
     for (const f of files) m.set(f.path.replace(/\/+$/, ''), f);
+    return m;
+  }, [files]);
+
+  // 未跟踪条目路径集合：git 有时把未跟踪目录折叠为 `dir/` 一条返回，其下文件靠前缀回退匹配
+  const untrackedDirs = useMemo(
+    () =>
+      files
+        .filter((f) => f.worktree === '?')
+        .map((f) => f.path.replace(/\/+$/, ''))
+        .filter(Boolean),
+    [files]
+  );
+
+  // 目录聚合：变更文件的所有祖先目录取子树内最重状态，用于目录名着色（VS Code 同款）
+  const dirStatus = useMemo(() => {
+    const m = new Map<string, GitStatusFile>();
+    for (const f of files) {
+      const parts = f.path.replace(/\/+$/, '').split('/').filter(Boolean);
+      for (let i = 1; i < parts.length; i++) {
+        const dir = parts.slice(0, i).join('/');
+        const cur = m.get(dir);
+        if (!cur || statusRank(f) < statusRank(cur)) m.set(dir, f);
+      }
+    }
     return m;
   }, [files]);
 
@@ -1089,33 +1147,40 @@ function GitBoardDetail({
                   {t('gitBoard.searchEmpty')}
                 </div>
               ) : (
-                searchResults.map((p) => (
-                  <button
-                    type="button"
-                    key={p}
-                    onClick={() => setSelectedBrowseFile(p)}
-                    className={`flex items-center gap-1.5 w-full text-left pl-2 pr-2 py-1 transition-colors cursor-pointer ${
-                      selectedBrowseFile === p
-                        ? 'bg-black/[0.06] dark:bg-white/[0.08]'
-                        : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
-                    }`}
-                  >
-                    {statusByPath.get(p) ? (
-                      <FileStatusGlyph f={statusByPath.get(p)!} />
-                    ) : (
-                      <span className="w-5 shrink-0" />
-                    )}
-                    <FileText className="h-3.5 w-3.5 theme-text-sub shrink-0" />
-                    <span
-                      className={`text-[11px] truncate font-mono ${
-                        selectedBrowseFile === p ? 'theme-text-main' : 'theme-text-muted'
+                searchResults.map((p) => {
+                  const st = fileStatusFor(p, statusByPath, untrackedDirs);
+                  return (
+                    <button
+                      type="button"
+                      key={p}
+                      onClick={() => setSelectedBrowseFile(p)}
+                      className={`flex items-center gap-1.5 w-full text-left pl-2 pr-2 py-1 transition-colors cursor-pointer ${
+                        selectedBrowseFile === p
+                          ? 'bg-black/[0.06] dark:bg-white/[0.08]'
+                          : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
                       }`}
-                      title={p}
                     >
-                      {p}
-                    </span>
-                  </button>
-                ))
+                      {st ? (
+                        <FileStatusGlyph f={st} />
+                      ) : (
+                        <span className="w-5 shrink-0" />
+                      )}
+                      <FileText className="h-3.5 w-3.5 theme-text-sub shrink-0" />
+                      <span
+                        className={`text-[11px] truncate font-mono ${
+                          st
+                            ? statusTone(st)
+                            : selectedBrowseFile === p
+                              ? 'theme-text-main'
+                              : 'theme-text-muted'
+                        }`}
+                        title={p}
+                      >
+                        {p}
+                      </span>
+                    </button>
+                  );
+                })
               )
             ) : dirChildren[''] === undefined ? (
               <div className="flex items-center justify-center gap-2 py-6">
@@ -1130,6 +1195,8 @@ function GitBoardDetail({
                 dirLoading={dirLoading}
                 expandedDirs={expandedDirs}
                 statusByPath={statusByPath}
+                untrackedDirs={untrackedDirs}
+                dirStatus={dirStatus}
                 selected={selectedBrowseFile}
                 onToggleDir={handleToggleBrowseDir}
                 onSelectFile={setSelectedBrowseFile}
@@ -2028,6 +2095,20 @@ function pathBasename(p: string): string {
   return cleaned.split('/').filter(Boolean).slice(-1)[0] || cleaned;
 }
 
+/** 子树内最重状态（目录名着色用），严重度与后端排序一致 */
+function worstStatusInDir(node: TreeDirNode): GitStatusFile | undefined {
+  let worst: GitStatusFile | undefined;
+  const consider = (f: GitStatusFile) => {
+    if (!worst || statusRank(f) < statusRank(worst)) worst = f;
+  };
+  for (const f of node.files) consider(f);
+  for (const d of node.dirs) {
+    const w = worstStatusInDir(d);
+    if (w) consider(w);
+  }
+  return worst;
+}
+
 /** 把平铺文件列表按目录分组为树：目录按字母序，文件保留后端的状态排序。 */
 function buildFileTree(files: GitStatusFile[]): TreeDirNode {
   const root: TreeDirNode = { name: '', path: '', dirs: [], files: [] };
@@ -2080,7 +2161,9 @@ function FileTreeNode({
   const { t } = useI18n();
   return (
     <>
-      {node.dirs.map((d) => (
+      {node.dirs.map((d) => {
+        const worst = worstStatusInDir(d);
+        return (
         <div key={d.path}>
           <button
             type="button"
@@ -2089,13 +2172,22 @@ function FileTreeNode({
             onContextMenu={(e) => onContext(e, d.path)}
             className="flex items-center gap-1.5 w-full text-left pr-2 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
           >
-            {collapsed[d.path] ? (
-              <ChevronRight className="h-3 w-3 theme-text-sub shrink-0" />
-            ) : (
-              <ChevronDown className="h-3 w-3 theme-text-sub shrink-0" />
-            )}
+            {/* 箭头列与文件行的状态列（w-5）同宽，保证同层图标垂直对齐 */}
+            <span className="w-5 shrink-0 flex items-center justify-center">
+              {collapsed[d.path] ? (
+                <ChevronRight className="h-3 w-3 theme-text-sub" />
+              ) : (
+                <ChevronDown className="h-3 w-3 theme-text-sub" />
+              )}
+            </span>
             <Folder className="h-3.5 w-3.5 theme-text-sub shrink-0" />
-            <span className="text-[11px] theme-text-muted truncate font-mono">{d.name}</span>
+            <span
+              className={`text-[11px] truncate font-mono ${
+                worst ? statusTone(worst) : 'theme-text-muted'
+              }`}
+            >
+              {d.name}
+            </span>
           </button>
           {!collapsed[d.path] && (
             <FileTreeNode
@@ -2111,11 +2203,12 @@ function FileTreeNode({
             />
           )}
         </div>
-      ))}
+        );
+      })}
       {node.files.map((file) => (
         <div
           key={file.path}
-          style={{ paddingLeft: 8 + (depth + 1) * 12 }}
+          style={{ paddingLeft: 8 + depth * 12 }}
           onClick={() => onSelect(file.path)}
           onContextMenu={(e) => onContext(e, file.path)}
           className={`group relative flex items-center gap-1.5 w-full text-left pr-1.5 py-1 transition-colors cursor-pointer ${
@@ -2126,9 +2219,7 @@ function FileTreeNode({
         >
           <FileStatusGlyph f={file} />
           <span
-            className={`text-[11px] truncate font-mono flex-1 min-w-0 ${
-              selected === file.path ? 'theme-text-main' : 'theme-text-muted'
-            }`}
+            className={`text-[11px] truncate font-mono flex-1 min-w-0 ${statusTone(file)}`}
             title={file.old_path ? `${file.old_path} → ${file.path}` : file.path}
           >
             {pathBasename(file.path)}
@@ -2208,6 +2299,8 @@ function BrowseTreeNode({
   dirLoading,
   expandedDirs,
   statusByPath,
+  untrackedDirs,
+  dirStatus,
   selected,
   onToggleDir,
   onSelectFile,
@@ -2219,6 +2312,8 @@ function BrowseTreeNode({
   dirLoading: Record<string, boolean>;
   expandedDirs: Record<string, boolean>;
   statusByPath: Map<string, GitStatusFile>;
+  untrackedDirs: string[];
+  dirStatus: Map<string, GitStatusFile>;
   selected: string | null;
   onToggleDir: (path: string) => void;
   onSelectFile: (path: string) => void;
@@ -2226,47 +2321,64 @@ function BrowseTreeNode({
 }) {
   return (
     <>
-      {entries.map((e) =>
-        e.is_dir ? (
-          <div key={e.path}>
-            <button
-              type="button"
-              style={{ paddingLeft: 8 + depth * 12 }}
-              onClick={() => onToggleDir(e.path)}
-              onContextMenu={(ev) => onContext(ev, e.path)}
-              className="flex items-center gap-1.5 w-full text-left pr-2 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
-            >
-              {expandedDirs[e.path] ? (
-                <ChevronDown className="h-3 w-3 theme-text-sub shrink-0" />
-              ) : (
-                <ChevronRight className="h-3 w-3 theme-text-sub shrink-0" />
+      {entries.map((e) => {
+        if (e.is_dir) {
+          // 目录聚合状态；折叠的未跟踪目录（`dir/`）以自身路径精确命中兜底
+          const dirSt = dirStatus.get(e.path) ?? statusByPath.get(e.path);
+          return (
+            <div key={e.path}>
+              <button
+                type="button"
+                style={{ paddingLeft: 8 + depth * 12 }}
+                onClick={() => onToggleDir(e.path)}
+                onContextMenu={(ev) => onContext(ev, e.path)}
+                className="flex items-center gap-1.5 w-full text-left pr-2 py-1 hover:bg-black/[0.03] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
+              >
+                {/* 箭头列与文件行的状态列（w-5）同宽，保证同层图标垂直对齐 */}
+                <span className="w-5 shrink-0 flex items-center justify-center">
+                  {expandedDirs[e.path] ? (
+                    <ChevronDown className="h-3 w-3 theme-text-sub" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 theme-text-sub" />
+                  )}
+                </span>
+                <Folder className="h-3.5 w-3.5 theme-text-sub shrink-0" />
+                <span
+                  className={`text-[11px] truncate font-mono ${
+                    dirSt ? statusTone(dirSt) : 'theme-text-muted'
+                  }`}
+                >
+                  {e.name}
+                </span>
+                {dirLoading[e.path] && (
+                  <Loader2 className="h-3 w-3 animate-spin theme-text-sub shrink-0" />
+                )}
+              </button>
+              {expandedDirs[e.path] && dirChildren[e.path] && (
+                <BrowseTreeNode
+                  entries={dirChildren[e.path]}
+                  depth={depth + 1}
+                  dirChildren={dirChildren}
+                  dirLoading={dirLoading}
+                  expandedDirs={expandedDirs}
+                  statusByPath={statusByPath}
+                  untrackedDirs={untrackedDirs}
+                  dirStatus={dirStatus}
+                  selected={selected}
+                  onToggleDir={onToggleDir}
+                  onSelectFile={onSelectFile}
+                  onContext={onContext}
+                />
               )}
-              <Folder className="h-3.5 w-3.5 theme-text-sub shrink-0" />
-              <span className="text-[11px] theme-text-muted truncate font-mono">{e.name}</span>
-              {dirLoading[e.path] && (
-                <Loader2 className="h-3 w-3 animate-spin theme-text-sub shrink-0" />
-              )}
-            </button>
-            {expandedDirs[e.path] && dirChildren[e.path] && (
-              <BrowseTreeNode
-                entries={dirChildren[e.path]}
-                depth={depth + 1}
-                dirChildren={dirChildren}
-                dirLoading={dirLoading}
-                expandedDirs={expandedDirs}
-                statusByPath={statusByPath}
-                selected={selected}
-                onToggleDir={onToggleDir}
-                onSelectFile={onSelectFile}
-                onContext={onContext}
-              />
-            )}
-          </div>
-        ) : (
+            </div>
+          );
+        }
+        const st = fileStatusFor(e.path, statusByPath, untrackedDirs);
+        return (
           <button
             type="button"
             key={e.path}
-            style={{ paddingLeft: 8 + (depth + 1) * 12 }}
+            style={{ paddingLeft: 8 + depth * 12 }}
             onClick={() => onSelectFile(e.path)}
             onContextMenu={(ev) => onContext(ev, e.path)}
             className={`flex items-center gap-1.5 w-full text-left pr-2 py-1 transition-colors cursor-pointer ${
@@ -2275,23 +2387,27 @@ function BrowseTreeNode({
                 : 'hover:bg-black/[0.03] dark:hover:bg-white/[0.04]'
             }`}
           >
-            {statusByPath.get(e.path) ? (
-              <FileStatusGlyph f={statusByPath.get(e.path)!} />
+            {st ? (
+              <FileStatusGlyph f={st} />
             ) : (
               <span className="w-5 shrink-0" />
             )}
             <FileText className="h-3.5 w-3.5 theme-text-sub shrink-0" />
             <span
               className={`text-[11px] truncate font-mono ${
-                selected === e.path ? 'theme-text-main' : 'theme-text-muted'
+                st
+                  ? statusTone(st)
+                  : selected === e.path
+                    ? 'theme-text-main'
+                    : 'theme-text-muted'
               }`}
               title={e.path}
             >
               {e.name}
             </span>
           </button>
-        )
-      )}
+        );
+      })}
     </>
   );
 }
