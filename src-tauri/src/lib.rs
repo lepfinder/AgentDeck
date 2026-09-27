@@ -14,6 +14,7 @@ pub mod service_config;
 pub mod service_discovery;
 pub mod service_http;
 pub mod service_manager;
+pub mod skills_scanner;
 pub mod sync;
 
 use db::{
@@ -411,6 +412,65 @@ async fn sync_seedance_catalog_cmd(
             let _ = handle.emit("prompt-catalog-sync-progress", p);
         });
         seedance_catalog::sync_seedance_catalog_with_progress(&conn, Some(progress))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_skills_cmd(
+    search: Option<String>,
+    agent: Option<String>,
+) -> Result<Vec<skills_scanner::SkillItem>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        let items = skills_scanner::list_skills_ex(
+            &conn,
+            search.as_deref(),
+            agent.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(items)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_skills_summary_cmd() -> Result<skills_scanner::SkillsSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        skills_scanner::get_skills_summary(&conn).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_skill_detail_cmd(name: String) -> Result<Vec<skills_scanner::SkillUsageRow>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        skills_scanner::get_skill_detail(&conn, &name).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_skill_content_cmd(id: i64) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        skills_scanner::get_skill_content(&conn, id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn refresh_skills_cmd() -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_write_connection().map_err(|e| e.to_string())?;
+        skills_scanner::sync_skills(&conn).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1707,6 +1767,11 @@ pub fn run() {
             get_dashboard_stats,
             get_daily_timeline,
             get_usage_stats,
+            list_skills_cmd,
+            get_skills_summary_cmd,
+            get_skill_detail_cmd,
+            get_skill_content_cmd,
+            refresh_skills_cmd,
             list_prompts_cmd,
             get_prompt_cmd,
             create_prompt_cmd,

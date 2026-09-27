@@ -881,6 +881,43 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
+
+        -- 技能目录：canonical 技能（按名称归并）+ 各 Agent/公共目录中的实例
+        CREATE TABLE IF NOT EXISTS skills (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            primary_path TEXT NOT NULL DEFAULT '',
+            discovered_at TEXT NOT NULL,
+            last_scanned_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS skill_instances (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_name TEXT NOT NULL,
+            agent TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            path TEXT NOT NULL,
+            skill_md_path TEXT NOT NULL,
+            content_hash TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            discovered_at TEXT NOT NULL,
+            last_scanned_at TEXT NOT NULL,
+            UNIQUE(agent, skill_name, path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_instances_name ON skill_instances(skill_name);
+
+        -- 技能使用事实表：每次同步从 messages 全量重建（派生数据，非手工维护）
+        CREATE TABLE IF NOT EXISTS skill_usages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_name TEXT NOT NULL,
+            agent TEXT NOT NULL DEFAULT '',
+            conversation_id TEXT NOT NULL DEFAULT '',
+            conversation_title TEXT NOT NULL DEFAULT '',
+            evidence TEXT NOT NULL,
+            occurred_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_skill_usages_name ON skill_usages(skill_name);
         "#
     )?;
 

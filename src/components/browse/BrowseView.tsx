@@ -40,10 +40,12 @@ import {
   FolderInput,
   GitBranch,
   Coins,
+  Puzzle,
 } from 'lucide-react';
 import { ServicesView } from '../services/ServicesView';
 import { GitBoardView } from '../gitboard/GitBoardView';
 import { UsageStatsView } from '../usage/UsageStatsView';
+import { SkillsView } from '../skills/SkillsView';
 import {
   clearConversationAiTitle,
   renameConversationTitle,
@@ -72,6 +74,7 @@ interface Props {
   isServicesView: boolean;
   isGitBoardView: boolean;
   isUsageStatsView: boolean;
+  isSkillsView: boolean;
   promptLibraryCount: number;
   onSelectWorkspace: (ws: string) => void;
   onSelectConversation: (id: string) => void;
@@ -80,6 +83,7 @@ interface Props {
   onSwitchToPromptLibrary: () => void;
   onSwitchToServices: () => void;
   onSwitchToUsageStats: () => void;
+  onSwitchToSkills: () => void;
   /** 从项目分析页跳到该项目的 Git 看板详情 */
   onOpenGitBoard: (wsPath: string) => void;
   onPromptLibraryCountChange: (count: number) => void;
@@ -96,6 +100,7 @@ export const BrowseView: React.FC<Props> = ({
   isServicesView,
   isGitBoardView,
   isUsageStatsView,
+  isSkillsView,
   promptLibraryCount,
   onSelectWorkspace,
   onSelectConversation,
@@ -104,6 +109,7 @@ export const BrowseView: React.FC<Props> = ({
   onSwitchToPromptLibrary,
   onSwitchToServices,
   onSwitchToUsageStats,
+  onSwitchToSkills,
   onOpenGitBoard,
   onPromptLibraryCountChange,
   stats,
@@ -907,7 +913,7 @@ export const BrowseView: React.FC<Props> = ({
           <button
             onClick={navTo(onSwitchToDashboard)}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
-              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && !isUsageStatsView
+              !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && !isUsageStatsView && !isSkillsView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
                 : 'theme-text-muted hover:text-blue-500 hover:theme-bg-card'
             }`}
@@ -953,7 +959,21 @@ export const BrowseView: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={onSwitchToServices}
+            onClick={navTo(onSwitchToSkills)}
+            className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
+              isSkillsView
+                ? 'theme-bg-card theme-text-primary border theme-border font-semibold'
+                : 'theme-text-muted hover:text-violet-500 hover:theme-bg-card'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Puzzle className="h-4 w-4" />
+              <span>{t('nav.skills')}</span>
+            </div>
+          </button>
+
+          <button
+            onClick={navTo(onSwitchToServices)}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isServicesView
                 ? 'bg-emerald-600/15 text-emerald-500 border border-emerald-500/30 shadow-xs font-semibold'
@@ -1025,7 +1045,8 @@ export const BrowseView: React.FC<Props> = ({
                 !isPromptLibraryView &&
                 !isServicesView &&
                 !isUsageStatsView &&
-                !isGitBoardView;
+                !isGitBoardView &&
+                !isSkillsView;
               return (
                 <div
                   key={a.app}
@@ -1193,6 +1214,10 @@ export const BrowseView: React.FC<Props> = ({
       ) : isUsageStatsView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <UsageStatsView />
+        </main>
+      ) : isSkillsView ? (
+        <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+          <SkillsView />
         </main>
       ) : isServicesView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">

@@ -327,6 +327,39 @@ export interface UsageStatsPayload {
   agents_without_usage: string[];
 }
 
+export interface SkillItem {
+  id: number;
+  name: string;
+  description: string;
+  scope: string;
+  path: string;
+  agents: string[];
+  use_count: number;
+  use_count_30d: number;
+  last_used_at?: string | null;
+  discovered_at: string;
+}
+
+export interface SkillsSummary {
+  total: number;
+  public_count: number;
+  private_count: number;
+  used_count: number;
+  unused_count: number;
+  usage_events: number;
+  usage_events_30d: number;
+  agents: string[];
+  last_scanned_at?: string | null;
+}
+
+export interface SkillUsageRow {
+  agent: string;
+  conversation_id: string;
+  conversation_title: string;
+  evidence: string;
+  occurred_at?: string | null;
+}
+
 export interface SearchResultItem {
   message_id: string;
   conversation_id: string;

@@ -134,6 +134,18 @@ fn handle_connection(app: AppHandle, mut stream: TcpStream) {
                 );
                 return;
             }
+            if method == "POST" && path == "/api/skills/refresh" {
+                match open_write_conn() {
+                    Ok(conn) => match crate::skills_scanner::sync_skills(&conn) {
+                        Ok(count) => send_json(&mut stream, 200, json!({ "ok": true, "instances": count })),
+                        Err(e) => {
+                            send_api_error(&mut stream, 500, "SKILLS_REFRESH_FAILED", &e.to_string(), None)
+                        }
+                    },
+                    Err(e) => send_json(&mut stream, 500, json!({"ok": false, "error": e})),
+                }
+                return;
+            }
             if method == "POST" && path == "/api/workspaces/merge" {
                 #[derive(serde::Deserialize)]
                 struct MergeBody {
@@ -533,6 +545,49 @@ fn route_get(
             match fetch_usage_stats(conn, days) {
                 Ok(stats) => send_json(stream, 200, json!(stats)),
                 Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/skills" => {
+            match crate::skills_scanner::list_skills_ex(
+                conn,
+                query_params.get("q").map(|s| s.as_str()),
+                query_params.get("agent").map(|s| s.as_str()),
+            ) {
+                Ok(skills) => send_json(stream, 200, json!({ "ok": true, "skills": skills })),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/skills/summary" => {
+            match crate::skills_scanner::get_skills_summary(conn) {
+                Ok(summary) => send_json(stream, 200, json!(summary)),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/skills/detail" => {
+            let name = query_params.get("name").cloned().unwrap_or_default();
+            match crate::skills_scanner::get_skill_detail(conn, &name) {
+                Ok(usages) => send_json(stream, 200, json!({ "ok": true, "usages": usages })),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/skills/content" => {
+            match query_params.get("id").and_then(|v| v.parse::<i64>().ok()) {
+                Some(id) => match crate::skills_scanner::get_skill_content(conn, id) {
+                    Ok(Some(content)) => {
+                        send_json(stream, 200, json!({ "ok": true, "content": content }))
+                    }
+                    Ok(None) => {
+                        send_json(stream, 404, json!({"ok": false, "error": "skill not found"}))
+                    }
+                    Err(e) => {
+                        send_json(stream, 500, json!({"ok": false, "error": e.to_string()}))
+                    }
+                },
+                None => send_json(stream, 400, json!({"ok": false, "error": "id required"})),
             }
         }
 

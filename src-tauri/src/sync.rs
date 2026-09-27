@@ -275,6 +275,17 @@ fn run_once(full: bool) -> SyncResultInfo {
     let (new_cnt, updated_cnt, skipped_cnt, error_cnt, details) =
         SyncEngine::run_all(&conn, incremental);
 
+    // 技能目录与使用统计：跟随会话同步节奏，失败不影响会话同步结果
+    let skills_start = std::time::Instant::now();
+    match crate::skills_scanner::sync_skills(&conn) {
+        Ok(n) => println!(
+            "[AgentDeck Skills] 技能扫描完成: {} 个实例, 耗时 {:?}",
+            n,
+            skills_start.elapsed()
+        ),
+        Err(e) => eprintln!("[AgentDeck Skills] 技能扫描失败: {}", e),
+    }
+
     let msg = format!(
         "原生同步完成: 新增 {} 条会话, 更新 {} 条, 跳过 {} 条, 错误 {} 条",
         new_cnt, updated_cnt, skipped_cnt, error_cnt

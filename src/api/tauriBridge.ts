@@ -30,6 +30,9 @@ import type {
   LlmUsageSummary,
   QuotaSnapshot,
   UsageStatsPayload,
+  SkillItem,
+  SkillsSummary,
+  SkillUsageRow,
 } from '../types';
 
 export const isTauri = () => {
@@ -61,6 +64,58 @@ export const api = {
     const qs = days != null ? `?days=${days}` : '';
     const res = await fetch(`/api/usage-stats${qs}`);
     return await res.json();
+  },
+
+  async listSkills(search?: string, agent?: string): Promise<SkillItem[]> {
+    if (isTauri()) {
+      return await invoke<SkillItem[]>('list_skills_cmd', {
+        search: search || null,
+        agent: agent || null,
+      });
+    }
+    const params = new URLSearchParams();
+    if (search) params.set('q', search);
+    if (agent) params.set('agent', agent);
+    const res = await fetch(`/api/skills?${params.toString()}`);
+    const data = await res.json();
+    return data.skills || [];
+  },
+
+  async getSkillsSummary(): Promise<SkillsSummary> {
+    if (isTauri()) {
+      return await invoke<SkillsSummary>('get_skills_summary_cmd');
+    }
+    const res = await fetch('/api/skills/summary');
+    return await res.json();
+  },
+
+  async getSkillDetail(name: string): Promise<SkillUsageRow[]> {
+    if (isTauri()) {
+      return await invoke<SkillUsageRow[]>('get_skill_detail_cmd', { name });
+    }
+    const params = new URLSearchParams({ name });
+    const res = await fetch(`/api/skills/detail?${params.toString()}`);
+    const data = await res.json();
+    return data.usages || [];
+  },
+
+  async getSkillContent(id: number): Promise<string | null> {
+    if (isTauri()) {
+      return await invoke<string | null>('get_skill_content_cmd', { id });
+    }
+    const res = await fetch(`/api/skills/content?id=${encodeURIComponent(String(id))}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.content ?? null;
+  },
+
+  async refreshSkills(): Promise<number> {
+    if (isTauri()) {
+      return await invoke<number>('refresh_skills_cmd');
+    }
+    const res = await fetch('/api/skills/refresh', { method: 'POST' });
+    const data = await res.json();
+    return data.instances || 0;
   },
 
   async getWorkspaceDetail(workspacePath: string): Promise<WorkspaceDetailStats> {
