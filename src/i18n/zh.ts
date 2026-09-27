@@ -63,6 +63,11 @@ export const zh = {
   'nav.messageCount': '全部 {n}',
   'nav.runningCount': '{n} 运行中',
 
+  'nav.viewWorkspace': '工作区',
+  'nav.viewAgent': 'Agent',
+  'nav.searchAgents': '搜索 Agent…',
+  'nav.pickAgent': '从左侧选择一个 Agent 查看其会话',
+
   'nav.gitBoard': 'Git 看板',
 
   'nav.usage': '用量统计',

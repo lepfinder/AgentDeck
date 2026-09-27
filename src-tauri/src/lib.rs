@@ -19,6 +19,7 @@ pub mod sync;
 use db::{
     clear_conversation_ai_title, clear_workspace_analysis, create_prompt, delete_prompt,
     fetch_conversation_by_id, fetch_conversation_messages, fetch_conversations,
+    fetch_agents,
     fetch_daily_timeline, fetch_dashboard_stats, fetch_usage_stats,
     fetch_workspace_analysis_messages,
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, list_prompts_ex,
@@ -31,6 +32,7 @@ use db::{
     record_video_prompt_use, toggle_video_prompt_star, update_video_prompt,
     update_video_prompt_preview_size, VideoPromptItem,
     AnalysisUserMessage,
+    AgentStat,
     ArtifactItem, ConversationItem, DailyTimelineStats, DashboardStats, DbState, MessageItem,
     PromptInput, PromptItem, SearchResultItem, UsageStatsPayload, WorkspaceDetailStats,
     WorkspaceFineBlock,
@@ -463,6 +465,7 @@ async fn list_conversations(
     workspace: Option<String>,
     search: Option<String>,
     starred_only: Option<bool>,
+    agent: Option<String>,
 ) -> Result<Vec<ConversationItem>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let conn = db::open_read_connection().map_err(|e| e.to_string())?;
@@ -471,8 +474,19 @@ async fn list_conversations(
             workspace.as_deref(),
             search.as_deref(),
             starred_only.unwrap_or(false),
+            agent.as_deref(),
         )
         .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_agents(search: Option<String>) -> Result<Vec<AgentStat>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db::open_read_connection().map_err(|e| e.to_string())?;
+        fetch_agents(&conn, search.as_deref()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1719,6 +1733,7 @@ pub fn run() {
             sync_seedance_catalog_cmd,
             get_workspace_detail,
             list_workspaces,
+            list_agents,
             merge_workspace_cmd,
             move_conversation_cmd,
             list_conversations,

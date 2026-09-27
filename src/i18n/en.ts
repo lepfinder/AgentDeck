@@ -65,6 +65,11 @@ export const en: Record<MessageKey, string> = {
   'nav.messageCount': 'All {n}',
   'nav.runningCount': '{n} running',
 
+  'nav.viewWorkspace': 'Workspaces',
+  'nav.viewAgent': 'Agent',
+  'nav.searchAgents': 'Search agents…',
+  'nav.pickAgent': 'Pick an agent on the left to view its sessions',
+
   'nav.gitBoard': 'Git Board',
 
   'nav.usage': 'Usage Stats',

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { WorkspaceStat, ConversationItem, MessageItem, DashboardStats, ArtifactItem } from '../../types';
+import type { WorkspaceStat, AgentStat, ConversationItem, MessageItem, DashboardStats, ArtifactItem } from '../../types';
 import { api, isTauri } from '../../api/tauriBridge';
 import { formatBeijingTime, formatRelativeTime } from '../../utils/date';
 import { useI18n } from '../../i18n';
@@ -119,6 +119,16 @@ export const BrowseView: React.FC<Props> = ({
   const [currentConv, setCurrentConv] = useState<ConversationItem | null>(null);
 
   const [wsSearch, setWsSearch] = useState('');
+  // 侧边栏视图切换：工作区 / Agent（本地持久化）
+  const [sidebarMode, setSidebarMode] = useState<'workspace' | 'agent'>(() => {
+    try {
+      return localStorage.getItem('agentdeck_sidebar_mode') === 'agent' ? 'agent' : 'workspace';
+    } catch {
+      return 'workspace';
+    }
+  });
+  const [agents, setAgents] = useState<AgentStat[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState('');
   // 工作区合并 / 重命名
   const [mergeSource, setMergeSource] = useState<WorkspaceStat | null>(null);
   const [mergeMode, setMergeMode] = useState<'existing' | 'rename'>('existing');
@@ -279,6 +289,15 @@ export const BrowseView: React.FC<Props> = ({
     wsSearchRef.current = wsSearch;
   }, [wsSearch]);
 
+  const selectedAgentRef = useRef(selectedAgent);
+  const sidebarModeRef = useRef(sidebarMode);
+  useEffect(() => {
+    selectedAgentRef.current = selectedAgent;
+  }, [selectedAgent]);
+  useEffect(() => {
+    sidebarModeRef.current = sidebarMode;
+  }, [sidebarMode]);
+
   const loadingWsRef = useRef(false);
   // 加载工作区列表（带并发锁）
   const loadWorkspaces = async () => {
@@ -291,6 +310,21 @@ export const BrowseView: React.FC<Props> = ({
       console.error(e);
     } finally {
       loadingWsRef.current = false;
+    }
+  };
+
+  const loadingAgentsRef = useRef(false);
+  // 加载 Agent 聚合列表（带并发锁）
+  const loadAgents = async () => {
+    if (loadingAgentsRef.current) return;
+    loadingAgentsRef.current = true;
+    try {
+      const list = await api.listAgents();
+      setAgents(list);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      loadingAgentsRef.current = false;
     }
   };
 
@@ -318,6 +352,11 @@ export const BrowseView: React.FC<Props> = ({
   useEffect(() => {
     void loadWorkspaces();
   }, [wsSearch]);
+
+  // 首次进入加载 Agent 聚合列表（切换视图时不重复拉取，靠 sync 事件刷新）
+  useEffect(() => {
+    void loadAgents();
+  }, []);
 
   // 首次进入加载侧栏未提交数
   useEffect(() => {
@@ -387,10 +426,13 @@ export const BrowseView: React.FC<Props> = ({
     if (loadingConvsRef.current) return;
     loadingConvsRef.current = true;
     try {
+      // Agent 视图：跨全部工作区、仅看选中 Agent 的会话
+      const agentMode = sidebarModeRef.current === 'agent' && !!selectedAgentRef.current;
       const list = await api.listConversations(
-        isStarredViewRef.current ? undefined : convWorkspaceFilterRef.current,
+        agentMode || isStarredViewRef.current ? undefined : convWorkspaceFilterRef.current,
         convSearchRef.current,
-        isStarredViewRef.current
+        isStarredViewRef.current,
+        agentMode ? selectedAgentRef.current : undefined
       );
       setConversations(list);
     } catch (e) {
@@ -402,7 +444,7 @@ export const BrowseView: React.FC<Props> = ({
 
   useEffect(() => {
     loadConversations();
-  }, [selectedWorkspace, convSearch, isStarredView]);
+  }, [selectedWorkspace, convSearch, isStarredView, selectedAgent, sidebarMode]);
 
   const batchCandidates = selectConversationsForBatch(conversations, batchOpts);
   const batchConcurrency = getBatchConcurrency();
@@ -442,6 +484,7 @@ export const BrowseView: React.FC<Props> = ({
 
     listen('sync-completed', () => {
       loadWorkspaces();
+      loadAgents();
       loadConversations();
       loadStarredCount();
     }).then((fn) => {
@@ -667,6 +710,31 @@ export const BrowseView: React.FC<Props> = ({
 
   const formatTime = formatBeijingTime;
 
+  // 侧边栏视图切换：工作区 / Agent
+  const switchMode = (mode: 'workspace' | 'agent') => {
+    setSidebarMode(mode);
+    try {
+      localStorage.setItem('agentdeck_sidebar_mode', mode);
+    } catch {
+      /* ignore */
+    }
+  };
+  // 点击固定导航：退回工作区列表模式，清除 Agent 选择
+  const navTo = (fn: () => void) => () => {
+    switchMode('workspace');
+    setSelectedAgent('');
+    fn();
+  };
+  const handleSelectAgent = (app: string) => {
+    setSelectedAgent(app);
+    onSelectWorkspace(''); // 清除工作区选择，主区进入该 Agent 的会话列表
+    onSelectConversation('');
+  };
+  const agentQuery = wsSearch.trim().toLowerCase();
+  const filteredAgents = agentQuery
+    ? agents.filter((a) => a.app.toLowerCase().includes(agentQuery))
+    : agents;
+
   /** 会话列表（品字型左下 / 收藏视图左侧共用） */
   const renderConversationList = () => (
     <section className="w-80 border-r theme-border flex flex-col theme-bg-sub flex-shrink-0">
@@ -677,6 +745,11 @@ export const BrowseView: React.FC<Props> = ({
               <>
                 <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
                 <span>{t('nav.starred')}</span>
+              </>
+            ) : sidebarMode === 'agent' && selectedAgent ? (
+              <>
+                {getSourceBadge(selectedAgent)}
+                <span>{t('conv.list', { n: conversations.length })}</span>
               </>
             ) : (
               <>
@@ -821,7 +894,7 @@ export const BrowseView: React.FC<Props> = ({
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 theme-text-sub" />
             <input
               type="text"
-              placeholder={t('nav.searchWorkspaces')}
+              placeholder={sidebarMode === 'agent' ? t('nav.searchAgents') : t('nav.searchWorkspaces')}
               value={wsSearch}
               onChange={(e) => setWsSearch(e.target.value)}
               className="w-full pl-8 pr-3 py-1.5 text-xs theme-bg-input border theme-border rounded-lg theme-text-main placeholder-slate-400 focus:outline-none focus:border-blue-500 shadow-2xs"
@@ -832,7 +905,7 @@ export const BrowseView: React.FC<Props> = ({
         {/* 固定导航区 */}
         <div className="p-2 space-y-1 border-b theme-border">
           <button
-            onClick={onSwitchToDashboard}
+            onClick={navTo(onSwitchToDashboard)}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               !selectedWorkspace && !isStarredView && !isPromptLibraryView && !isServicesView && !isGitBoardView && !isUsageStatsView
                 ? 'bg-blue-600/15 text-blue-500 border border-blue-500/30 shadow-xs font-semibold'
@@ -847,7 +920,7 @@ export const BrowseView: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={onSwitchToUsageStats}
+            onClick={navTo(onSwitchToUsageStats)}
             className={`w-full flex items-center px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isUsageStatsView
                 ? 'bg-cyan-600/15 text-cyan-500 border border-cyan-500/30 shadow-xs font-semibold'
@@ -861,7 +934,7 @@ export const BrowseView: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={onSwitchToPromptLibrary}
+            onClick={navTo(onSwitchToPromptLibrary)}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isPromptLibraryView
                 ? 'bg-violet-600/15 text-violet-500 border border-violet-500/30 shadow-xs font-semibold'
@@ -894,7 +967,7 @@ export const BrowseView: React.FC<Props> = ({
           </button>
 
           <button
-            onClick={onSwitchToStarred}
+            onClick={navTo(onSwitchToStarred)}
             className={`w-full flex items-center justify-between px-3 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer ${
               isStarredView
                 ? 'bg-amber-500/15 text-amber-500 border border-amber-500/30 shadow-xs font-semibold'
@@ -913,7 +986,82 @@ export const BrowseView: React.FC<Props> = ({
           </button>
         </div>
 
+        {/* 视图切换：工作区 / Agent */}
+        <div className="p-2 pb-0">
+          <div className="flex items-center gap-1 p-1 rounded-lg theme-bg-input border theme-border">
+            <button
+              type="button"
+              onClick={() => switchMode('workspace')}
+              className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                sidebarMode === 'workspace'
+                  ? 'theme-bg-card theme-text-main shadow-2xs'
+                  : 'theme-text-muted hover:theme-text-main'
+              }`}
+            >
+              {t('nav.viewWorkspace')}
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode('agent')}
+              className={`flex-1 px-2 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer ${
+                sidebarMode === 'agent'
+                  ? 'theme-bg-card theme-text-main shadow-2xs'
+                  : 'theme-text-muted hover:theme-text-main'
+              }`}
+            >
+              {t('nav.viewAgent')}
+            </button>
+          </div>
+        </div>
+
+        {/* Agent 列表 */}
+        {sidebarMode === 'agent' && (
+          <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+            {filteredAgents.map((a) => {
+              const isActive =
+                selectedAgent === a.app &&
+                !selectedWorkspace &&
+                !isStarredView &&
+                !isPromptLibraryView &&
+                !isServicesView &&
+                !isUsageStatsView &&
+                !isGitBoardView;
+              return (
+                <div
+                  key={a.app}
+                  onClick={() => handleSelectAgent(a.app)}
+                  className={`p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                    isActive
+                      ? 'bg-blue-600/15 border-blue-500/50 theme-text-main font-semibold shadow-xs'
+                      : 'bg-transparent border-transparent hover:theme-bg-card theme-text-muted hover:theme-text-main'
+                  } group relative`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="truncate pr-1">{getSourceBadge(a.app)}</span>
+                    {a.last_updated && (
+                      <span className="text-[10px] theme-text-sub flex-shrink-0">
+                        {formatRelativeTime(a.last_updated)}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <span className="text-[10px] font-mono theme-text-muted">
+                      {t('nav.sessionCount', { n: a.cnt })}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 mt-1.5 text-[10px] theme-text-sub">
+                    <span>· {t('nav.userCount', { n: a.user_message_count })}</span>
+                    <span>·</span>
+                    <span>{t('nav.messageCount', { n: a.message_count })}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* 工作区列表 */}
+        {sidebarMode === 'workspace' && (
         <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
           {workspaces.map((ws) => {
             const shortName = ws.workspace_path
@@ -1029,6 +1177,7 @@ export const BrowseView: React.FC<Props> = ({
             );
           })}
         </div>
+        )}
       </aside>
 
       {/* 右侧主内容区域 */}
@@ -1053,6 +1202,17 @@ export const BrowseView: React.FC<Props> = ({
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <PromptLibraryView onPromptCountChange={onPromptLibraryCountChange} />
         </main>
+      ) : sidebarMode === 'agent' && !selectedWorkspace ? (
+        /* Agent 视图：左侧 Agent 列表 + 选中 Agent 的会话列表（跨全部工作区） */
+        <>
+          {selectedAgent ? renderConversationList() : null}
+          <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
+            <div className="flex-1 flex flex-col items-center justify-center theme-text-sub">
+              <Sparkles className="h-10 w-10 mb-2 opacity-50" />
+              <p className="text-sm">{t('nav.pickAgent')}</p>
+            </div>
+          </main>
+        </>
       ) : !selectedWorkspace && !isStarredView ? (
         <main className="flex-1 flex flex-col h-full overflow-hidden theme-bg-main">
           <DashboardView

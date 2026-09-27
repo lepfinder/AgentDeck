@@ -1,6 +1,6 @@
 use crate::db::{
     allowed_prompt_category_values, create_prompt, delete_prompt, fetch_conversation_messages,
-    fetch_conversations, fetch_daily_timeline, fetch_dashboard_stats, fetch_usage_stats,
+    fetch_conversations, fetch_agents, fetch_daily_timeline, fetch_dashboard_stats, fetch_usage_stats,
     fetch_workspace_detail_stats,
     fetch_workspaces, get_database_path, get_prompt, get_short_workspace, list_prompts, prompt_category_options,
     merge_workspace, search_global_messages, update_prompt, PromptAgentItem, PromptInput,
@@ -587,11 +587,12 @@ fn route_get(
         "/api/conversations" => {
             let workspace = query_params.get("workspace").map(|s| s.as_str());
             let q = query_params.get("q").map(|s| s.as_str());
+            let agent = query_params.get("agent").map(|s| s.as_str());
             let starred = query_params
                 .get("starred")
                 .map(|s| s == "1" || s == "true")
                 .unwrap_or(false);
-            match fetch_conversations(conn, workspace, q, starred) {
+            match fetch_conversations(conn, workspace, q, starred, agent) {
                 Ok(conversations) => send_json(
                     stream,
                     200,
@@ -601,6 +602,21 @@ fn route_get(
                         "conversations": conversations
                     }),
                 ),
+                Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
+            }
+        }
+
+        "/api/agents" => {
+            let q = query_params.get("q").map(|s| s.as_str());
+            match fetch_agents(conn, q) {
+                Ok(agents) => {
+                    let total = agents.len();
+                    send_json(
+                        stream,
+                        200,
+                        json!({"ok": true, "total": total, "agents": agents}),
+                    );
+                }
                 Err(e) => send_json(stream, 500, json!({"ok": false, "error": e.to_string()})),
             }
         }

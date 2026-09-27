@@ -43,6 +43,17 @@ pub struct WorkspaceStat {
     pub last_updated: Option<String>,
 }
 
+/// 按 Agent 源聚合的会话统计（侧边栏 Agent 视图使用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentStat {
+    /// CASE 映射后的规范 agent key（antigravity / cursor / claude / ...）
+    pub app: String,
+    pub cnt: i64,
+    pub message_count: i64,
+    pub user_message_count: i64,
+    pub last_updated: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationItem {
     pub id: String,
@@ -2248,6 +2259,60 @@ pub fn fetch_workspaces(
     Ok(list)
 }
 
+/// 按 Agent 源聚合会话（侧边栏 Agent 视图）。
+/// CASE 映射与 `fetch_conversations` 的 source_app 完全一致，
+/// 保证点击某 Agent 看到的会话与其徽标严格对应。
+pub fn fetch_agents(conn: &Connection, search: Option<&str>) -> Result<Vec<AgentStat>> {
+    let sql = r#"
+        SELECT
+            app,
+            COUNT(*) as cnt,
+            SUM(mc) as message_count,
+            SUM(umc) as user_message_count,
+            MAX(upd) as last_updated
+        FROM (
+            SELECT
+                CASE
+                    WHEN source_types LIKE '%claude%' THEN 'claude'
+                    WHEN source_types LIKE '%cursor%' THEN 'cursor'
+                    WHEN source_types LIKE '%codex%' THEN 'codex'
+                    WHEN source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                    WHEN source_types LIKE '%hermes%' THEN 'hermes'
+                    WHEN source_types LIKE '%mimo%' THEN 'mimo'
+                    WHEN source_types LIKE '%windsurf%' THEN 'windsurf'
+                    WHEN source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                    WHEN source_types LIKE '%qoder%' THEN 'qoder'
+                    WHEN source_types LIKE '%grokbot%' THEN 'grokbot'
+                    ELSE 'antigravity'
+                END as app,
+                COALESCE(message_count, 0) as mc,
+                COALESCE(user_message_count, 0) as umc,
+                updated_at as upd
+            FROM conversations
+        )
+        WHERE (?1 IS NULL OR ?1 = '' OR app LIKE '%' || ?1 || '%')
+        GROUP BY app
+        ORDER BY last_updated DESC
+    "#;
+
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(params![search.unwrap_or("")], |row| {
+        Ok(AgentStat {
+            app: row.get(0)?,
+            cnt: row.get(1)?,
+            message_count: row.get(2).unwrap_or(0),
+            user_message_count: row.get(3).unwrap_or(0),
+            last_updated: to_beijing_iso(row.get(4)?),
+        })
+    })?;
+
+    let mut list = Vec::new();
+    for r in rows.flatten() {
+        list.push(r);
+    }
+    Ok(list)
+}
+
 /// 解析工作区别名链（old → new → newer…）；无别名时原样返回。
 /// 迭代上限防御异常数据成环。
 pub fn resolve_workspace_alias(conn: &Connection, path: &str) -> Result<String> {
@@ -2467,6 +2532,7 @@ pub fn fetch_conversations(
     workspace: Option<&str>,
     search: Option<&str>,
     starred_only: bool,
+    agent: Option<&str>,
 ) -> Result<Vec<ConversationItem>> {
     let mut list = Vec::new();
     let sql = r#"
@@ -2511,6 +2577,24 @@ pub fn fetch_conversations(
             OR c.title LIKE '%' || ?3 || '%'
             OR COALESCE(ai.ai_title, '') LIKE '%' || ?3 || '%'
           )
+          AND (
+            ?4 IS NULL OR ?4 = ''
+            OR (
+              CASE
+                WHEN c.source_types LIKE '%claude%' THEN 'claude'
+                WHEN c.source_types LIKE '%cursor%' THEN 'cursor'
+                WHEN c.source_types LIKE '%codex%' THEN 'codex'
+                WHEN c.source_types LIKE '%workbuddy%' THEN 'workbuddy'
+                WHEN c.source_types LIKE '%hermes%' THEN 'hermes'
+                WHEN c.source_types LIKE '%mimo%' THEN 'mimo'
+                WHEN c.source_types LIKE '%windsurf%' THEN 'windsurf'
+                WHEN c.source_types LIKE '%codebuddy%' THEN 'codebuddy'
+                WHEN c.source_types LIKE '%qoder%' THEN 'qoder'
+                WHEN c.source_types LIKE '%grokbot%' THEN 'grokbot'
+                ELSE 'antigravity'
+              END
+            ) = ?4
+          )
         ORDER BY c.updated_at DESC
         LIMIT 200
     "#;
@@ -2520,7 +2604,8 @@ pub fn fetch_conversations(
         params![
             if starred_only { 1 } else { 0 },
             workspace,
-            search.unwrap_or("")
+            search.unwrap_or(""),
+            agent.unwrap_or("")
         ],
         |row| {
             let source_title: String = row.get(3)?;
@@ -4874,16 +4959,16 @@ mod tests {
         .unwrap();
 
         // None = 全部；Some("") = 仅未分类
-        let all = fetch_conversations(&conn, None, None, false).unwrap();
+        let all = fetch_conversations(&conn, None, None, false, None).unwrap();
         assert_eq!(all.len(), 2);
 
-        let uncat = fetch_conversations(&conn, Some(""), None, false).unwrap();
+        let uncat = fetch_conversations(&conn, Some(""), None, false, None).unwrap();
         assert_eq!(uncat.len(), 1);
         assert_eq!(uncat[0].id, "c-uncat");
         // 派生 CASE 必须认识 grokbot，否则兜底成 antigravity
         assert_eq!(uncat[0].source_app, "grokbot");
 
-        let real = fetch_conversations(&conn, Some("/Users/x/proj"), None, false).unwrap();
+        let real = fetch_conversations(&conn, Some("/Users/x/proj"), None, false, None).unwrap();
         assert_eq!(real.len(), 1);
         assert_eq!(real[0].id, "c-real");
     }

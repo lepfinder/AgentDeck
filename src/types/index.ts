@@ -16,6 +16,16 @@ export interface WorkspaceStat {
   last_updated?: string;
 }
 
+/** 按 Agent 源聚合的会话统计（侧边栏 Agent 视图） */
+export interface AgentStat {
+  /** 规范 agent key：antigravity / cursor / claude / codex / workbuddy / hermes / mimo / windsurf / codebuddy / qoder / grokbot */
+  app: string;
+  cnt: number;
+  message_count: number;
+  user_message_count: number;
+  last_updated?: string;
+}
+
 export interface WorkspaceMergeResult {
   source_path: string;
   target_path: string;

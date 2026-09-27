@@ -3,6 +3,7 @@ import type {
   DashboardStats,
   DailyTimelineStats,
   WorkspaceStat,
+  AgentStat,
   WorkspaceMergeResult,
   ConversationMoveResult,
   ConversationItem,
@@ -112,10 +113,20 @@ export const api = {
     return data.result;
   },
 
+  async listAgents(search?: string): Promise<AgentStat[]> {
+    if (isTauri()) {
+      return await invoke<AgentStat[]>('list_agents', { search: search || null });
+    }
+    const res = await fetch(`/api/agents?q=${encodeURIComponent(search || '')}`);
+    const data = await res.json();
+    return Array.isArray(data) ? data : data.agents || [];
+  },
+
   async listConversations(
     workspace?: string,
     search?: string,
-    starredOnly?: boolean
+    starredOnly?: boolean,
+    agent?: string
   ): Promise<ConversationItem[]> {
     // workspace: undefined = 全部；'' = 未分类（不能折叠成 null）
     if (isTauri()) {
@@ -123,12 +134,14 @@ export const api = {
         workspace: workspace === undefined ? null : workspace,
         search: search || null,
         starredOnly: !!starredOnly,
+        agent: agent || null,
       });
     }
     const params = new URLSearchParams();
     if (workspace !== undefined) params.set('workspace', workspace);
     params.set('cq', search || '');
     params.set('starred', starredOnly ? '1' : '0');
+    if (agent) params.set('agent', agent);
     const res = await fetch(`/api/conversations?${params.toString()}`);
     return await res.json();
   },
