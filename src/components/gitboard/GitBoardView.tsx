@@ -368,7 +368,7 @@ function GitBoardDetail({
   const [filesKey, setFilesKey] = useState(0);
 
   // 左侧树 Tab：Git 变更 / 全部文件（懒加载浏览）
-  const [treeTab, setTreeTab] = useState<'changes' | 'files'>('changes');
+  const [treeTab, setTreeTab] = useState<'changes' | 'files'>('files');
   const [dirChildren, setDirChildren] = useState<Record<string, WorkspaceDirEntry[]>>({});
   const [dirLoading, setDirLoading] = useState<Record<string, boolean>>({});
   const [expandedDirs, setExpandedDirs] = useState<Record<string, boolean>>({});
@@ -404,7 +404,7 @@ function GitBoardDetail({
     setViewCommit(null);
     setShowCommitPanel(false);
     setCtxMenu(null);
-    setTreeTab('changes');
+    setTreeTab('files');
     setDirChildren({});
     setDirLoading({});
     setExpandedDirs({});
@@ -1059,16 +1059,6 @@ function GitBoardDetail({
           <div className="px-2 pt-2 pb-1 flex-shrink-0">
             <div className="flex items-center rounded-lg border theme-border theme-bg-sub overflow-hidden">
               <button
-                onClick={() => setTreeTab('changes')}
-                className={`flex-1 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
-                  treeTab === 'changes'
-                    ? 'bg-black/[0.06] dark:bg-white/[0.08] theme-text-main'
-                    : 'theme-text-muted hover:theme-text-main'
-                }`}
-              >
-                {t('gitBoard.tabChanges')}
-              </button>
-              <button
                 onClick={() => setTreeTab('files')}
                 className={`flex-1 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
                   treeTab === 'files'
@@ -1077,6 +1067,16 @@ function GitBoardDetail({
                 }`}
               >
                 {t('gitBoard.tabFiles')}
+              </button>
+              <button
+                onClick={() => setTreeTab('changes')}
+                className={`flex-1 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                  treeTab === 'changes'
+                    ? 'bg-black/[0.06] dark:bg-white/[0.08] theme-text-main'
+                    : 'theme-text-muted hover:theme-text-main'
+                }`}
+              >
+                {t('gitBoard.tabChanges')}
               </button>
             </div>
           </div>
