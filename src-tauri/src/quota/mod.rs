@@ -22,6 +22,8 @@ pub struct QuotaWindow {
     pub used_percent: u32,
     pub exhausted: bool,
     pub resets_at: Option<String>,
+    /// 窗口真实起点（账期类窗口由源给出）；缺失时前端按 kind 时长倒推
+    pub starts_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +121,10 @@ pub fn fetch_quota_snapshot(force: bool) -> QuotaSnapshot {
     }
 
     stamp_ages(snapshot)
+}
+
+pub fn cursor_debug_probe() -> serde_json::Value {
+    cursor::debug_probe()
 }
 
 fn stamp_ages(mut snapshot: QuotaSnapshot) -> QuotaSnapshot {

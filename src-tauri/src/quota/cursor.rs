@@ -3,52 +3,31 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
 
 const TOKEN_KEY: &str = "cursorAuth/accessToken";
 const ENDPOINT: &str = "https://cursor.com/api/usage-summary";
 const EXPIRY_HEADROOM_SECS: i64 = 60;
+/// Cursor 在内存里刷新 token 后写 state.vscdb 有延迟，旧 token 会短暂吃 401；
+/// 等一会儿重读 DB 再试一次，两次都被拒才判定登录失效
+const AUTH_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 pub fn fetch() -> Result<ProviderQuota, String> {
-    let token = match read_access_token() {
-        Some(t) => t,
-        None => {
-            return Ok(unavailable(
-                "cursor",
-                "Cursor",
-                "sign_in_required",
-                "未检测到 Cursor 登录，请先在 Cursor 中登录",
-            ));
-        }
-    };
-
-    let cookie = match session_cookie(&token) {
-        Some(c) => c,
-        None => {
-            return Ok(unavailable(
-                "cursor",
-                "Cursor",
-                "login_expired",
-                "Cursor 登录已过期，请打开 Cursor 以刷新登录",
-            ));
-        }
-    };
-
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
 
-    let response = client
-        .get(ENDPOINT)
-        .header("Cookie", cookie)
-        .header("Accept", "application/json")
-        .send()
-        .map_err(|_| "无法连接 cursor.com".to_string())?;
+    let mut outcome = attempt(&client)?;
+    if matches!(outcome, Outcome::AuthRejected) {
+        std::thread::sleep(AUTH_RETRY_DELAY);
+        outcome = attempt(&client)?;
+    }
 
-    match response.status().as_u16() {
-        200 => {}
-        401 | 403 => {
+    let reply = match outcome {
+        Outcome::Ok(reply) => reply,
+        Outcome::AuthRejected => {
             return Ok(unavailable(
                 "cursor",
                 "Cursor",
@@ -56,27 +35,8 @@ pub fn fetch() -> Result<ProviderQuota, String> {
                 "Cursor 登录已失效，请打开 Cursor 重新登录",
             ));
         }
-        429 => {
-            return Ok(unavailable(
-                "cursor",
-                "Cursor",
-                "rate_limited",
-                "Cursor 额度接口限流，请稍后再试",
-            ));
-        }
-        code => {
-            return Ok(unavailable(
-                "cursor",
-                "Cursor",
-                "server_error",
-                format!("Cursor 额度接口返回 HTTP {code}"),
-            ));
-        }
-    }
-
-    let reply: Reply = response
-        .json()
-        .map_err(|_| "无法解析 Cursor 额度响应".to_string())?;
+        Outcome::Unavailable(quota) => return Ok(quota),
+    };
 
     let windows = windows_from(&reply);
     if windows.is_empty() {
@@ -117,6 +77,117 @@ pub fn fetch() -> Result<ProviderQuota, String> {
         windows,
         headline,
     })
+}
+
+enum Outcome {
+    Ok(Reply),
+    AuthRejected,
+    Unavailable(ProviderQuota),
+}
+
+/// 进程内诊断：token 读取状态 + 单次真实抓取结果（/api/quota/debug）
+pub fn debug_probe() -> serde_json::Value {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let token = read_access_token();
+    let (token_len, token_hash8, jwt_exp) = match token.as_deref() {
+        Some(t) => {
+            let mut hasher = DefaultHasher::new();
+            t.hash(&mut hasher);
+            let hash8 = format!("{:016x}", hasher.finish());
+            let exp = jwt_claims(t)
+                .and_then(|c| c.get("exp").and_then(|e| e.as_f64()))
+                .and_then(|e| chrono::DateTime::from_timestamp(e as i64, 0))
+                .map(|dt| dt.to_rfc3339());
+            (Some(t.len()), Some(hash8), exp)
+        }
+        None => (None, None, None),
+    };
+
+    let attempt = match reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => match attempt(&client) {
+            Ok(Outcome::Ok(_)) => "ok".to_string(),
+            Ok(Outcome::AuthRejected) => "auth_rejected".to_string(),
+            Ok(Outcome::Unavailable(p)) => format!("unavailable:{}", p.status),
+            Err(e) => format!("transport:{e}"),
+        },
+        Err(e) => format!("client:{e}"),
+    };
+
+    serde_json::json!({
+        "token_present": token.is_some(),
+        "token_len": token_len,
+        "token_hash8": token_hash8,
+        "jwt_exp": jwt_exp,
+        "attempt": attempt,
+    })
+}
+
+/// 单次抓取：每次都重读 state.vscdb，重试路径靠这一步拿到 Cursor 刚落盘的新 token
+fn attempt(client: &reqwest::blocking::Client) -> Result<Outcome, String> {
+    let token = match read_access_token() {
+        Some(t) => t,
+        None => {
+            return Ok(Outcome::Unavailable(unavailable(
+                "cursor",
+                "Cursor",
+                "sign_in_required",
+                "未检测到 Cursor 登录，请先在 Cursor 中登录",
+            )));
+        }
+    };
+
+    let cookie = match session_cookie(&token) {
+        Some(c) => c,
+        None => {
+            return Ok(Outcome::Unavailable(unavailable(
+                "cursor",
+                "Cursor",
+                "login_expired",
+                "Cursor 登录已过期，请打开 Cursor 以刷新登录",
+            )));
+        }
+    };
+
+    let response = client
+        .get(ENDPOINT)
+        .header("Cookie", cookie)
+        .header("Accept", "application/json")
+        .send()
+        .map_err(|_| "无法连接 cursor.com".to_string())?;
+
+    match response.status().as_u16() {
+        200 => response
+            .json::<Reply>()
+            .map(Outcome::Ok)
+            .map_err(|_| "无法解析 Cursor 额度响应".to_string()),
+        // 401 = 真认证失败（token 作废），重试一次覆盖落盘延迟；
+        // 403 = 边缘节点风控人机校验（TLS 指纹等），重试无意义，单独文案
+        401 => Ok(Outcome::AuthRejected),
+        403 => Ok(Outcome::Unavailable(unavailable(
+            "cursor",
+            "Cursor",
+            "blocked",
+            "被 Cursor 接口风控拦截，请稍后重试",
+        ))),
+        429 => Ok(Outcome::Unavailable(unavailable(
+            "cursor",
+            "Cursor",
+            "rate_limited",
+            "Cursor 额度接口限流，请稍后再试",
+        ))),
+        code => Ok(Outcome::Unavailable(unavailable(
+            "cursor",
+            "Cursor",
+            "server_error",
+            format!("Cursor 额度接口返回 HTTP {code}"),
+        ))),
+    }
 }
 
 fn state_db_path() -> PathBuf {
@@ -225,6 +296,7 @@ struct Team {
 #[serde(rename_all = "camelCase")]
 struct Reply {
     billing_cycle_end: Option<String>,
+    billing_cycle_start: Option<String>,
     membership_type: Option<String>,
     individual_usage: Option<Individual>,
     team_usage: Option<Team>,
@@ -232,6 +304,7 @@ struct Reply {
 
 fn windows_from(reply: &Reply) -> Vec<QuotaWindow> {
     let resets = reply.billing_cycle_end.clone();
+    let starts = reply.billing_cycle_start.clone();
     let plan = reply
         .individual_usage
         .as_ref()
@@ -246,6 +319,7 @@ fn windows_from(reply: &Reply) -> Vec<QuotaWindow> {
             "cursorModels",
             Some("Cursor Models"),
             resets.clone(),
+            starts.clone(),
         ) {
             found.push(w);
         }
@@ -254,11 +328,12 @@ fn windows_from(reply: &Reply) -> Vec<QuotaWindow> {
             "otherModels",
             Some("Other Models"),
             resets.clone(),
+            starts.clone(),
         ) {
             found.push(w);
         }
         if found.is_empty() {
-            if let Some(w) = money_window(plan, "plan", "monthly", resets.clone()) {
+            if let Some(w) = money_window(plan, "plan", "monthly", resets.clone(), starts.clone()) {
                 found.push(w);
             }
         }
@@ -270,7 +345,7 @@ fn windows_from(reply: &Reply) -> Vec<QuotaWindow> {
         .and_then(|i| i.on_demand.as_ref())
         .or_else(|| reply.team_usage.as_ref().and_then(|t| t.on_demand.as_ref()));
     if let Some(od) = on_demand {
-        if let Some(w) = money_window(od, "onDemand", "spend", resets) {
+        if let Some(w) = money_window(od, "onDemand", "spend", resets, starts) {
             found.push(w);
         }
     }
@@ -284,6 +359,7 @@ fn pool_window(
     id: &str,
     scope: Option<&str>,
     resets_at: Option<String>,
+    starts_at: Option<String>,
 ) -> Option<QuotaWindow> {
     let percent = percent?;
     let used_fraction = (percent / 100.0).clamp(0.0, 1.0);
@@ -295,6 +371,7 @@ fn pool_window(
         used_percent: used_percent(used_fraction),
         exhausted: percent >= 100.0,
         resets_at,
+        starts_at,
     })
 }
 
@@ -303,6 +380,7 @@ fn money_window(
     id: &str,
     kind: &str,
     resets_at: Option<String>,
+    starts_at: Option<String>,
 ) -> Option<QuotaWindow> {
     if allowance.enabled == Some(false) {
         return None;
@@ -321,6 +399,7 @@ fn money_window(
         used_percent: used_percent(used_fraction),
         exhausted: used >= limit,
         resets_at,
+        starts_at,
     })
 }
 

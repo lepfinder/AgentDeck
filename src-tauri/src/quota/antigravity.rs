@@ -458,6 +458,8 @@ fn window_from_bucket(bucket: QuotaBucket, scope: Option<String>) -> Option<Quot
         used_percent: used_percent(used_fraction),
         exhausted: remaining <= 0.0,
         resets_at: bucket.reset_time,
+        // 滚动窗口（5h/周）时长精确，前端按 kind 倒推起点即可
+        starts_at: None,
     })
 }
 

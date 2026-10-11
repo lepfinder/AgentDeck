@@ -442,6 +442,10 @@ fn route_get(
             );
         }
 
+        "/api/quota/debug" => {
+            send_json(stream, 200, crate::quota::cursor_debug_probe());
+        }
+
         "/api/prompts/categories" => {
             send_json(
                 stream,
