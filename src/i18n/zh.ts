@@ -41,6 +41,12 @@ export const zh = {
   'quota.pill.shortWeekly': '周',
   'quota.pill.shortMonthly': '月',
   'quota.pill.shortSpend': '量',
+  'quota.pill.projOver': '预计超支 {p}%',
+  'quota.pill.projUnder': '预计用到 {p}%',
+  'quota.pill.outAt': '{t} 用完',
+  'quota.pill.safeRate': '安全速率 {r}',
+  'quota.pill.unitHour': '小时',
+  'quota.pill.unitDay': '天',
 
   'footer.history': 'AI 历史会话',
   'footer.sessions': '{n} 会话',

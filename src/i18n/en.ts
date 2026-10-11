@@ -43,6 +43,12 @@ export const en: Record<MessageKey, string> = {
   'quota.pill.shortWeekly': 'wk',
   'quota.pill.shortMonthly': 'mo',
   'quota.pill.shortSpend': 'sp',
+  'quota.pill.projOver': 'Projected {p}% over',
+  'quota.pill.projUnder': 'Projected {p}% used',
+  'quota.pill.outAt': 'out by {t}',
+  'quota.pill.safeRate': 'safe pace {r}',
+  'quota.pill.unitHour': 'h',
+  'quota.pill.unitDay': 'd',
 
   'footer.history': 'AI session history',
   'footer.sessions': '{n} sessions',

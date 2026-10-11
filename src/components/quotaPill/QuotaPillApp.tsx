@@ -129,6 +129,59 @@ function relativeUntil(iso: string | null | undefined, t: T): string {
 
 const KIND_ORDER = ['fiveHour', 'daily', 'weekly', 'monthly', 'spend'];
 
+/** 窗口总时长兜底：源没给 starts_at 时按 kind 倒推起点（滚动窗口时长精确，账期类不准） */
+const KIND_DURATION_MS: Record<string, number> = {
+  fiveHour: 5 * 3_600_000,
+  daily: 24 * 3_600_000,
+  weekly: 7 * 24 * 3_600_000,
+  monthly: 30 * 24 * 3_600_000,
+  spend: 30 * 24 * 3_600_000,
+};
+
+interface PaceInfo {
+  /** 按当前速率推算的重置时总用量（%） */
+  projected: number;
+  /** 剩余配额摊到剩余时间的可持续速率（%/小时 或 %/天） */
+  safePerUnit: number;
+  unit: 'hour' | 'day';
+  /** 按当前速率打满 100% 的时刻（早于重置才有意义） */
+  exhaustAt: string | null;
+}
+
+function paceInfo(w: QuotaWindow): PaceInfo | null {
+  if (!w.resets_at || w.exhausted) return null;
+  const end = Date.parse(w.resets_at);
+  if (Number.isNaN(end)) return null;
+  const now = Date.now();
+  const remaining = end - now;
+  if (remaining <= 0) return null;
+  // 起点优先用源给的真实账期（Cursor billingCycleStart）；
+  // 缺失才按 kind 时长倒推——账期 28~31 天不等，猜 30 天会把速率算偏
+  const fallbackStart = end - (KIND_DURATION_MS[w.kind] ?? 0);
+  const parsedStart = w.starts_at ? Date.parse(w.starts_at) : NaN;
+  const elapsed = now - (Number.isNaN(parsedStart) ? fallbackStart : parsedStart);
+  // 刚重置：速率没有样本
+  if (elapsed < 60_000) return null;
+  const cycle = elapsed + remaining;
+  const frac = w.used_fraction;
+  const pace = frac / elapsed;
+  const unitMs = cycle <= 24 * 3_600_000 ? 3_600_000 : 24 * 3_600_000;
+  const exhaustMs = pace > 0 ? now + (1 - frac) / pace : null;
+  return {
+    projected: pace * cycle * 100,
+    safePerUnit: ((1 - frac) / remaining) * unitMs * 100,
+    unit: unitMs === 3_600_000 ? 'hour' : 'day',
+    exhaustAt: exhaustMs != null && exhaustMs < end
+      ? new Date(exhaustMs).toISOString()
+      : null,
+  };
+}
+
+function fmtRate(v: number, unit: 'hour' | 'day', t: T): string {
+  const text = v >= 10 ? String(Math.round(v)) : v.toFixed(1);
+  return `${text}%/${t(unit === 'hour' ? 'quota.pill.unitHour' : 'quota.pill.unitDay')}`;
+}
+
 function shortKind(kind: string, t: T): string {
   switch (kind) {
     case 'fiveHour': return t('quota.pill.short5h');
@@ -240,6 +293,7 @@ function WindowBlock({ w, t, locale }: {
   const usedText = w.exhausted
     ? t('quota.exhausted')
     : t('quota.pill.used', { p: w.used_percent });
+  const pace = paceInfo(w);
   return (
     <div className="space-y-1.5">
       {/* 标签 + 已用：已用在进度条右上角 */}
@@ -269,6 +323,22 @@ function WindowBlock({ w, t, locale }: {
           </span>
         )}
       </div>
+      {pace && (
+        <div
+          className="flex items-start justify-between gap-2 text-[10px]"
+          style={{ color: pace.projected > 100 ? '#f59e0b' : '#71717a' }}
+        >
+          <span className="truncate">
+            {pace.projected > 100
+              ? t('quota.pill.projOver', { p: Math.round(pace.projected - 100) })
+              : t('quota.pill.projUnder', { p: Math.round(pace.projected) })}
+            {pace.exhaustAt && ` · ${t('quota.pill.outAt', { t: formatReset(pace.exhaustAt, locale) })}`}
+          </span>
+          <span className="shrink-0 text-right">
+            {t('quota.pill.safeRate', { r: fmtRate(pace.safePerUnit, pace.unit, t) })}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

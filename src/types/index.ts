@@ -657,6 +657,7 @@ export interface QuotaWindow {
   used_percent: number;
   exhausted: boolean;
   resets_at?: string | null;
+  starts_at?: string | null;
 }
 
 export interface ProviderQuota {
