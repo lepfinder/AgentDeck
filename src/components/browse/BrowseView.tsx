@@ -1470,20 +1470,15 @@ export const BrowseView: React.FC<Props> = ({
                           <span className="break-all">{currentConv.source_title}</span>
                         </div>
                       )}
-                    {aiActionError && (
+                    {/* Outline loading/error/success live in the panel when open; header only when panel closed. */}
+                    {!outlineOpen && aiActionError && (
                       <div className="mt-1 text-[11px] text-red-500 truncate" title={aiActionError}>
                         {aiActionError}
                       </div>
                     )}
-                    {!aiActionError && aiActionSuccess && (
+                    {!outlineOpen && !aiActionError && aiActionSuccess && (
                       <div className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 truncate" title={aiActionSuccess}>
                         {aiActionSuccess}
-                      </div>
-                    )}
-                    {!aiActionError && !aiActionSuccess && outlining && (
-                      <div className="mt-1 text-[11px] text-teal-600 dark:text-teal-400 truncate flex items-center gap-1">
-                        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                        {t('conv.outlineGenerating')}
                       </div>
                     )}
                   </div>
@@ -1522,7 +1517,8 @@ export const BrowseView: React.FC<Props> = ({
                                   : 'bg-teal-500/10 border-teal-500/30 text-teal-600 dark:text-teal-400 hover:bg-teal-500/20'
                               }`}
                             >
-                              {outlining ? (
+                              {/* Spinner only when panel closed (panel owns the loading banner). */}
+                              {outlining && !outlineOpen ? (
                                 <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
                               ) : (
                                 <ListTree className="h-4 w-4 shrink-0" />
@@ -1707,7 +1703,7 @@ export const BrowseView: React.FC<Props> = ({
                       generatedAt={currentConv.ai_outline_generated_at}
                       statusMessage={
                         outlining
-                          ? t('conv.outlineGenerating')
+                          ? null /* panel shows outlineWorking / outlineUpdating itself */
                           : aiActionError
                             ? aiActionError
                             : aiActionSuccess

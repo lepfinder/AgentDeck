@@ -266,43 +266,93 @@ function buildUserPromptLines(
   return joinLines(trimFrontToMax(lines, maxChars));
 }
 
-function parseOutlineJson(raw: string): OutlineSegment[] | null {
-  const text = raw.trim();
-  const tryParse = (s: string): { segments?: unknown } | null => {
-    try {
-      return JSON.parse(s) as { segments?: unknown };
-    } catch {
-      return null;
+function stripTrailingCommas(s: string): string {
+  return s.replace(/,\s*([}\]])/g, '$1');
+}
+
+function tryRepairJson(s: string): string {
+  let t = stripTrailingCommas(s.trim());
+  // Close truncated objects/arrays by balancing braces/brackets.
+  const stack: string[] = [];
+  let inStr = false;
+  let esc = false;
+  for (const ch of t) {
+    if (inStr) {
+      if (esc) {
+        esc = false;
+      } else if (ch === '\\') {
+        esc = true;
+      } else if (ch === '"') {
+        inStr = false;
+      }
+      continue;
     }
-  };
-  let parsed = tryParse(text);
-  if (!parsed) {
-    const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-    if (fenced?.[1]) parsed = tryParse(fenced[1].trim());
+    if (ch === '"') {
+      inStr = true;
+      continue;
+    }
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') {
+      if (stack.length && stack[stack.length - 1] === ch) stack.pop();
+    }
   }
-  if (!parsed) {
-    const brace = text.match(/\{[\s\S]*\}/);
-    if (brace?.[0]) parsed = tryParse(brace[0]);
+  if (inStr) t += '"';
+  while (stack.length) t += stack.pop();
+  return stripTrailingCommas(t);
+}
+
+function coerceStartUserIndex(rec: Record<string, unknown>): number {
+  const raw =
+    rec.start_user_index ??
+    rec.startUserIndex ??
+    rec.start_index ??
+    rec.user_index ??
+    rec.index;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const n = Number(raw.trim().replace(/^#/, ''));
+    if (Number.isFinite(n)) return n;
   }
-  if (!parsed || !Array.isArray(parsed.segments)) return null;
+  return NaN;
+}
+
+function segmentsFromUnknown(parsed: unknown): OutlineSegment[] | null {
+  let list: unknown = null;
+  if (Array.isArray(parsed)) {
+    list = parsed;
+  } else if (parsed && typeof parsed === 'object') {
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.segments)) list = obj.segments;
+    else if (Array.isArray(obj.outline)) list = obj.outline;
+    else if (Array.isArray(obj.topics)) list = obj.topics;
+    else if (Array.isArray(obj.items)) list = obj.items;
+  }
+  if (!Array.isArray(list)) return null;
 
   const segments: OutlineSegment[] = [];
-  for (const item of parsed.segments) {
+  for (const item of list) {
     if (!item || typeof item !== 'object') continue;
     const rec = item as Record<string, unknown>;
-    const title = typeof rec.title === 'string' ? rec.title.trim() : '';
+    const title =
+      typeof rec.title === 'string'
+        ? rec.title.trim()
+        : typeof rec.name === 'string'
+          ? rec.name.trim()
+          : typeof rec.topic === 'string'
+            ? rec.topic.trim()
+            : '';
     if (!title) continue;
-    const startUser =
-      typeof rec.start_user_index === 'number'
-        ? rec.start_user_index
-        : typeof rec.startUserIndex === 'number'
-          ? rec.startUserIndex
-          : NaN;
+    const startUser = coerceStartUserIndex(rec);
     if (!Number.isFinite(startUser) || startUser < 1) continue;
     const summary =
       typeof rec.summary === 'string' && rec.summary.trim()
         ? rec.summary.trim()
-        : undefined;
+        : typeof rec.desc === 'string' && rec.desc.trim()
+          ? rec.desc.trim()
+          : typeof rec.description === 'string' && rec.description.trim()
+            ? rec.description.trim()
+            : undefined;
     segments.push({
       title,
       summary,
@@ -313,6 +363,57 @@ function parseOutlineJson(raw: string): OutlineSegment[] | null {
   if (segments.length === 0) return null;
   segments.sort((a, b) => a.start_user_index - b.start_user_index);
   return segments;
+}
+
+function extractJsonCandidates(raw: string): string[] {
+  const text = raw.replace(/^\uFEFF/, '').trim();
+  const out: string[] = [];
+  const push = (s: string | undefined | null) => {
+    if (s && s.trim()) out.push(s.trim());
+  };
+  push(text);
+
+  // Closed fences
+  for (const m of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)) {
+    push(m[1]);
+  }
+  // Unclosed fence (model cut off)
+  const unclosed = text.match(/```(?:json)?\s*([\s\S]+)$/i);
+  if (unclosed?.[1] && !unclosed[1].includes('```')) push(unclosed[1]);
+
+  const segObj = text.match(/\{[\s\S]*"segments"\s*:\s*\[[\s\S]*/i);
+  if (segObj?.[0]) push(segObj[0]);
+
+  const brace = text.match(/\{[\s\S]*\}/);
+  if (brace?.[0]) push(brace[0]);
+
+  const arr = text.match(/\[[\s\S]*\]/);
+  if (arr?.[0]) push(arr[0]);
+
+  // First { or [ to end (for truncation repair)
+  const firstObj = text.indexOf('{');
+  const firstArr = text.indexOf('[');
+  let start = -1;
+  if (firstObj >= 0 && (firstArr < 0 || firstObj < firstArr)) start = firstObj;
+  else if (firstArr >= 0) start = firstArr;
+  if (start >= 0) push(text.slice(start));
+
+  return [...new Set(out)];
+}
+
+function parseOutlineJson(raw: string): OutlineSegment[] | null {
+  for (const candidate of extractJsonCandidates(raw)) {
+    for (const variant of [candidate, stripTrailingCommas(candidate), tryRepairJson(candidate)]) {
+      try {
+        const parsed = JSON.parse(variant) as unknown;
+        const segs = segmentsFromUnknown(parsed);
+        if (segs) return segs;
+      } catch {
+        /* try next */
+      }
+    }
+  }
+  return null;
 }
 
 function attachStepIndices(
@@ -387,8 +488,9 @@ export async function generateConversationOutline(params: {
 规则：
 1) 仅依据用户提问；短回复如「继续」「改一下」「好的」并入上一段
 2) 输出 1～8 段，覆盖从给定起点到结尾的全部用户提问
-3) 每段：title（中文 4-16 字）、summary（一句）、start_user_index（该段第一条用户提问编号）
-4) segments 按 start_user_index 升序；第一段的 start_user_index 必须等于或接近起点编号
+3) 每段：title（中文 4-16 字）、summary（一句）、start_user_index（必须用列表里的 # 编号，整数）
+4) segments 按 start_user_index 升序；第一段的 start_user_index 必须等于列表中最小编号或紧随其后
+5) 不要输出 markdown 代码块或解释文字，只输出一个 JSON 对象
 只输出 JSON：{"segments":[{"title":"...","summary":"...","start_user_index":N},...]}`;
 
     user = `会话：${conversation.source_title || conversation.title || '未命名'}
@@ -412,9 +514,10 @@ ${promptBlock}`;
 规则：
 1) 仅依据用户提问概括主题；不要臆造助手做了什么
 2) 短回复如「继续」「改一下」「好的」并入上一段，不要单独成段
-3) 每段：title（中文短标题 4-16 字）、summary（一句中文）、start_user_index（该段第一条用户提问的编号，从 1 起）
-4) segments 必须按 start_user_index 升序，且第一段从 1 起（或接近 1）
-只输出 JSON：{"segments":[{"title":"...","summary":"...","start_user_index":1},...]}`;
+3) 每段：title（中文短标题 4-16 字）、summary（一句中文）、start_user_index（必须等于列表中的 # 编号，整数；列表可能从较大编号开始，不要强行从 1 起）
+4) segments 必须按 start_user_index 升序；第一段的 start_user_index 应为列表里出现的最小编号
+5) 不要输出 markdown 代码块或解释文字，只输出一个 JSON 对象
+只输出 JSON：{"segments":[{"title":"...","summary":"...","start_user_index":N},...]}`;
 
     user = `源标题：${conversation.source_title || conversation.title || '未命名'}
 来源：${conversation.source_app}
@@ -431,7 +534,7 @@ ${promptBlock}`;
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    1200,
+    2800,
     true,
     'conversation_outline'
   );
@@ -442,7 +545,11 @@ ${promptBlock}`;
 
   const parsed = parseOutlineJson(result.content);
   if (!parsed) {
-    throw new Error('未能解析出有效目录');
+    const preview = result.content.trim().slice(0, 500);
+    console.warn('[conversation_outline] parse failed, raw preview:', preview);
+    throw new Error(
+      `未能解析出有效目录（模型未返回可用 JSON）。预览：${preview.slice(0, 160)}${preview.length > 160 ? '…' : ''}`
+    );
   }
 
   let segments: OutlineSegment[];
