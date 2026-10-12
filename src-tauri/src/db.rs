@@ -59,7 +59,7 @@ pub struct ConversationItem {
     pub id: String,
     pub workspace_path: String,
     pub source_app: String,
-    /// 列表展示标题：优先 AI 标题，否则同步源标题
+    /// 列表展示标题：有界优先 AI 标题；无界（如 grokbot）用源标题
     pub title: String,
     /// 同步源标题（每次 sync upsert 覆盖）
     pub source_title: String,
@@ -71,6 +71,13 @@ pub struct ConversationItem {
     pub ai_generated_at: Option<String>,
     /// 总结之后新增的消息条数（当前 message_count - 总结时 message_count）；无摘要或无新增时为 None
     pub ai_new_message_count: Option<i64>,
+    /// 会话目录 JSON：{"segments":[{"title","summary","start_step_index","start_user_index"},...]}
+    pub ai_outline_json: Option<String>,
+    pub ai_outline_stale: bool,
+    pub ai_outline_generated_at: Option<String>,
+    pub ai_outline_model: Option<String>,
+    /// "bounded" | "open_ended"
+    pub session_kind: String,
     pub content_hash: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -879,6 +886,11 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             error TEXT,
             generated_at TEXT,
             updated_at TEXT,
+            outline_json TEXT,
+            outline_based_on_content_hash TEXT,
+            outline_based_on_user_count INTEGER,
+            outline_generated_at TEXT,
+            outline_model TEXT,
             FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         );
 
@@ -939,6 +951,22 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         "ALTER TABLE conversation_ai ADD COLUMN based_on_message_count INTEGER",
         [],
     );
+
+    // 会话目录（TOC）
+    let _ = conn.execute("ALTER TABLE conversation_ai ADD COLUMN outline_json TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE conversation_ai ADD COLUMN outline_based_on_content_hash TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE conversation_ai ADD COLUMN outline_based_on_user_count INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE conversation_ai ADD COLUMN outline_generated_at TEXT",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE conversation_ai ADD COLUMN outline_model TEXT", []);
 
     let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_url TEXT", []);
     let _ = conn.execute("ALTER TABLE prompts ADD COLUMN preview_local TEXT", []);
@@ -2564,6 +2592,31 @@ pub fn move_conversation(
     })
 }
 
+
+/// Grok Bot 等一 bot 一会话视为无界
+pub fn is_open_ended_source_app(source_app: &str) -> bool {
+    source_app.eq_ignore_ascii_case("grokbot")
+}
+
+fn session_kind_for(source_app: &str) -> String {
+    if is_open_ended_source_app(source_app) {
+        "open_ended".to_string()
+    } else {
+        "bounded".to_string()
+    }
+}
+
+fn display_title_for(source_app: &str, source_title: &str, ai_title: &Option<String>) -> String {
+    if is_open_ended_source_app(source_app) {
+        return source_title.to_string();
+    }
+    ai_title
+        .as_ref()
+        .filter(|t| !t.is_empty())
+        .cloned()
+        .unwrap_or_else(|| source_title.to_string())
+}
+
 pub fn fetch_conversations(
     conn: &Connection,
     workspace: Option<&str>,
@@ -2604,7 +2657,12 @@ pub fn fetch_conversations(
             c.user_message_count,
             c.parse_status,
             (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred,
-            ai.based_on_message_count
+            ai.based_on_message_count,
+            ai.outline_json,
+            ai.outline_based_on_content_hash,
+            ai.outline_based_on_user_count,
+            ai.outline_generated_at,
+            ai.outline_model
         FROM conversations c
         LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE (?1 = 0 OR (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) > 0)
@@ -2662,20 +2720,36 @@ pub fn fetch_conversations(
             let raw_created: Option<String> = row.get(11)?;
             let raw_updated: Option<String> = row.get(12)?;
             let raw_ai_generated: Option<String> = row.get(9)?;
-            let display_title = ai_title
-                .as_ref()
-                .filter(|t| !t.is_empty())
-                .cloned()
-                .unwrap_or_else(|| source_title.clone());
+            let source_app: String = row.get(2)?;
+            let display_title = display_title_for(&source_app, &source_title, &ai_title);
             let summary_stale = match (&based_on, content_hash.as_str()) {
                 (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
                 _ => false,
             };
             let ai_summary: String = row.get(5)?;
+            let outline_json: Option<String> = row.get(18)?;
+            let outline_based_on: Option<String> = row.get(19)?;
+            let outline_based_user: Option<i64> = row.get(20)?;
+            let outline_generated_raw: Option<String> = row.get(21)?;
+            let outline_model: Option<String> = row.get(22)?;
+            let user_msg_count: i64 = row.get(14)?;
+            let outline_stale = {
+                let hash_stale = match (&outline_based_on, content_hash.as_str()) {
+                    (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
+                    _ => false,
+                };
+                let count_stale = match outline_based_user {
+                    Some(b) if b > 0 => user_msg_count > b,
+                    _ => false,
+                };
+                outline_json.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+                    && (hash_stale || count_stale)
+            };
+            let session_kind = session_kind_for(&source_app);
             Ok(ConversationItem {
                 id: row.get(0)?,
                 workspace_path: row.get(1)?,
-                source_app: row.get(2)?,
+                source_app,
                 title: display_title,
                 source_title,
                 ai_title,
@@ -2688,14 +2762,19 @@ pub fn fetch_conversations(
                 ai_summary_stale: summary_stale,
                 ai_model: row.get(8)?,
                 ai_generated_at: to_beijing_iso(raw_ai_generated),
+                ai_new_message_count,
+                ai_outline_json: outline_json.filter(|s| !s.is_empty()),
+                ai_outline_stale: outline_stale,
+                ai_outline_generated_at: to_beijing_iso(outline_generated_raw),
+                ai_outline_model: outline_model,
+                session_kind,
                 content_hash,
                 created_at: to_beijing_iso(raw_created),
                 updated_at: to_beijing_iso(raw_updated),
                 message_count: msg_count,
-                user_message_count: row.get(14)?,
+                user_message_count: user_msg_count,
                 parse_status: row.get(15)?,
                 is_starred: is_starred_cnt > 0,
-                ai_new_message_count,
             })
         },
     )?;
@@ -2919,6 +2998,60 @@ pub fn clear_conversation_ai_title(conn: &Connection, conversation_id: &str) -> 
         .ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
+/// 保存会话目录（TOC）
+pub fn save_conversation_outline(
+    conn: &Connection,
+    conversation_id: &str,
+    outline_json: &str,
+    based_on_content_hash: Option<&str>,
+    based_on_user_count: Option<i64>,
+    model: Option<&str>,
+) -> Result<ConversationItem> {
+    let exists: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversations WHERE id = ?1",
+        params![conversation_id],
+        |r| r.get(0),
+    )?;
+    if exists == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    let trimmed = outline_json.trim();
+    if trimmed.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "outline_json cannot be empty".into(),
+        ));
+    }
+    let now = now_rfc3339();
+    conn.execute(
+        r#"
+        INSERT INTO conversation_ai (
+            conversation_id, ai_title, summary, status,
+            outline_json, outline_based_on_content_hash, outline_based_on_user_count,
+            outline_generated_at, outline_model, updated_at
+        )
+        VALUES (?1, NULL, '', 'idle', ?2, ?3, ?4, ?5, ?6, ?7)
+        ON CONFLICT(conversation_id) DO UPDATE SET
+            outline_json = excluded.outline_json,
+            outline_based_on_content_hash = excluded.outline_based_on_content_hash,
+            outline_based_on_user_count = excluded.outline_based_on_user_count,
+            outline_generated_at = excluded.outline_generated_at,
+            outline_model = COALESCE(excluded.outline_model, conversation_ai.outline_model),
+            updated_at = excluded.updated_at
+        "#,
+        params![
+            conversation_id,
+            trimmed,
+            based_on_content_hash,
+            based_on_user_count,
+            now,
+            model,
+            now,
+        ],
+    )?;
+    fetch_conversation_by_id(conn, conversation_id)?
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
 pub fn fetch_conversation_by_id(
     conn: &Connection,
     conversation_id: &str,
@@ -2955,7 +3088,12 @@ pub fn fetch_conversation_by_id(
             c.user_message_count,
             c.parse_status,
             (SELECT COUNT(*) FROM starred_sessions s WHERE s.conversation_id = c.id) as is_starred,
-            ai.based_on_message_count
+            ai.based_on_message_count,
+            ai.outline_json,
+            ai.outline_based_on_content_hash,
+            ai.outline_based_on_user_count,
+            ai.outline_generated_at,
+            ai.outline_model
         FROM conversations c
         LEFT JOIN conversation_ai ai ON ai.conversation_id = c.id
         WHERE c.id = ?1
@@ -2979,20 +3117,36 @@ pub fn fetch_conversation_by_id(
         let raw_created: Option<String> = row.get(11)?;
         let raw_updated: Option<String> = row.get(12)?;
         let raw_ai_generated: Option<String> = row.get(9)?;
-        let display_title = ai_title
-            .as_ref()
-            .filter(|t| !t.is_empty())
-            .cloned()
-            .unwrap_or_else(|| source_title.clone());
+        let source_app: String = row.get(2)?;
+        let display_title = display_title_for(&source_app, &source_title, &ai_title);
         let summary_stale = match (&based_on, content_hash.as_str()) {
             (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
             _ => false,
         };
         let ai_summary: String = row.get(5)?;
+        let outline_json: Option<String> = row.get(18)?;
+        let outline_based_on: Option<String> = row.get(19)?;
+        let outline_based_user: Option<i64> = row.get(20)?;
+        let outline_generated_raw: Option<String> = row.get(21)?;
+        let outline_model: Option<String> = row.get(22)?;
+        let user_msg_count: i64 = row.get(14)?;
+        let outline_stale = {
+            let hash_stale = match (&outline_based_on, content_hash.as_str()) {
+                (Some(h), ch) if !h.is_empty() && !ch.is_empty() => h != ch,
+                _ => false,
+            };
+            let count_stale = match outline_based_user {
+                Some(b) if b > 0 => user_msg_count > b,
+                _ => false,
+            };
+            outline_json.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+                && (hash_stale || count_stale)
+        };
+        let session_kind = session_kind_for(&source_app);
         Ok(ConversationItem {
             id: row.get(0)?,
             workspace_path: row.get(1)?,
-            source_app: row.get(2)?,
+            source_app,
             title: display_title,
             source_title,
             ai_title,
@@ -3005,14 +3159,19 @@ pub fn fetch_conversation_by_id(
             ai_summary_stale: summary_stale,
             ai_model: row.get(8)?,
             ai_generated_at: to_beijing_iso(raw_ai_generated),
+            ai_new_message_count,
+            ai_outline_json: outline_json.filter(|s| !s.is_empty()),
+            ai_outline_stale: outline_stale,
+            ai_outline_generated_at: to_beijing_iso(outline_generated_raw),
+            ai_outline_model: outline_model,
+            session_kind,
             content_hash,
             created_at: to_beijing_iso(raw_created),
             updated_at: to_beijing_iso(raw_updated),
             message_count: msg_count,
-            user_message_count: row.get(14)?,
+            user_message_count: user_msg_count,
             parse_status: row.get(15)?,
             is_starred: is_starred_cnt > 0,
-            ai_new_message_count,
         })
     })?;
 

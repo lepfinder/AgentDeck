@@ -26,7 +26,7 @@ use db::{
     fetch_workspace_detail_stats, fetch_workspaces, get_prompt, list_prompts, list_prompts_ex,
     merge_workspace, record_prompt_use,
     move_conversation,
-    save_conversation_ai_summary, save_workspace_fine_blocks, save_workspace_module_blocks,
+    save_conversation_ai_summary, save_conversation_outline, save_workspace_fine_blocks, save_workspace_module_blocks,
     save_workspace_report, search_global_messages, set_conversation_ai_status, toggle_prompt_star,
     toggle_star_session, update_conversation_ai_title, update_prompt, update_prompt_preview_size,
     create_video_prompt, delete_video_prompt, get_video_prompt, list_video_prompts_ex,
@@ -636,6 +636,28 @@ fn save_conversation_ai_summary_cmd(
         based_on_message_count,
         model.as_deref(),
         error.as_deref(),
+    )
+    .map_err(|e| e.to_string())
+}
+
+
+#[tauri::command]
+fn save_conversation_outline_cmd(
+    conversation_id: String,
+    outline_json: String,
+    based_on_content_hash: Option<String>,
+    based_on_user_count: Option<i64>,
+    model: Option<String>,
+    state: State<'_, DbState>,
+) -> Result<ConversationItem, String> {
+    let conn = state.conn_mutex.lock().map_err(|e| e.to_string())?;
+    save_conversation_outline(
+        &conn,
+        &conversation_id,
+        &outline_json,
+        based_on_content_hash.as_deref(),
+        based_on_user_count,
+        model.as_deref(),
     )
     .map_err(|e| e.to_string())
 }
@@ -1809,6 +1831,7 @@ pub fn run() {
             update_conversation_ai_title_cmd,
             clear_conversation_ai_title_cmd,
             save_conversation_ai_summary_cmd,
+            save_conversation_outline_cmd,
             set_conversation_ai_status_cmd,
             get_conversation_item,
             search_messages,

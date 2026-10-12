@@ -1,7 +1,7 @@
 import { api } from '../api/tauriBridge';
 import type { ConversationItem, MessageItem } from '../types';
 import { getServiceLlmConfig } from './serviceLlm';
-import { summarizeConversation } from './conversationAi';
+import { sessionKindOf, summarizeConversation } from './conversationAi';
 
 export interface BatchSummarizeOptions {
   /** 跳过已有成功摘要/标题的会话 */
@@ -52,6 +52,10 @@ export function selectConversationsForBatch(
   opts: BatchSummarizeOptions,
 ): ConversationItem[] {
   const selected = conversations.filter((c) => {
+    // 无界会话（如 Grok Bot）以目录为主，不进批量总结命名
+    if (sessionKindOf(c) === 'open_ended') {
+      return false;
+    }
     // 无消息的跳过（加载后仍可能空，那时再 skip）
     if ((c.message_count ?? 0) <= 0 && (c.user_message_count ?? 0) <= 0) {
       return false;
