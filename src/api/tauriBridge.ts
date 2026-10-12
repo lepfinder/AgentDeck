@@ -285,6 +285,26 @@ export const api = {
     throw new Error('仅在客户端环境下支持保存会话摘要');
   },
 
+
+  async saveConversationOutline(payload: {
+    conversationId: string;
+    outlineJson: string;
+    basedOnContentHash?: string | null;
+    basedOnUserCount?: number | null;
+    model?: string | null;
+  }): Promise<ConversationItem> {
+    if (isTauri()) {
+      return await invoke<ConversationItem>('save_conversation_outline_cmd', {
+        conversationId: payload.conversationId,
+        outlineJson: payload.outlineJson,
+        basedOnContentHash: payload.basedOnContentHash ?? null,
+        basedOnUserCount: payload.basedOnUserCount ?? null,
+        model: payload.model ?? null,
+      });
+    }
+    throw new Error('仅在客户端环境下支持保存会话目录');
+  },
+
   async setConversationAiStatus(
     conversationId: string,
     status: string,

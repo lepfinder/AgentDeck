@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { WorkspaceStat, AgentStat, ConversationItem, MessageItem, DashboardStats, ArtifactItem } from '../../types';
+import type { WorkspaceStat, AgentStat, ConversationItem, MessageItem, DashboardStats, ArtifactItem, OutlineSegment } from '../../types';
 import { api, isTauri } from '../../api/tauriBridge';
 import { formatBeijingTime, formatRelativeTime } from '../../utils/date';
 import { useI18n } from '../../i18n';
@@ -11,6 +11,7 @@ import { WorkspaceMoreMenu } from './WorkspaceMoreMenu';
 import { DashboardView } from '../dashboard/DashboardView';
 import { PromptLibraryView } from '../prompts/PromptLibraryView';
 import { ArtifactsModal } from './ArtifactsModal';
+import { SessionOutlinePanel } from './SessionOutlinePanel';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -33,6 +34,7 @@ import {
   Check,
   Pencil,
   AlignLeft,
+  ListTree,
   Layers,
   Loader2,
   StopCircle,
@@ -48,7 +50,11 @@ import { UsageStatsView } from '../usage/UsageStatsView';
 import { SkillsView } from '../skills/SkillsView';
 import {
   clearConversationAiTitle,
+  generateConversationOutline,
+  OUTLINE_MIN_USER_MESSAGES,
+  parseConversationOutline,
   renameConversationTitle,
+  sessionKindOf,
   summarizeConversation,
 } from '../../lib/conversationAi';
 import {
@@ -161,6 +167,8 @@ export const BrowseView: React.FC<Props> = ({
   const [renameSaving, setRenameSaving] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [outlining, setOutlining] = useState(false);
+  const [outlineOpen, setOutlineOpen] = useState(false);
   const [aiActionError, setAiActionError] = useState<string | null>(null);
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
   const [batchOpts, setBatchOpts] = useState<BatchSummarizeOptions>(
@@ -254,13 +262,20 @@ export const BrowseView: React.FC<Props> = ({
     setRenameDraft('');
     setAiActionError(null);
     setSummaryOpen(false);
+    setOutlineOpen(false);
+    setOutlining(false);
   }, [selectedConversationId]);
 
   useEffect(() => {
-    if (currentConv?.ai_summary) {
+    if (!currentConv) return;
+    const openEnded = sessionKindOf(currentConv) === 'open_ended';
+    if (openEnded && currentConv.ai_outline_json) {
+      setOutlineOpen(true);
+      setSummaryOpen(false);
+    } else if (!openEnded && currentConv.ai_summary) {
       setSummaryOpen(true);
     }
-  }, [currentConv?.id, currentConv?.ai_summary]);
+  }, [currentConv?.id, currentConv?.ai_summary, currentConv?.ai_outline_json]);
 
   useEffect(() => {
     return () => {
@@ -685,6 +700,43 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
+
+  const handleGenerateOutline = async (forceFull = false) => {
+    if (!currentConv) return;
+    setOutlining(true);
+    setAiActionError(null);
+    try {
+      const updated = await generateConversationOutline({
+        conversation: currentConv,
+        messages,
+        forceFull,
+      });
+      applyConversationUpdate(updated);
+      setOutlineOpen(true);
+    } catch (e) {
+      console.error(e);
+      setAiActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setOutlining(false);
+    }
+  };
+
+  const jumpToOutlineSegment = (seg: OutlineSegment) => {
+    const el = document.querySelector(
+      `[data-step-index="${seg.start_step_index}"]`
+    ) as HTMLElement | null;
+    if (el) {
+      const turnIdx = el.getAttribute('data-turn-index');
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (turnIdx != null && turnIdx !== '') {
+        const idx = Number(turnIdx);
+        if (Number.isFinite(idx)) {
+          setExpandedTurns((prev) => ({ ...prev, [idx]: true }));
+        }
+      }
+    }
+  };
+
   const getSourceBadge = (source: string) => {
     switch (source) {
       case 'cursor':
@@ -817,7 +869,17 @@ export const BrowseView: React.FC<Props> = ({
                     <Star className="h-3 w-3 fill-amber-400 text-amber-400 flex-shrink-0" />
                   )}
                   <span>{conv.title || t('conv.untitled')}</span>
-                  {conv.ai_title && (
+                  {sessionKindOf(conv) === 'open_ended' && (
+                    <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-teal-500/15 text-teal-600 border border-teal-500/30">
+                      {t('conv.openEndedShort')}
+                    </span>
+                  )}
+                  {conv.ai_outline_json && (
+                    <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-teal-500/10 text-teal-600 border border-teal-500/25">
+                      TOC
+                    </span>
+                  )}
+                  {conv.ai_title && sessionKindOf(conv) !== 'open_ended' && (
                     <span className="shrink-0 px-1 py-0.5 text-[9px] font-semibold rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
                       AI
                     </span>
@@ -1328,9 +1390,22 @@ export const BrowseView: React.FC<Props> = ({
                             </span>
                             <Pencil className="h-3.5 w-3.5 shrink-0 theme-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
                           </button>
-                          {currentConv.ai_title && (
+                          {sessionKindOf(currentConv) === 'open_ended' && (
+                            <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-teal-500/15 text-teal-600 border border-teal-500/30">
+                              {t('conv.openEnded')}
+                            </span>
+                          )}
+                          {currentConv.ai_title && sessionKindOf(currentConv) !== 'open_ended' && (
                             <span className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-violet-500/15 text-violet-500 border border-violet-500/30">
                               AI
+                            </span>
+                          )}
+                          {currentConv.ai_outline_stale && (
+                            <span
+                              className="shrink-0 px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-500/15 text-amber-600 border border-amber-500/30"
+                              title={t('conv.outlineStaleHint')}
+                            >
+                              {t('conv.outlineStale')}
                             </span>
                           )}
                           {currentConv.ai_summary_stale && (
@@ -1377,24 +1452,76 @@ export const BrowseView: React.FC<Props> = ({
 
                   {/* 顶部操作区 */}
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      onClick={handleSummarize}
-                      disabled={summarizing || loadingConv || messages.length === 0 || renaming}
-                      title={summarizing ? t('conv.summarizing') : t('conv.summarize')}
-                      className="flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
-                    >
-                      <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
-                    </button>
+                    {(() => {
+                      const openEnded = sessionKindOf(currentConv) === 'open_ended';
+                      const canOutline =
+                        (currentConv.user_message_count ?? 0) >= OUTLINE_MIN_USER_MESSAGES ||
+                        !!currentConv.ai_outline_json;
+                      return (
+                        <>
+                          {canOutline && (
+                            <button
+                              onClick={() => {
+                                if (currentConv.ai_outline_json) {
+                                  setOutlineOpen((v) => !v);
+                                } else {
+                                  handleGenerateOutline(false);
+                                }
+                              }}
+                              disabled={outlining || loadingConv || renaming}
+                              title={
+                                outlining
+                                  ? t('conv.outlineGenerating')
+                                  : currentConv.ai_outline_json
+                                    ? outlineOpen
+                                      ? t('conv.hideOutline')
+                                      : t('conv.showOutline')
+                                    : t('conv.outlineGenerateHint')
+                              }
+                              className={`flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 ${
+                                openEnded
+                                  ? 'bg-teal-500/10 border-teal-500/35 text-teal-600 dark:text-teal-400 hover:bg-teal-500/20'
+                                  : 'bg-teal-500/10 border-teal-500/30 text-teal-600 dark:text-teal-400 hover:bg-teal-500/20'
+                              }`}
+                            >
+                              <ListTree className={`h-4 w-4 shrink-0 ${outlining ? 'animate-pulse' : ''}`} />
+                            </button>
+                          )}
 
-                    {currentConv.ai_summary && (
-                      <button
-                        onClick={() => setSummaryOpen((v) => !v)}
-                        title={summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}
-                        className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
-                      >
-                        <AlignLeft className="h-4 w-4 shrink-0" />
-                      </button>
-                    )}
+                          {!openEnded && (
+                            <button
+                              onClick={handleSummarize}
+                              disabled={summarizing || loadingConv || messages.length === 0 || renaming}
+                              title={summarizing ? t('conv.summarizing') : t('conv.summarize')}
+                              className="flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
+                            >
+                              <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
+                            </button>
+                          )}
+
+                          {openEnded && (
+                            <button
+                              onClick={handleSummarize}
+                              disabled={summarizing || loadingConv || messages.length === 0 || renaming}
+                              title={t('conv.summarizeOpenEndedHint')}
+                              className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
+                            >
+                              <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
+                            </button>
+                          )}
+
+                          {currentConv.ai_summary && (
+                            <button
+                              onClick={() => setSummaryOpen((v) => !v)}
+                              title={summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}
+                              className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
+                            >
+                              <AlignLeft className="h-4 w-4 shrink-0" />
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
 
                     <button
                       onClick={() => setSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'))}
@@ -1523,6 +1650,27 @@ export const BrowseView: React.FC<Props> = ({
                   </div>
                 )}
 
+                {outlineOpen && (
+                  <div className="sticky top-0 z-10">
+                    <SessionOutlinePanel
+                      outline={parseConversationOutline(currentConv.ai_outline_json)}
+                      stale={!!currentConv.ai_outline_stale}
+                      generating={outlining}
+                      openEnded={sessionKindOf(currentConv) === 'open_ended'}
+                      canGenerate={
+                        (currentConv.user_message_count ?? 0) >= OUTLINE_MIN_USER_MESSAGES ||
+                        !!currentConv.ai_outline_json
+                      }
+                      model={currentConv.ai_outline_model}
+                      generatedAt={currentConv.ai_outline_generated_at}
+                      onGenerate={(forceFull) => handleGenerateOutline(!!forceFull)}
+                      onJump={jumpToOutlineSegment}
+                      onClose={() => setOutlineOpen(false)}
+                      formatTime={formatBeijingTime}
+                    />
+                  </div>
+                )}
+
                 {/* 消息轮次滚动流（默认显示用户消息，Agent 消息折叠在用户轮次内） */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {loadingConv ? (
@@ -1540,6 +1688,8 @@ export const BrowseView: React.FC<Props> = ({
                       return (
                         <div
                           key={turn.origIndex}
+                          data-turn-index={turn.origIndex}
+                          data-step-index={userMsg?.step_index ?? undefined}
                           className="border theme-border rounded-2xl theme-bg-card p-4 transition-all shadow-xs max-w-4xl mx-auto space-y-3"
                         >
                           {/* 用户消息头部信息栏（点击可切换展开/折叠本轮 Agent 回复） */}

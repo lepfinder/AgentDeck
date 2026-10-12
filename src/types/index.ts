@@ -39,11 +39,28 @@ export interface ConversationMoveResult {
   target_path: string;
 }
 
+/** 会话目录中的一段主题 */
+export interface OutlineSegment {
+  title: string;
+  summary?: string;
+  /** 对应 messages.step_index，用于跳转 */
+  start_step_index: number;
+  /** 用户提问在「仅用户」序列中的 1-based 编号 */
+  start_user_index: number;
+}
+
+export interface ConversationOutline {
+  segments: OutlineSegment[];
+}
+
+/** 有界会话可总结命名；无界（如 Grok Bot 一 bot 一会话）以目录为主 */
+export type SessionKind = 'bounded' | 'open_ended';
+
 export interface ConversationItem {
   id: string;
   workspace_path: string;
   source_app: string;
-  /** 展示标题：优先 AI 标题 */
+  /** 展示标题：有界优先 AI 标题；无界用源标题（bot 名） */
   title: string;
   /** 同步源标题 */
   source_title: string;
@@ -54,6 +71,12 @@ export interface ConversationItem {
   ai_model?: string | null;
   ai_generated_at?: string | null;
   ai_new_message_count?: number | null;
+  /** 会话目录 JSON 字符串（segments） */
+  ai_outline_json?: string | null;
+  ai_outline_stale?: boolean;
+  ai_outline_generated_at?: string | null;
+  ai_outline_model?: string | null;
+  session_kind?: SessionKind;
   content_hash?: string;
   created_at?: string;
   updated_at?: string;

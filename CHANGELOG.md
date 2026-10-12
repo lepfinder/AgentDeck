@@ -2,6 +2,11 @@
 
 本文件记录 AgentDeck 的用户可见变更，按 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 组织。
 
+## [Unreleased]
+
+### 新增
+- **会话目录（TOC）**：长会话可按用户提问生成主题目录；点击段落跳转到对应 User Turn。有界会话保留「总结命名」为主；Grok Bot 等无界会话以 bot 名为主标题、目录为主导航，并支持增量更新目录
+
 ## [0.3.22] - 2026-10-11
 
 ### 新增
