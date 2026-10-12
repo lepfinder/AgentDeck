@@ -1,6 +1,6 @@
 [package]
 name = "agentdeck"
-version = "0.3.22"
+version = "0.3.23"
 description = "AgentDeck - AI Coding Cockpit"
 authors = ["AgentDeck Team"]
 license = "MIT"
