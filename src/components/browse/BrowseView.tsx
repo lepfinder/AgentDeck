@@ -170,6 +170,8 @@ export const BrowseView: React.FC<Props> = ({
   const [outlining, setOutlining] = useState(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
   const [aiActionError, setAiActionError] = useState<string | null>(null);
+  const [aiActionSuccess, setAiActionSuccess] = useState<string | null>(null);
+  const aiSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
   const [batchOpts, setBatchOpts] = useState<BatchSummarizeOptions>(
     () => ({ ...DEFAULT_BATCH_SUMMARIZE_OPTIONS }),
@@ -261,6 +263,11 @@ export const BrowseView: React.FC<Props> = ({
     setRenaming(false);
     setRenameDraft('');
     setAiActionError(null);
+    setAiActionSuccess(null);
+    if (aiSuccessTimerRef.current) {
+      clearTimeout(aiSuccessTimerRef.current);
+      aiSuccessTimerRef.current = null;
+    }
     setSummaryOpen(false);
     setOutlineOpen(false);
     setOutlining(false);
@@ -701,10 +708,23 @@ export const BrowseView: React.FC<Props> = ({
   };
 
 
+  const flashAiSuccess = (message: string) => {
+    setAiActionSuccess(message);
+    if (aiSuccessTimerRef.current) clearTimeout(aiSuccessTimerRef.current);
+    aiSuccessTimerRef.current = setTimeout(() => {
+      setAiActionSuccess(null);
+      aiSuccessTimerRef.current = null;
+    }, 4000);
+  };
+
   const handleGenerateOutline = async (forceFull = false) => {
-    if (!currentConv) return;
+    if (!currentConv || outlining) return;
+    const hadOutline = !!currentConv.ai_outline_json;
+    const openEnded = sessionKindOf(currentConv) === 'open_ended';
     setOutlining(true);
     setAiActionError(null);
+    setAiActionSuccess(null);
+    setOutlineOpen(true);
     try {
       const updated = await generateConversationOutline({
         conversation: currentConv,
@@ -713,6 +733,13 @@ export const BrowseView: React.FC<Props> = ({
       });
       applyConversationUpdate(updated);
       setOutlineOpen(true);
+      const n = parseConversationOutline(updated.ai_outline_json)?.segments.length ?? 0;
+      const isUpdate = hadOutline && openEnded && !forceFull;
+      flashAiSuccess(
+        isUpdate
+          ? t('conv.outlineUpdateSuccess', { n })
+          : t('conv.outlineSuccess', { n })
+      );
     } catch (e) {
       console.error(e);
       setAiActionError(e instanceof Error ? e.message : String(e));
@@ -1448,6 +1475,17 @@ export const BrowseView: React.FC<Props> = ({
                         {aiActionError}
                       </div>
                     )}
+                    {!aiActionError && aiActionSuccess && (
+                      <div className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 truncate" title={aiActionSuccess}>
+                        {aiActionSuccess}
+                      </div>
+                    )}
+                    {!aiActionError && !aiActionSuccess && outlining && (
+                      <div className="mt-1 text-[11px] text-teal-600 dark:text-teal-400 truncate flex items-center gap-1">
+                        <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                        {t('conv.outlineGenerating')}
+                      </div>
+                    )}
                   </div>
 
                   {/* 顶部操作区 */}
@@ -1484,7 +1522,11 @@ export const BrowseView: React.FC<Props> = ({
                                   : 'bg-teal-500/10 border-teal-500/30 text-teal-600 dark:text-teal-400 hover:bg-teal-500/20'
                               }`}
                             >
-                              <ListTree className={`h-4 w-4 shrink-0 ${outlining ? 'animate-pulse' : ''}`} />
+                              {outlining ? (
+                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                              ) : (
+                                <ListTree className="h-4 w-4 shrink-0" />
+                              )}
                             </button>
                           )}
 
@@ -1663,6 +1705,16 @@ export const BrowseView: React.FC<Props> = ({
                       }
                       model={currentConv.ai_outline_model}
                       generatedAt={currentConv.ai_outline_generated_at}
+                      statusMessage={
+                        outlining
+                          ? t('conv.outlineGenerating')
+                          : aiActionError
+                            ? aiActionError
+                            : aiActionSuccess
+                      }
+                      statusTone={
+                        outlining ? null : aiActionError ? 'error' : aiActionSuccess ? 'success' : null
+                      }
                       onGenerate={(forceFull) => handleGenerateOutline(!!forceFull)}
                       onJump={jumpToOutlineSegment}
                       onClose={() => setOutlineOpen(false)}
