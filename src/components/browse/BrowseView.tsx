@@ -172,6 +172,7 @@ export const BrowseView: React.FC<Props> = ({
   const [aiActionError, setAiActionError] = useState<string | null>(null);
   const [aiActionSuccess, setAiActionSuccess] = useState<string | null>(null);
   const aiSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAiActionRef = useRef<'outline' | 'summarize' | null>(null);
   const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
   const [batchOpts, setBatchOpts] = useState<BatchSummarizeOptions>(
     () => ({ ...DEFAULT_BATCH_SUMMARIZE_OPTIONS }),
@@ -276,13 +277,17 @@ export const BrowseView: React.FC<Props> = ({
   useEffect(() => {
     if (!currentConv) return;
     const openEnded = sessionKindOf(currentConv) === 'open_ended';
-    if (openEnded && currentConv.ai_outline_json) {
-      setOutlineOpen(true);
-      setSummaryOpen(false);
-    } else if (!openEnded && currentConv.ai_summary) {
+    // Only on conversation switch (id). Do not fight setSummaryOpen after 近期摘要.
+    if (openEnded) {
+      if (currentConv.ai_outline_json) {
+        setOutlineOpen(true);
+      } else if (currentConv.ai_summary) {
+        setSummaryOpen(true);
+      }
+    } else if (currentConv.ai_summary) {
       setSummaryOpen(true);
     }
-  }, [currentConv?.id, currentConv?.ai_summary, currentConv?.ai_outline_json]);
+  }, [currentConv?.id]);
 
   useEffect(() => {
     return () => {
@@ -688,26 +693,6 @@ export const BrowseView: React.FC<Props> = ({
     }
   };
 
-  const handleSummarize = async () => {
-    if (!currentConv) return;
-    setSummarizing(true);
-    setAiActionError(null);
-    try {
-      const updated = await summarizeConversation({
-        conversation: currentConv,
-        messages,
-      });
-      applyConversationUpdate(updated);
-      setSummaryOpen(true);
-    } catch (e) {
-      console.error(e);
-      setAiActionError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSummarizing(false);
-    }
-  };
-
-
   const flashAiSuccess = (message: string) => {
     setAiActionSuccess(message);
     if (aiSuccessTimerRef.current) clearTimeout(aiSuccessTimerRef.current);
@@ -717,10 +702,39 @@ export const BrowseView: React.FC<Props> = ({
     }, 4000);
   };
 
+  const handleSummarize = async () => {
+    if (!currentConv) return;
+    const openEnded = sessionKindOf(currentConv) === 'open_ended';
+    lastAiActionRef.current = 'summarize';
+    setSummarizing(true);
+    setAiActionError(null);
+    setAiActionSuccess(null);
+    // Open panel immediately so open-ended 近期摘要 shows a loading state.
+    setSummaryOpen(true);
+    try {
+      const updated = await summarizeConversation({
+        conversation: currentConv,
+        messages,
+      });
+      applyConversationUpdate(updated);
+      setSummaryOpen(true);
+      flashAiSuccess(
+        openEnded ? t('conv.recentSummarySuccess') : t('conv.summarizeSuccess')
+      );
+    } catch (e) {
+      console.error(e);
+      setAiActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSummarizing(false);
+    }
+  };
+
+
   const handleGenerateOutline = async (forceFull = false) => {
     if (!currentConv || outlining) return;
     const hadOutline = !!currentConv.ai_outline_json;
     const openEnded = sessionKindOf(currentConv) === 'open_ended';
+    lastAiActionRef.current = 'outline';
     setOutlining(true);
     setAiActionError(null);
     setAiActionSuccess(null);
@@ -1471,12 +1485,17 @@ export const BrowseView: React.FC<Props> = ({
                         </div>
                       )}
                     {/* Outline loading/error/success live in the panel when open; header only when panel closed. */}
-                    {!outlineOpen && aiActionError && (
+                    {((!outlineOpen && lastAiActionRef.current === 'outline') ||
+                      lastAiActionRef.current === 'summarize') &&
+                      aiActionError && (
                       <div className="mt-1 text-[11px] text-red-500 truncate" title={aiActionError}>
                         {aiActionError}
                       </div>
                     )}
-                    {!outlineOpen && !aiActionError && aiActionSuccess && (
+                    {((!outlineOpen && lastAiActionRef.current === 'outline') ||
+                      lastAiActionRef.current === 'summarize') &&
+                      !aiActionError &&
+                      aiActionSuccess && (
                       <div className="mt-1 text-[11px] text-emerald-600 dark:text-emerald-400 truncate" title={aiActionSuccess}>
                         {aiActionSuccess}
                       </div>
@@ -1533,7 +1552,11 @@ export const BrowseView: React.FC<Props> = ({
                               title={summarizing ? t('conv.summarizing') : t('conv.summarize')}
                               className="flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
                             >
-                              <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
+                              {summarizing ? (
+                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-4 w-4 shrink-0" />
+                              )}
                             </button>
                           )}
 
@@ -1541,20 +1564,41 @@ export const BrowseView: React.FC<Props> = ({
                             <button
                               onClick={handleSummarize}
                               disabled={summarizing || loadingConv || messages.length === 0 || renaming}
-                              title={t('conv.summarizeOpenEndedHint')}
-                              className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 theme-text-muted hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
+                              title={
+                                summarizing
+                                  ? t('conv.recentSummaryWorking')
+                                  : t('conv.summarizeOpenEndedHint')
+                              }
+                              className="flex items-center justify-center p-1.5 rounded-lg border transition-all cursor-pointer shadow-xs shrink-0 disabled:opacity-50 bg-violet-500/10 border-violet-500/35 text-violet-600 dark:text-violet-400 hover:bg-violet-500/20"
                             >
-                              <Sparkles className={`h-4 w-4 shrink-0 ${summarizing ? 'animate-pulse' : ''}`} />
+                              {summarizing ? (
+                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                              ) : (
+                                <Sparkles className="h-4 w-4 shrink-0" />
+                              )}
                             </button>
                           )}
 
-                          {currentConv.ai_summary && (
+                          {(currentConv.ai_summary || summarizing) && (
                             <button
                               onClick={() => setSummaryOpen((v) => !v)}
-                              title={summaryOpen ? t('conv.hideSummary') : t('conv.showSummary')}
-                              className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0"
+                              disabled={summarizing}
+                              title={
+                                summarizing
+                                  ? sessionKindOf(currentConv) === 'open_ended'
+                                    ? t('conv.recentSummaryWorking')
+                                    : t('conv.summarizing')
+                                  : summaryOpen
+                                    ? t('conv.hideSummary')
+                                    : t('conv.showSummary')
+                              }
+                              className="flex items-center justify-center p-1.5 rounded-lg border theme-border theme-bg-sub hover:opacity-80 text-blue-500 hover:theme-text-main transition-colors cursor-pointer shadow-xs shrink-0 disabled:opacity-50"
                             >
-                              <AlignLeft className="h-4 w-4 shrink-0" />
+                              {summarizing ? (
+                                <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                              ) : (
+                                <AlignLeft className="h-4 w-4 shrink-0" />
+                              )}
                             </button>
                           )}
                         </>
@@ -1634,27 +1678,32 @@ export const BrowseView: React.FC<Props> = ({
                   </div>
                 </div>
 
-                {summaryOpen && currentConv.ai_summary && (
+                {summaryOpen && (currentConv.ai_summary || summarizing) && (
                   <div className="px-4 py-3 border-b theme-border theme-bg-sub/60">
                     <div className="max-w-4xl mx-auto">
                       <div className="flex items-center justify-between gap-2 mb-1.5">
                         <div className="flex items-center gap-2 text-xs font-semibold theme-text-main">
                           <AlignLeft className="h-3.5 w-3.5 text-violet-500" />
-                          <span>{t('conv.summaryTitle')}</span>
-                          {currentConv.ai_summary_stale && (
+                          <span>
+                            {sessionKindOf(currentConv) === 'open_ended'
+                              ? t('conv.recentSummaryTitle')
+                              : t('conv.summaryTitle')}
+                          </span>
+                          {!summarizing && currentConv.ai_summary_stale && (
                             <span className="font-medium text-amber-600">{t('conv.summaryStale')}</span>
                           )}
-                          {currentConv.ai_model && (
+                          {!summarizing && currentConv.ai_model && (
                             <span className="font-mono font-normal theme-text-muted">
                               · {currentConv.ai_model}
                             </span>
                           )}
-                          {currentConv.ai_generated_at && (
+                          {!summarizing && currentConv.ai_generated_at && (
                             <span className="font-normal theme-text-muted">
                               · {t('conv.summaryGeneratedAt', { time: formatBeijingTime(currentConv.ai_generated_at) })}
                             </span>
                           )}
-                          {currentConv.ai_new_message_count != null &&
+                          {!summarizing &&
+                            currentConv.ai_new_message_count != null &&
                             currentConv.ai_new_message_count > 0 && (
                             <span className="font-normal text-amber-600">
                               · {t('conv.newMessagesSince', { n: currentConv.ai_new_message_count })}
@@ -1662,7 +1711,9 @@ export const BrowseView: React.FC<Props> = ({
                           )}
                         </div>
                         <div className="flex items-center gap-2">
-                          {currentConv.ai_title && (
+                          {!summarizing &&
+                            currentConv.ai_title &&
+                            sessionKindOf(currentConv) !== 'open_ended' && (
                             <button
                               type="button"
                               onClick={handleClearAiTitle}
@@ -1675,52 +1726,43 @@ export const BrowseView: React.FC<Props> = ({
                           <button
                             type="button"
                             onClick={() => setSummaryOpen(false)}
-                            className="text-[11px] theme-text-muted hover:theme-text-main cursor-pointer"
+                            disabled={summarizing}
+                            className="text-[11px] theme-text-muted hover:theme-text-main cursor-pointer disabled:opacity-50"
                           >
                             {t('conv.hideSummary')}
                           </button>
                         </div>
                       </div>
-                      <p className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap">
-                        {currentConv.ai_summary}
-                      </p>
+                      {summarizing ? (
+                        <div className="flex items-center gap-2 text-xs theme-text-muted py-1">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-500 shrink-0" />
+                          <span>
+                            {sessionKindOf(currentConv) === 'open_ended'
+                              ? t('conv.recentSummaryWorking')
+                              : t('conv.summarizing')}
+                          </span>
+                        </div>
+                      ) : (
+                        <>
+                          {lastAiActionRef.current === 'summarize' && aiActionSuccess && (
+                            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                              <span>{aiActionSuccess}</span>
+                            </div>
+                          )}
+                          <p className="text-xs leading-relaxed theme-text-main whitespace-pre-wrap">
+                            {currentConv.ai_summary}
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}
 
-                {outlineOpen && (
-                  <div className="sticky top-0 z-10">
-                    <SessionOutlinePanel
-                      outline={parseConversationOutline(currentConv.ai_outline_json)}
-                      stale={!!currentConv.ai_outline_stale}
-                      generating={outlining}
-                      openEnded={sessionKindOf(currentConv) === 'open_ended'}
-                      canGenerate={
-                        (currentConv.user_message_count ?? 0) >= OUTLINE_MIN_USER_MESSAGES ||
-                        !!currentConv.ai_outline_json
-                      }
-                      model={currentConv.ai_outline_model}
-                      generatedAt={currentConv.ai_outline_generated_at}
-                      statusMessage={
-                        outlining
-                          ? null /* panel shows outlineWorking / outlineUpdating itself */
-                          : aiActionError
-                            ? aiActionError
-                            : aiActionSuccess
-                      }
-                      statusTone={
-                        outlining ? null : aiActionError ? 'error' : aiActionSuccess ? 'success' : null
-                      }
-                      onGenerate={(forceFull) => handleGenerateOutline(!!forceFull)}
-                      onJump={jumpToOutlineSegment}
-                      onClose={() => setOutlineOpen(false)}
-                      formatTime={formatBeijingTime}
-                    />
-                  </div>
-                )}
-
+                {/* 正文 + 右侧会话目录 */}
+                <div className="flex-1 flex min-h-0 overflow-hidden">
                 {/* 消息轮次滚动流（默认显示用户消息，Agent 消息折叠在用户轮次内） */}
-                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                <div className="flex-1 min-w-0 overflow-y-auto p-6 space-y-4">
                   {loadingConv ? (
                     <div className="flex h-full items-center justify-center theme-text-muted">
                       <Clock className="h-6 w-6 animate-spin mr-2" /> {t('conv.loading')}
@@ -2049,6 +2091,41 @@ export const BrowseView: React.FC<Props> = ({
                       );
                     })
                   )}
+                </div>
+                {outlineOpen && (
+                  <SessionOutlinePanel
+                    outline={parseConversationOutline(currentConv.ai_outline_json)}
+                    stale={!!currentConv.ai_outline_stale}
+                    generating={outlining}
+                    openEnded={sessionKindOf(currentConv) === 'open_ended'}
+                    canGenerate={
+                      (currentConv.user_message_count ?? 0) >= OUTLINE_MIN_USER_MESSAGES ||
+                      !!currentConv.ai_outline_json
+                    }
+                    model={currentConv.ai_outline_model}
+                    generatedAt={currentConv.ai_outline_generated_at}
+                    statusMessage={
+                      outlining
+                        ? null /* panel shows outlineWorking / outlineUpdating itself */
+                        : lastAiActionRef.current === 'outline'
+                          ? aiActionError || aiActionSuccess
+                          : null
+                    }
+                    statusTone={
+                      outlining || lastAiActionRef.current !== 'outline'
+                        ? null
+                        : aiActionError
+                          ? 'error'
+                          : aiActionSuccess
+                            ? 'success'
+                            : null
+                    }
+                    onGenerate={(forceFull) => handleGenerateOutline(!!forceFull)}
+                    onJump={jumpToOutlineSegment}
+                    onClose={() => setOutlineOpen(false)}
+                    formatTime={formatBeijingTime}
+                  />
+                )}
                 </div>
               </>
             ) : (
