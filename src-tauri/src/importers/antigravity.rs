@@ -11,7 +11,7 @@ use super::{
     RawConversation, RawMessage, RawUsageRecord,
 };
 
-const AG_PARSER_REV: &str = "ag-dual-dir-v7";
+const AG_PARSER_REV: &str = "ag-multi-home-v8";
 const AG_PARSER_REV_KEY: &str = "agentdeck:ag_parser_rev";
 
 struct SessionCandidate {
@@ -21,6 +21,8 @@ struct SessionCandidate {
     mtime: f64,
     size: u64,
     is_ide: bool,
+    home: std::path::PathBuf,
+    remote_prefix: Option<String>,
     shadowed_paths: Vec<std::path::PathBuf>,
 }
 
@@ -33,86 +35,91 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
         error_count: 0,
     };
 
-    let home = match dirs::home_dir() {
-        Some(h) => h,
-        None => return stats,
-    };
+    let homes = crate::config::agent_home_roots();
 
-    let brain_dirs = [
-        (home.join(".gemini/antigravity/brain"), false),
-        (home.join(".gemini/antigravity-ide/brain"), true),
+    let brain_rels = [
+        (".gemini/antigravity/brain", false),
+        (".gemini/antigravity-ide/brain", true),
     ];
 
     let mut candidates: std::collections::HashMap<String, SessionCandidate> =
         std::collections::HashMap::new();
 
-    for (brain_dir, is_ide) in &brain_dirs {
-        if !brain_dir.is_dir() {
-            continue;
-        }
-
-        let entries = match std::fs::read_dir(brain_dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
+    for root in &homes {
+        let home = &root.home;
+        for (rel, is_ide) in &brain_rels {
+            let brain_dir = home.join(rel);
+            if !brain_dir.is_dir() {
                 continue;
             }
 
-            let cid = match path.file_name().and_then(|n| n.to_str()) {
-                Some(name) if !name.starts_with('.') => name.to_string(),
-                _ => continue,
-            };
-
-            let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
-            if !transcript_path.is_file() {
-                continue;
-            }
-
-            let metadata = match transcript_path.metadata() {
-                Ok(m) => m,
+            let entries = match std::fs::read_dir(&brain_dir) {
+                Ok(e) => e,
                 Err(_) => continue,
             };
 
-            let mtime = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0);
-            let size = metadata.len();
-
-            if let Some(existing) = candidates.get_mut(&cid) {
-                // 如果已存在同一 cid（跨目录重复），比较两者，择优选取更新/更大的
-                let is_newer =
-                    mtime > existing.mtime || (mtime == existing.mtime && size > existing.size);
-                if is_newer {
-                    let old_path = existing.transcript_path.clone();
-                    existing.session_dir = path;
-                    existing.transcript_path = transcript_path;
-                    existing.mtime = mtime;
-                    existing.size = size;
-                    existing.is_ide = *is_ide;
-                    existing.shadowed_paths.push(old_path);
-                } else {
-                    existing.shadowed_paths.push(transcript_path);
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
                 }
-            } else {
-                candidates.insert(
-                    cid.clone(),
-                    SessionCandidate {
-                        cid,
-                        session_dir: path,
-                        transcript_path,
-                        mtime,
-                        size,
-                        is_ide: *is_ide,
-                        shadowed_paths: Vec::new(),
-                    },
-                );
+
+                let cid = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(name) if !name.starts_with('.') => name.to_string(),
+                    _ => continue,
+                };
+
+                let transcript_path = path.join(".system_generated/logs/transcript.jsonl");
+                if !transcript_path.is_file() {
+                    continue;
+                }
+
+                let metadata = match transcript_path.metadata() {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let size = metadata.len();
+
+                if let Some(existing) = candidates.get_mut(&cid) {
+                    // 如果已存在同一 cid（跨目录重复），比较两者，择优选取更新/更大的
+                    let is_newer = mtime > existing.mtime
+                        || (mtime == existing.mtime && size > existing.size);
+                    if is_newer {
+                        let old_path = existing.transcript_path.clone();
+                        existing.session_dir = path;
+                        existing.transcript_path = transcript_path;
+                        existing.mtime = mtime;
+                        existing.size = size;
+                        existing.is_ide = *is_ide;
+                        existing.home = home.clone();
+                        existing.remote_prefix = root.remote_prefix.clone();
+                        existing.shadowed_paths.push(old_path);
+                    } else {
+                        existing.shadowed_paths.push(transcript_path);
+                    }
+                } else {
+                    candidates.insert(
+                        cid.clone(),
+                        SessionCandidate {
+                            cid,
+                            session_dir: path,
+                            transcript_path,
+                            mtime,
+                            size,
+                            is_ide: *is_ide,
+                            home: home.clone(),
+                            remote_prefix: root.remote_prefix.clone(),
+                            shadowed_paths: Vec::new(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -137,6 +144,8 @@ pub fn sync(conn: &Connection, incremental: bool) -> ImporterStats {
             &cand.transcript_path,
             &cand.session_dir,
             cand.is_ide,
+            &cand.home,
+            cand.remote_prefix.as_deref(),
         ) {
             Ok(Some(conv)) => match save_conversation_tx(conn, &conv) {
                 Ok(is_new) => {
@@ -352,6 +361,20 @@ fn antigravity_db_path(cid: &str, home: &Path, is_ide: bool) -> Option<std::path
         return Some(fallback);
     }
     None
+}
+
+/// 其他机器的会话正文里记的是那台机器的真实 home 路径，映射到挂载根后本机才读得到文件
+fn resolve_media_path(p: &str, remote_prefix: Option<&str>, home: &Path) -> std::path::PathBuf {
+    let path = Path::new(p);
+    if path.is_file() {
+        return path.to_path_buf();
+    }
+    match remote_prefix {
+        Some(prefix) if p.starts_with(prefix) => {
+            home.join(p[prefix.len()..].trim_start_matches('/'))
+        }
+        _ => path.to_path_buf(),
+    }
 }
 
 struct AgGeneration {
@@ -741,12 +764,13 @@ fn parse_antigravity_session(
     transcript_path: &Path,
     session_dir: &Path,
     is_ide: bool,
+    home: &Path,
+    remote_prefix: Option<&str>,
 ) -> Result<Option<RawConversation>, Box<dyn std::error::Error>> {
     let file = File::open(transcript_path)?;
     let reader = BufReader::new(file);
 
-    let home = dirs::home_dir().unwrap_or_default();
-    let db_media = load_antigravity_db_media(cid, &home, is_ide);
+    let db_media = load_antigravity_db_media(cid, home, is_ide);
 
     let user_req_re = Regex::new(r"(?s)<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>")?;
     let artifact_uri_re = Regex::new(r#"Comments on artifact URI:\s*file://([^\s\n\r"']+)"#)?;
@@ -949,11 +973,12 @@ fn parse_antigravity_session(
 
                 let mut image_entries = Vec::new();
                 for p in img_paths {
-                    let path_obj = Path::new(&p);
+                    let path_obj = resolve_media_path(&p, remote_prefix, home);
                     if path_obj.is_file() {
                         let src_uri = crate::media_archive::archive_image_file(&path_obj, "antigravity", cid)
                             .unwrap_or_else(|| {
-                                let encoded = urlencoding::encode(&p);
+                                let rendered = path_obj.to_string_lossy().to_string();
+                                let encoded = urlencoding::encode(&rendered);
                                 format!("/ag-image?path={}", encoded)
                             });
                         image_entries.push(serde_json::json!({
@@ -1243,7 +1268,7 @@ fn parse_antigravity_session(
         b.file_name.cmp(&a.file_name)
     });
 
-    let usage_records = load_antigravity_db_usage(cid, &home, is_ide, created_at.as_deref());
+    let usage_records = load_antigravity_db_usage(cid, home, is_ide, created_at.as_deref());
 
     Ok(Some(RawConversation {
         id: cid.to_string(),
@@ -1265,6 +1290,10 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    fn test_home() -> std::path::PathBuf {
+        std::env::temp_dir().join("ag-test-home")
+    }
+
     #[test]
     fn test_parse_antigravity_session() {
         let tmp_dir = std::env::temp_dir().join(format!("test_ag_session_{}", std::process::id()));
@@ -1285,7 +1314,7 @@ mod tests {
         .unwrap();
         drop(file);
 
-        let conv = parse_antigravity_session("test-cid-123", &transcript_path, &tmp_dir, true)
+        let conv = parse_antigravity_session("test-cid-123", &transcript_path, &tmp_dir, true, &test_home(), None)
             .unwrap()
             .unwrap();
 
@@ -1317,7 +1346,7 @@ mod tests {
         .unwrap();
         drop(file);
 
-        let conv = parse_antigravity_session("test-cid-456", &transcript_path, &tmp_dir, true)
+        let conv = parse_antigravity_session("test-cid-456", &transcript_path, &tmp_dir, true, &test_home(), None)
             .unwrap()
             .unwrap();
 
@@ -1350,7 +1379,7 @@ mod tests {
         let meta_path = tmp_dir.join("implementation_plan.md.metadata.json");
         std::fs::write(&meta_path, r#"{"summary":"实施方案摘要说明","updatedAt":"2026-09-08T10:05:00Z","requestFeedback":true,"userFacing":true}"#).unwrap();
 
-        let conv = parse_antigravity_session("test-cid-art", &transcript_path, &tmp_dir, true)
+        let conv = parse_antigravity_session("test-cid-art", &transcript_path, &tmp_dir, true, &test_home(), None)
             .unwrap()
             .unwrap();
 
@@ -1364,6 +1393,35 @@ mod tests {
         assert!(art.content.contains("这是正文内容"));
         assert!(art.request_feedback);
         assert!(art.user_facing);
+    }
+
+    #[test]
+    fn test_resolve_media_path_maps_remote_prefix() {
+        let tmp = std::env::temp_dir().join(format!("ag_media_home_{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join("shots")).unwrap();
+        let local_file = tmp.join("shots/a.png");
+        std::fs::write(&local_file, b"x").unwrap();
+
+        // 本机可直接读到的路径原样返回
+        let local_str = local_file.to_string_lossy().to_string();
+        assert_eq!(
+            resolve_media_path(&local_str, None, &tmp),
+            std::path::PathBuf::from(&local_str)
+        );
+
+        // 远端真实 home 前缀换成挂载根，且不能因绝对子路径丢掉根
+        assert_eq!(
+            resolve_media_path("/Users/u/shots/a.png", Some("/Users/u"), &tmp),
+            tmp.join("shots/a.png")
+        );
+
+        // 前缀不匹配时保持原路径
+        assert_eq!(
+            resolve_media_path("/other/a.png", Some("/Users/u"), &tmp),
+            std::path::PathBuf::from("/other/a.png")
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
@@ -1381,6 +1439,8 @@ mod tests {
             mtime: 1000.0,
             size: 500,
             is_ide: true,
+            home: std::path::PathBuf::from("/mock/home-local"),
+            remote_prefix: None,
             shadowed_paths: Vec::new(),
         };
         candidates.insert(cid.clone(), ide_cand);
@@ -1390,6 +1450,7 @@ mod tests {
         let app_cand_size = 800;
         let app_transcript = std::path::PathBuf::from("/mock/app/brain/shared-uuid-001/transcript.jsonl");
         let app_session = std::path::PathBuf::from("/mock/app/brain/shared-uuid-001");
+        let app_home = std::path::PathBuf::from("/Volumes/mock-home-remote");
 
         let existing = candidates.get_mut(&cid).unwrap();
         let is_newer = app_cand_mtime > existing.mtime
@@ -1402,6 +1463,7 @@ mod tests {
         existing.mtime = app_cand_mtime;
         existing.size = app_cand_size;
         existing.is_ide = false;
+        existing.home = app_home.clone();
         existing.shadowed_paths.push(old_path);
 
         // 验证去重结果：只有一个 candidate，指向更新的桌面端，且 shadowed_paths 包含 IDE 旧路径
@@ -1409,6 +1471,8 @@ mod tests {
         let selected = candidates.get(&cid).unwrap();
         assert_eq!(selected.mtime, 2000.0);
         assert!(!selected.is_ide);
+        // 择优后媒体/用量查找必须跟随选中项所在的 home 根
+        assert_eq!(selected.home, app_home);
         assert_eq!(selected.shadowed_paths.len(), 1);
         assert_eq!(
             selected.shadowed_paths[0],
@@ -1485,7 +1549,7 @@ mod tests {
         });
         writeln!(file, "{}", line3).unwrap();
 
-        let conv = parse_antigravity_session("test-cid-multi", &transcript_path, &tmp_dir, true)
+        let conv = parse_antigravity_session("test-cid-multi", &transcript_path, &tmp_dir, true, &test_home(), None)
             .unwrap()
             .unwrap();
 

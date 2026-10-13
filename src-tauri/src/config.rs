@@ -31,12 +31,34 @@ impl Default for BackupConfig {
     }
 }
 
+/// 其他机器的 home 根：可直接写挂载路径，也可带 remote_home 声明该机器真实 home
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AgentHomeConfig {
+    Plain(String),
+    Mapped {
+        home: String,
+        #[serde(default)]
+        remote_home: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentHomeRoot {
+    pub home: PathBuf,
+    /// 会话正文里记录的路径前缀（远端机器真实 home），用于把图片路径映射到挂载根
+    pub remote_prefix: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     #[serde(default)]
     pub backup: BackupConfig,
     pub theme: Option<String>,
     pub ai_config: Option<serde_json::Value>,
+    /// 其他机器的 home 根（如 SMB 挂载盘），importer 会按各源相对路径一并扫描
+    #[serde(default)]
+    pub extra_agent_homes: Vec<AgentHomeConfig>,
 }
 
 pub fn get_config_path() -> PathBuf {
@@ -47,6 +69,32 @@ pub fn get_config_path() -> PathBuf {
     } else {
         PathBuf::from("config.json")
     }
+}
+
+/// 本机 home + 配置的额外 home 根，只保留实际存在的目录
+pub fn agent_home_roots() -> Vec<AgentHomeRoot> {
+    let mut roots = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        roots.push(AgentHomeRoot {
+            home,
+            remote_prefix: None,
+        });
+    }
+    for extra in load_config().extra_agent_homes {
+        let (path, remote_prefix) = match extra {
+            AgentHomeConfig::Plain(s) => (PathBuf::from(&s), None),
+            AgentHomeConfig::Mapped { home, remote_home } => {
+                (PathBuf::from(&home), remote_home.filter(|p| !p.is_empty()))
+            }
+        };
+        if path.is_dir() && !roots.iter().any(|r| r.home == path) {
+            roots.push(AgentHomeRoot {
+                home: path,
+                remote_prefix,
+            });
+        }
+    }
+    roots
 }
 
 pub fn load_config() -> AppConfig {
